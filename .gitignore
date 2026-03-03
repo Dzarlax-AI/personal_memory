@@ -1,0 +1,5 @@
+.env
+.env.vps
+venv/
+__pycache__/
+claude_desktop_config.local.json

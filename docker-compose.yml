@@ -1,0 +1,75 @@
+services:
+  memory-embeddings:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    container_name: memory-embeddings
+    command: --model-id ${EMBED_MODEL:-intfloat/multilingual-e5-small} --revision main
+    restart: always
+    networks:
+      - traefik
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.memory-embed.entrypoints=https"
+      - "traefik.http.routers.memory-embed.rule=Host(`embed.${MEMORY_DOMAIN}`)"
+      - "traefik.http.routers.memory-embed.tls=true"
+      - "traefik.http.routers.memory-embed.tls.certresolver=letsEncrypt"
+      - "traefik.http.routers.memory-embed.middlewares=traefik-auth"
+      - "traefik.http.services.memory-embed.loadbalancer.server.port=80"
+
+  memory-qdrant:
+    image: qdrant/qdrant:latest
+    container_name: memory-qdrant
+    restart: always
+    volumes:
+      - qdrant_storage:/qdrant/storage:rw
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.memory-qdrant.entrypoints=https"
+      - "traefik.http.routers.memory-qdrant.rule=Host(`qdrant.${MEMORY_DOMAIN}`)"
+      - "traefik.http.routers.memory-qdrant.tls=true"
+      - "traefik.http.routers.memory-qdrant.tls.certresolver=letsEncrypt"
+      - "traefik.http.routers.memory-qdrant.middlewares=traefik-auth"
+      - "traefik.http.services.memory-qdrant.loadbalancer.server.port=6333"
+
+volumes:
+  qdrant_storage:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /root/memory/qdrant_storage
+
+  # --- Uncomment if you don't have Traefik yet ---
+  # traefik:
+  #   image: traefik:v3
+  #   container_name: traefik
+  #   restart: always
+  #   command:
+  #     - "--entrypoints.https.address=:443"
+  #     - "--providers.docker=true"
+  #     - "--providers.docker.exposedbydefault=false"
+  #     - "--certificatesresolvers.letsEncrypt.acme.tlschallenge=true"
+  #     - "--certificatesresolvers.letsEncrypt.acme.email=your@email.com"
+  #     - "--certificatesresolvers.letsEncrypt.acme.storage=/letsencrypt/acme.json"
+  #   ports:
+  #     - "443:443"
+  #   volumes:
+  #     - "/var/run/docker.sock:/var/run/docker.sock:ro"
+  #     - "letsencrypt:/letsencrypt"
+  #   networks:
+  #     - traefik
+  #   labels:
+  #     - "traefik.enable=true"
+  #     - "traefik.http.middlewares.traefik-auth.basicauth.users=${TRAEFIK_AUTH_USERS}"
+
+# volumes:
+#   letsencrypt:
+
+networks:
+  traefik:
+    external: true
