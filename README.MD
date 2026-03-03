@@ -1,6 +1,6 @@
 # Personal Memory Stack
 
-Self-hosted semantic memory for Claude. Stores and retrieves facts using vector embeddings — no third-party cloud, all data stays on your VPS.
+Self-hosted semantic memory for any MCP-compatible AI client. Stores and retrieves facts using vector embeddings — no third-party cloud, all data stays on your VPS.
 
 ## Stack
 
@@ -184,3 +184,47 @@ Add to `~/.claude.json` under `mcpServers`:
 ## Collection
 
 The Qdrant collection (`memory`) is created automatically on server startup. After the first `store_fact` call it will be visible at `https://qdrant.<your-domain>/dashboard`.
+
+## Best Practices
+
+To get the most out of persistent memory, instruct your AI client to use it proactively. For Claude Code, add the following to your global CLAUDE.md:
+
+| OS | Path |
+|---|---|
+| macOS / Linux | `~/.claude/CLAUDE.md` |
+| Windows | `%USERPROFILE%\.claude\CLAUDE.md` |
+
+````markdown
+## Personal Memory (MCP: personal-memory)
+
+The `personal-memory` MCP server is always available. Use it proactively — don't wait to be asked.
+
+### When to recall
+- At the start of any session involving a known project — run `recall_facts` to load context
+- Before making architectural decisions — check if relevant preferences or past decisions are stored
+- When the user references established context ("as usual", "like before", "you know I prefer...")
+
+### When to store
+- User states a preference or decision that should persist ("always use X", "never do Y")
+- A non-obvious fact about a project is established (tech stack, naming convention, key dependency)
+- Something important was learned that would be useful in future sessions
+
+### Namespace convention
+Always specify a namespace. Never store everything in `default`.
+
+| Context | Namespace |
+|---|---|
+| Personal preferences, habits | `personal` |
+| Current project | `<project-name>` |
+| Cross-project technical preferences | `tech` |
+| Work / professional context | `work` |
+
+### Permanent facts
+Use `permanent=True` for facts that should never expire:
+fundamental preferences, identity facts, long-term architectural decisions.
+
+### Tags
+- `#decision` — architectural or product decisions
+- `#preference` — personal or workflow preferences
+- `#constraint` — things to avoid or never do
+````
