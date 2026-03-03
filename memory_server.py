@@ -594,7 +594,8 @@ if __name__ == "__main__":
     _init_collection()
     transport = os.getenv("MCP_TRANSPORT", "stdio")
     if transport == "http":
-        port = int(os.getenv("MCP_PORT", "8000"))
-        mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
+        mcp.settings.host = "0.0.0.0"
+        mcp.settings.port = int(os.getenv("MCP_PORT", "8000"))
+        mcp.run(transport="streamable-http")
     else:
         mcp.run()
