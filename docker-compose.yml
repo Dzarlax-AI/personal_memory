@@ -47,7 +47,7 @@ services:
       - pip_cache:/root/.cache/pip
     command: >
       sh -c "pip install -r requirements.txt -q && python memory_server.py"
-    env_file: .env
+    env_file: .env.vps
     environment:
       - MCP_TRANSPORT=http
       - MCP_PORT=8000
