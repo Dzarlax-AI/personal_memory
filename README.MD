@@ -131,6 +131,7 @@ flowchart LR
 
 ```bash
 mkdir -p /root/memory/qdrant_storage
+mkdir -p /root/memory/qdrant_snapshots
 cp .env.vps.example .env.vps
 nano .env.vps
 docker compose --env-file .env.vps up -d
@@ -142,6 +143,10 @@ docker compose --env-file .env.vps up -d
 |---|---|
 | `MEMORY_DOMAIN` | Your domain, e.g. `example.com` — services at `embed.<domain>`, `qdrant.<domain>`, `mcp.<domain>` |
 | `EMBED_MODEL` | HuggingFace model ID, default `intfloat/multilingual-e5-small` |
+| `KEEP_SNAPSHOTS` | Number of snapshots to retain (default: `7`) |
+| `BACKUP_INTERVAL_HOURS` | How often the backup service runs (default: `24`) |
+
+This starts 4 services: `memory-embeddings`, `memory-qdrant`, `memory-mcp`, and `memory-backup` (automatic snapshots).
 
 Track TEI model download on first start:
 ```bash
@@ -153,6 +158,36 @@ Verify Qdrant:
 ```bash
 curl https://qdrant.<your-domain>/healthz
 # → {"title":"qdrant - Ready"}
+```
+
+## Backups
+
+The `memory-backup` service runs automatically inside Docker — no cron setup needed.
+
+**How it works:**
+- Creates a Qdrant snapshot every `BACKUP_INTERVAL_HOURS` hours (default: 24)
+- Snapshots are stored at `/root/memory/qdrant_snapshots/` on the host
+- Keeps the last `KEEP_SNAPSHOTS` snapshots (default: 7), deletes older ones
+- Communicates with Qdrant over the internal Docker network — no credentials required
+
+**To trigger a backup manually:**
+```bash
+docker exec memory-backup bash /backup.sh
+```
+
+**To view backup logs:**
+```bash
+docker logs memory-backup -f
+```
+
+**Snapshots are stored locally on the VPS only.** Transferring them off the server is your responsibility. Point Resilio Sync, rsync, rclone, or any other tool at `/root/memory/qdrant_snapshots/` — snapshots are self-contained `.snapshot` files that appear atomically, so they are safe to copy at any time.
+
+**To restore from a snapshot:**
+```bash
+curl -X POST "https://qdrant.<your-domain>/collections/memory/snapshots/recover" \
+  -u user:pass \
+  -H "Content-Type: application/json" \
+  -d '{"location": "file:///qdrant/snapshots/memory/<snapshot-name>.snapshot"}'
 ```
 
 ## Local Setup
@@ -239,7 +274,6 @@ claude mcp add --transport http personal-memory https://mcp.yourdomain.com/mcp \
 |---|---|---|
 | Credentials in `.mcp.json` | High | Use env var substitution (`${VAR}`); file is gitignored |
 | Qdrant accessible to all containers on `traefik` network | Medium | Standard Docker trust model; isolate with a separate internal network if needed |
-| 32-bit point ID space (MD5 truncation) | Low | Collisions possible beyond ~65k facts; duplicate text silently overwrites existing point |
 | Sync HTTP calls in async HTTP mode | Low | Blocks event loop under concurrent requests; not an issue for personal single-user use |
 
 ## Collection

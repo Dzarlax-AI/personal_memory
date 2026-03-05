@@ -34,7 +34,7 @@ memory_server.py  (FastMCP, streamable-http)
      └──▶ https://qdrant.<domain>  →  Qdrant (vector storage)
 ```
 
-All three services are behind Traefik with Basic Auth + Let's Encrypt.
+All services are behind Traefik with Basic Auth + Let's Encrypt. A fourth service, `memory-backup`, runs inside Docker and creates Qdrant snapshots on a schedule — no cron needed.
 
 ## MCP Tools
 
@@ -82,6 +82,8 @@ user          string    — from MEMORY_USER env var
 | `MCP_PORT` | `8000` | HTTP port (only used when `MCP_TRANSPORT=http`) |
 | `QDRANT_URL` | `https://qdrant.<DOMAIN>` | Override Qdrant URL (e.g. internal Docker: `http://memory-qdrant:6333`) |
 | `EMBED_URL` | `https://embed.<DOMAIN>` | Override TEI URL (e.g. internal Docker: `http://memory-embeddings:80`) |
+| `KEEP_SNAPSHOTS` | `7` | Snapshots to retain (backup service) |
+| `BACKUP_INTERVAL_HOURS` | `24` | Backup frequency in hours (backup service) |
 
 Never hardcode credentials. Use `.env` file (excluded from git).
 
@@ -91,10 +93,12 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - `_invalidate_cache()` is called after any write operation (delete, update, forget_old)
 - `recall_count` is updated via `qdrant_set_payload` — no re-embedding needed
 - `forget_old` defaults to `dry_run=True` — safe by default
-- Point IDs are MD5 hashes of the fact text (first 8 hex chars as int)
+- Point IDs are UUID5 (deterministic, based on fact text) — collision-safe 128-bit space
 - Transport is selected via `MCP_TRANSPORT` env var; `stdio` is default, `http` enables streamable-http on `MCP_PORT`
 - In HTTP mode the server is stateless — in-memory cache (`_cache`) resets on container restart
 - When `QDRANT_URL` / `EMBED_URL` start with `http://`, Basic Auth is skipped (internal Docker networking, no Traefik in the path)
+- `memory-backup` service connects to Qdrant via `http://memory-qdrant:6333` (internal network, no auth); snapshots land in `/qdrant/snapshots` → bind-mounted to `/root/memory/qdrant_snapshots` on the host
+- Qdrant port `6333` is exposed on `127.0.0.1` only — for manual backup runs from the host (`backup.sh` with default `QDRANT_URL=http://localhost:6333`)
 
 ## Local Setup
 

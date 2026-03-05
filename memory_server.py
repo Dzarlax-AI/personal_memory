@@ -1,6 +1,6 @@
 import os
 import time
-import hashlib
+import uuid
 import httpx
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
@@ -59,20 +59,20 @@ def ensure_collection(vector_size: int):
         }).raise_for_status()
 
 
-def qdrant_upsert(point_id: int, vector: list[float], payload: dict):
+def qdrant_upsert(point_id: str, vector: list[float], payload: dict):
     qdrant.put(f"/collections/{COLLECTION}/points", json={
         "points": [{"id": point_id, "vector": vector, "payload": payload}]
     }).raise_for_status()
 
 
-def qdrant_set_payload(point_id: int, payload: dict):
+def qdrant_set_payload(point_id: int | str, payload: dict):
     qdrant.post(f"/collections/{COLLECTION}/points/payload", json={
         "payload": payload,
         "points": [point_id],
     }).raise_for_status()
 
 
-def qdrant_delete(point_ids: list[int]):
+def qdrant_delete(point_ids: list[int | str]):
     qdrant.post(f"/collections/{COLLECTION}/points/delete", json={
         "points": point_ids
     }).raise_for_status()
@@ -194,7 +194,7 @@ def store_fact(
             related = "; ".join(f"\"{h['payload']['text']}\" (score={h['score']:.3f})" for h in contradictions)
             warning = f"\nWarning: possibly related/contradicting facts found: {related}"
 
-        point_id = int(hashlib.md5(fact.encode()).hexdigest()[:8], 16)
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_OID, fact))
         payload = {
             "text": fact,
             "user": USER,
@@ -363,7 +363,7 @@ def update_fact(
         qdrant_delete([top["id"]])
 
         vec_new = embed(new_fact)
-        point_id = int(hashlib.md5(new_fact.encode()).hexdigest()[:8], 16)
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_OID, new_fact))
         payload = {
             "text": new_fact,
             "user": USER,
@@ -568,7 +568,7 @@ def import_facts(facts: list[dict]) -> str:
             if hits and hits[0]["score"] >= DEDUP_THRESHOLD:
                 skipped += 1
                 continue
-            point_id = int(hashlib.md5(text.encode()).hexdigest()[:8], 16)
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_OID, text))
             payload = {
                 "text": text,
                 "user": item.get("user", USER),
