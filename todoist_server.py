@@ -7,16 +7,23 @@ from mcp.server.transport_security import TransportSecuritySettings
 load_dotenv()
 
 TODOIST_TOKEN = os.getenv("TODOIST_TOKEN", "")
-if not TODOIST_TOKEN:
-    raise SystemExit("TODOIST_TOKEN environment variable is required")
 
 mcp = FastMCP("todoist")
 
-todoist = httpx.Client(
-    base_url="https://api.todoist.com/api/v1",
-    headers={"Authorization": f"Bearer {TODOIST_TOKEN}"},
-    timeout=10.0,
-)
+todoist: httpx.Client | None = None
+
+
+def _get_client() -> httpx.Client:
+    global todoist
+    if todoist is None:
+        if not TODOIST_TOKEN:
+            raise RuntimeError("TODOIST_TOKEN environment variable is required")
+        todoist = httpx.Client(
+            base_url="https://api.todoist.com/api/v1",
+            headers={"Authorization": f"Bearer {TODOIST_TOKEN}"},
+            timeout=10.0,
+        )
+    return todoist
 
 
 # ---------------------------------------------------------------------------
@@ -27,7 +34,7 @@ todoist = httpx.Client(
 def get_projects() -> str:
     """List all Todoist projects."""
     try:
-        r = todoist.get("/projects")
+        r = _get_client().get("/projects")
         r.raise_for_status()
         result = r.json()
         projects = result.get("results", result) if isinstance(result, dict) else result
@@ -43,7 +50,7 @@ def get_projects() -> str:
 def get_labels() -> str:
     """List all personal Todoist labels."""
     try:
-        r = todoist.get("/labels")
+        r = _get_client().get("/labels")
         r.raise_for_status()
         result = r.json()
         labels = result.get("results", result) if isinstance(result, dict) else result
@@ -67,11 +74,11 @@ def get_tasks(project_id: str | None = None, filter: str | None = None, limit: i
         params: dict = {}
         if filter:
             params["query"] = filter
-            r = todoist.get("/tasks/filter", params=params)
+            r = _get_client().get("/tasks/filter", params=params)
         else:
             if project_id:
                 params["project_id"] = project_id
-            r = todoist.get("/tasks", params=params)
+            r = _get_client().get("/tasks", params=params)
         r.raise_for_status()
         result = r.json()
         tasks = (result.get("results", result) if isinstance(result, dict) else result)[:limit]
@@ -118,7 +125,7 @@ def create_task(
         if labels:
             body["labels"] = labels
 
-        r = todoist.post("/tasks", json=body)
+        r = _get_client().post("/tasks", json=body)
         r.raise_for_status()
         t = r.json()
         due = t.get("due", {})
@@ -137,7 +144,7 @@ def complete_task(task_id: str) -> str:
         task_id: The task ID (from get_tasks output).
     """
     try:
-        r = todoist.post(f"/tasks/{task_id}/close")
+        r = _get_client().post(f"/tasks/{task_id}/close")
         r.raise_for_status()
         return f"Task {task_id} completed."
     except Exception as e:
@@ -175,7 +182,7 @@ def update_task(
         if not body:
             return "Nothing to update."
 
-        r = todoist.post(f"/tasks/{task_id}", json=body)
+        r = _get_client().post(f"/tasks/{task_id}", json=body)
         r.raise_for_status()
         t = r.json()
         label_str = f", labels: {', '.join(t['labels'])}" if t.get("labels") else ""
@@ -192,7 +199,7 @@ def delete_task(task_id: str) -> str:
         task_id: The task ID (from get_tasks output).
     """
     try:
-        r = todoist.delete(f"/tasks/{task_id}")
+        r = _get_client().delete(f"/tasks/{task_id}")
         r.raise_for_status()
         return f"Task {task_id} deleted."
     except Exception as e:

@@ -1,0 +1,69 @@
+"""Unified server: mounts all services on a single port."""
+
+import os
+import logging
+import threading
+import time
+
+import uvicorn
+from starlette.applications import Starlette
+from starlette.routing import Mount, Route
+from dotenv import load_dotenv
+
+load_dotenv()
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("app")
+
+# --- Always load memory ---
+from memory_server import mcp as memory_mcp, _init_collection, _backup_loop
+
+# --- Conditionally load todoist ---
+todoist_mcp = None
+if os.getenv("ENABLE_TODOIST", "").lower() in ("1", "true", "yes"):
+    if not os.getenv("TODOIST_TOKEN"):
+        logger.warning("ENABLE_TODOIST=true but TODOIST_TOKEN not set, skipping todoist")
+    else:
+        from todoist_server import mcp as _todoist_mcp
+        todoist_mcp = _todoist_mcp
+        logger.info("Todoist MCP enabled")
+
+# --- Conditionally load viz ---
+viz_routes: list[Route] = []
+if os.getenv("ENABLE_VIZ", "").lower() in ("1", "true", "yes"):
+    from viz_server import app as viz_app
+    logger.info("Visualization dashboard enabled at /viz")
+
+
+def build_app() -> Starlette:
+    routes: list[Mount | Route] = []
+
+    # Memory MCP — always on
+    memory_mcp.settings.stateless_http = True
+    memory_mcp.settings.transport_security = None
+    routes.append(Mount("/memory", app=memory_mcp.streamable_http_app()))
+
+    # Todoist MCP — optional
+    if todoist_mcp is not None:
+        todoist_mcp.settings.stateless_http = True
+        todoist_mcp.settings.transport_security = None
+        routes.append(Mount("/todoist", app=todoist_mcp.streamable_http_app()))
+
+    # Viz — optional
+    if os.getenv("ENABLE_VIZ", "").lower() in ("1", "true", "yes"):
+        routes.append(Mount("/viz", app=viz_app))
+
+    return Starlette(routes=routes)
+
+
+if __name__ == "__main__":
+    _init_collection()
+
+    # Start backup thread
+    threading.Thread(target=_backup_loop, daemon=True).start()
+    logger.info("Backup scheduler started")
+
+    app = build_app()
+    port = int(os.getenv("MCP_PORT", "8000"))
+    logger.info("Listening on 0.0.0.0:%d", port)
+    uvicorn.run(app, host="0.0.0.0", port=port)

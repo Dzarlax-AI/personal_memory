@@ -30,7 +30,6 @@ services:
     env_file: .env
     environment:
       - MCP_PORT=8000
-      - TODOIST_MCP_PORT=8001
       - QDRANT_URL=http://memory-qdrant:6333
       - EMBED_URL=http://memory-embeddings:80
       - ENABLE_TODOIST=${ENABLE_TODOIST:-false}
@@ -41,32 +40,11 @@ services:
       - traefik
     labels:
       - "traefik.enable=true"
-      # Memory MCP
       - "traefik.http.routers.memory-mcp.entrypoints=https"
-      - "traefik.http.routers.memory-mcp.rule=Host(`mcp.${MEMORY_DOMAIN}`) && PathPrefix(`/memory`)"
-      - "traefik.http.routers.memory-mcp.tls=true"
+      - "traefik.http.routers.memory-mcp.rule=Host(`mcp.${MEMORY_DOMAIN}`)"
       - "traefik.http.routers.memory-mcp.tls.certresolver=letsEncrypt"
-      - "traefik.http.routers.memory-mcp.middlewares=traefik-auth,memory-rewrite"
-      - "traefik.http.middlewares.memory-rewrite.replacepathregex.regex=/memory(.*)"
-      - "traefik.http.middlewares.memory-rewrite.replacepathregex.replacement=/mcp$$1"
+      - "traefik.http.routers.memory-mcp.middlewares=traefik-auth"
       - "traefik.http.services.memory-mcp.loadbalancer.server.port=8000"
-      # Todoist MCP (same container, port 8001)
-      - "traefik.http.routers.todoist-mcp.entrypoints=https"
-      - "traefik.http.routers.todoist-mcp.rule=Host(`mcp.${MEMORY_DOMAIN}`) && PathPrefix(`/todoist`)"
-      - "traefik.http.routers.todoist-mcp.tls=true"
-      - "traefik.http.routers.todoist-mcp.tls.certresolver=letsEncrypt"
-      - "traefik.http.routers.todoist-mcp.middlewares=traefik-auth,todoist-rewrite"
-      - "traefik.http.middlewares.todoist-rewrite.replacepathregex.regex=/todoist(.*)"
-      - "traefik.http.middlewares.todoist-rewrite.replacepathregex.replacement=/mcp$$1"
-      - "traefik.http.services.todoist-mcp.loadbalancer.server.port=8001"
-      # Visualization (same container, port 8080)
-      - "traefik.http.routers.memory-viz.entrypoints=https"
-      - "traefik.http.routers.memory-viz.rule=Host(`mcp.${MEMORY_DOMAIN}`) && PathPrefix(`/viz`)"
-      - "traefik.http.routers.memory-viz.tls=true"
-      - "traefik.http.routers.memory-viz.tls.certresolver=letsEncrypt"
-      - "traefik.http.routers.memory-viz.middlewares=authentik-auth,viz-strip"
-      - "traefik.http.middlewares.viz-strip.stripprefix.prefixes=/viz"
-      - "traefik.http.services.memory-viz.loadbalancer.server.port=8080"
 
 volumes:
   qdrant_storage:

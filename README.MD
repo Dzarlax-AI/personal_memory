@@ -25,11 +25,15 @@ graph TD
     subgraph VPS["VPS"]
         Traefik["Traefik\n(SSL + Basic Auth / Authentik SSO)"]
 
-        subgraph MCP["memory-mcp container"]
-            Memory["memory_server.py\n(port 8000)"]
-            Todoist["todoist_server.py\n(port 8001, optional)"]
-            Viz["viz_server.py\n(port 8080, optional)"]
+        subgraph MCP["memory-mcp container (port 8000)"]
+            App["app.py"]
+            Memory["/memory/mcp → memory_server"]
+            Todoist["/todoist/mcp → todoist_server (optional)"]
+            Viz["/viz → viz_server (optional)"]
             Backup["backup thread"]
+            App --- Memory
+            App --- Todoist
+            App --- Viz
         end
 
         TEI["memory-embeddings\nTEI (internal)"]
@@ -38,9 +42,7 @@ graph TD
 
     Client -->|"HTTPS"| Traefik
     Browser -->|"HTTPS"| Traefik
-    Traefik -->|"/memory/*"| Memory
-    Traefik -->|"/todoist/*"| Todoist
-    Traefik -->|"/viz/*"| Viz
+    Traefik -->|"mcp.<domain>"| App
     Memory -->|"POST /embed"| TEI
     Memory -->|"search / upsert"| Qdrant
     Backup -->|"snapshots"| Qdrant
@@ -50,7 +52,7 @@ graph TD
 
 TEI and Qdrant are internal only — not exposed outside the Docker network. Qdrant dashboard is available on `localhost:6333` for debugging.
 
-Traefik rewrites paths before forwarding: `/memory(.*)` → `/mcp$1`, `/todoist(.*)` → `/mcp$1`. FastMCP always serves at `/mcp`.
+Routing is handled inside `app.py` — Traefik only proxies `mcp.<domain>` to port 8000, no path rewrites needed.
 
 ### Visualization (`mcp.<domain>/viz`)
 
@@ -179,9 +181,9 @@ docker logs -f memory-embeddings
 # Ready when you see: Ready
 ```
 
-Verify Qdrant:
+Verify Qdrant (on VPS):
 ```bash
-curl https://qdrant.<your-domain>/healthz
+curl http://localhost:6333/healthz
 # → {"title":"qdrant - Ready"}
 ```
 
@@ -199,8 +201,7 @@ Backup runs as a background thread inside `memory-mcp` — no separate service o
 
 **To restore from a snapshot:**
 ```bash
-curl -X POST "https://qdrant.<your-domain>/collections/memory/snapshots/recover" \
-  -u user:pass \
+curl -X POST "http://localhost:6333/collections/memory/snapshots/recover" \
   -H "Content-Type: application/json" \
   -d '{"location": "file:///qdrant/snapshots/memory/<snapshot-name>.snapshot"}'
 ```
@@ -257,7 +258,7 @@ Features:
 
 ## Collection
 
-The Qdrant collection (`memory`) is created automatically on server startup. After the first `store_fact` call it will be visible at `https://qdrant.<your-domain>/dashboard`.
+The Qdrant collection (`memory`) is created automatically on server startup. After the first `store_fact` call it will be visible at `http://localhost:6333/dashboard` on the VPS.
 
 ## Best Practices
 

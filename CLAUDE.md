@@ -15,15 +15,13 @@ Self-hosted semantic memory + Todoist integration infrastructure using:
 Three Docker services: `memory-embeddings` (TEI), `memory-qdrant` (Qdrant), `memory-mcp` (all Python code). TEI and Qdrant are internal — not exposed outside Docker network.
 
 ```
-Client → Traefik (mcp.<domain>)
-           ├─ /memory/* → memory_server.py  (port 8000, always on)
-           ├─ /todoist/* → todoist_server.py (port 8001, ENABLE_TODOIST)
-           └─ /viz/*     → viz_server.py     (port 8080, ENABLE_VIZ)
+Client → Traefik (mcp.<domain>) → app.py (port 8000)
+           ├─ /memory/mcp  → FastMCP (memory)
+           ├─ /todoist/mcp → FastMCP (todoist, ENABLE_TODOIST)
+           └─ /viz/        → Starlette (viz, ENABLE_VIZ)
 ```
 
-Traefik rewrites `/memory(.*)` → `/mcp$1` and `/todoist(.*)` → `/mcp$1` — FastMCP always serves at `/mcp`.
-
-All services are behind Traefik with Authentik SSO (browser) + Basic Auth (programmatic). One `memory-mcp` container runs all Python services via `entrypoint.py`. Todoist and viz are toggled by `ENABLE_TODOIST` / `ENABLE_VIZ` env vars. Backup runs as a background thread inside `memory_server.py`.
+Single process (`app.py`) serves all routes on one port via Starlette + mounted FastMCP sub-apps. Traefik only needs one router — no path rewrites. Todoist and viz are toggled by `ENABLE_TODOIST` / `ENABLE_VIZ` env vars. Backup runs as a background thread.
 
 ## MCP Tools
 
@@ -95,23 +93,20 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - Labels are strings (label names), not IDs — pass `labels: ["name1", "name2"]`
 
 ### viz_server.py
-- Standalone Starlette app (not FastMCP) — serves HTML + JSON API
+- Starlette app — serves HTML + JSON API
 - `GET /` — serves `static/index.html` (vis.js graph + timeline)
-- `GET /api/graph?threshold=0.65` — scrolls all facts with vectors from Qdrant, computes pairwise cosine similarity, returns nodes + edges
-- `GET /api/facts` — scrolls all facts without vectors (lightweight, for timeline)
+- `GET /api/graph?threshold=0.65` — pairwise cosine similarity, returns nodes + edges
+- `GET /api/facts` — all facts without vectors (lightweight, for timeline)
 - Queries Qdrant directly via `QDRANT_URL` — no dependency on memory_server.py
-- Auth handled by Traefik (Authentik ForwardAuth) — no app-level auth needed
-- Traefik strips `/viz` prefix before forwarding (`stripprefix` middleware)
 
-### entrypoint.py
-- Launches `memory_server.py` always, `todoist_server.py` if `ENABLE_TODOIST=true`, `viz_server.py` if `ENABLE_VIZ=true`
-- Monitors child processes — if any exits, shuts down the container
-- Handles SIGTERM/SIGINT for graceful shutdown
+### app.py
+- Unified entrypoint: mounts memory, todoist, viz as Starlette sub-apps on one port
+- Calls `_init_collection()` and starts `_backup_loop` thread on startup
+- Conditionally loads todoist/viz based on env vars
 
 ### Common
-- All Python services run in one container (`ghcr.io/dzarlax/personal-memory`), built via GitHub Actions
-- Servers use streamable-http transport on `MCP_PORT`
-- Traefik rewrites `/memory(.*)` → `/mcp$1` and `/todoist(.*)` → `/mcp$1` — FastMCP always serves at `/mcp`
+- All Python services run in one process/container (`ghcr.io/dzarlax/personal-memory`), built via GitHub Actions
+- Single Traefik router — no path rewrites needed, app handles routing internally
 - Servers are stateless — in-memory cache resets on container restart
 - Snapshots land in `/qdrant/snapshots` → bind-mounted to `/root/memory/qdrant_snapshots` on the host
 - Qdrant port `6333` is exposed on `127.0.0.1` only
@@ -125,4 +120,4 @@ docker compose up -d
 
 ## Verification
 
-After setup, `https://qdrant.<your-domain>/dashboard` should show a `memory` collection after the first `store_fact` call.
+After setup, `http://localhost:6333/dashboard` on the VPS should show a `memory` collection after the first `store_fact` call.
