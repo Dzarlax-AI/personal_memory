@@ -10,34 +10,18 @@ services:
       resources:
         limits:
           memory: 2G
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.memory-embed.entrypoints=https"
-      - "traefik.http.routers.memory-embed.rule=Host(`embed.${MEMORY_DOMAIN}`)"
-      - "traefik.http.routers.memory-embed.tls=true"
-      - "traefik.http.routers.memory-embed.tls.certresolver=letsEncrypt"
-      - "traefik.http.routers.memory-embed.middlewares=traefik-auth"
-      - "traefik.http.services.memory-embed.loadbalancer.server.port=80"
 
   memory-qdrant:
     image: qdrant/qdrant:latest
     container_name: memory-qdrant
     restart: always
     ports:
-      - "127.0.0.1:6333:6333"  # localhost only — for manual backup runs
+      - "127.0.0.1:6333:6333"  # localhost only — for debug via dashboard
     volumes:
       - qdrant_storage:/qdrant/storage:rw
       - qdrant_snapshots:/qdrant/snapshots:rw
     networks:
       - traefik
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.memory-qdrant.entrypoints=https"
-      - "traefik.http.routers.memory-qdrant.rule=Host(`qdrant.${MEMORY_DOMAIN}`)"
-      - "traefik.http.routers.memory-qdrant.tls=true"
-      - "traefik.http.routers.memory-qdrant.tls.certresolver=letsEncrypt"
-      - "traefik.http.routers.memory-qdrant.middlewares=traefik-auth"
-      - "traefik.http.services.memory-qdrant.loadbalancer.server.port=6333"
 
   memory-mcp:
     image: ghcr.io/dzarlax/personal-memory:latest

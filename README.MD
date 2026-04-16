@@ -15,49 +15,46 @@ Self-hosted semantic memory + Todoist integration for any MCP-compatible AI clie
 
 ## Architecture
 
-All servers run as HTTP-only (streamable-http transport) behind Traefik:
+Three Docker services. All Python code runs in one container (`memory-mcp`):
 
 ```mermaid
 graph TD
     Client["Claude Code / any HTTP MCP client"]
+    Browser["Browser"]
 
-    subgraph VPS["VPS (behind Traefik + Basic Auth)"]
-        MemoryMCP["mcp.<domain>/memory/mcp\nmemory_server.py\n(FastMCP, port 8000)"]
-        TodoistMCP["mcp.<domain>/todoist/mcp\ntodoist_server.py\n(FastMCP, port 8001)"]
-        Viz["mcp.<domain>/viz\nviz_server.py\n(Starlette, port 8080)"]
-        TEI["embed.<domain>\nTEI — embedding model"]
-        Qdrant["qdrant.<domain>\nQdrant — vector DB"]
-        TodoistAPI["api.todoist.com\nTodoist REST API v1"]
+    subgraph VPS["VPS"]
+        Traefik["Traefik\n(SSL + Basic Auth / Authentik SSO)"]
+
+        subgraph MCP["memory-mcp container"]
+            Memory["memory_server.py\n(port 8000)"]
+            Todoist["todoist_server.py\n(port 8001, optional)"]
+            Viz["viz_server.py\n(port 8080, optional)"]
+            Backup["backup thread"]
+        end
+
+        TEI["memory-embeddings\nTEI (internal)"]
+        Qdrant["memory-qdrant\nQdrant (internal)"]
     end
 
-    Client -->|"HTTPS /memory/mcp"| MemoryMCP
-    Client -->|"HTTPS /todoist/mcp"| TodoistMCP
-    Client -->|"HTTPS /viz"| Viz
-    MemoryMCP -->|"POST /embed"| TEI
-    MemoryMCP -->|"search / upsert / delete"| Qdrant
+    Client -->|"HTTPS"| Traefik
+    Browser -->|"HTTPS"| Traefik
+    Traefik -->|"/memory/*"| Memory
+    Traefik -->|"/todoist/*"| Todoist
+    Traefik -->|"/viz/*"| Viz
+    Memory -->|"POST /embed"| TEI
+    Memory -->|"search / upsert"| Qdrant
+    Backup -->|"snapshots"| Qdrant
     Viz -->|"scroll + vectors"| Qdrant
-    TodoistMCP -->|"REST API"| TodoistAPI
+    Todoist -->|"REST API"| TodoistAPI["api.todoist.com"]
 ```
+
+TEI and Qdrant are internal only — not exposed outside the Docker network. Qdrant dashboard is available on `localhost:6333` for debugging.
 
 Traefik rewrites paths before forwarding: `/memory(.*)` → `/mcp$1`, `/todoist(.*)` → `/mcp$1`. FastMCP always serves at `/mcp`.
 
 ### Visualization (`mcp.<domain>/viz`)
 
-```mermaid
-graph TD
-    Browser["Browser"]
-
-    subgraph VPS["VPS (behind Traefik + Authentik SSO)"]
-        Viz["mcp.<domain>/viz\nviz_server.py\n(Starlette, port 8080)"]
-        Qdrant["qdrant.<domain>\nQdrant — vector DB"]
-    end
-
-    Browser -->|"HTTPS /viz"| Viz
-    Viz -->|"scroll + vectors"| Qdrant
-```
-
-The visualization dashboard provides two views:
-- **Graph** — interactive network where nodes are facts and edges represent semantic similarity (cosine distance above a configurable threshold). Node size reflects recall count, color represents namespace.
+- **Graph** — interactive force-directed network (vis.js). Nodes = facts, edges = cosine similarity above threshold.
 - **Timeline** — facts plotted by creation date, grouped by namespace.
 
 Auth is handled by Traefik: Authentik ForwardAuth for browser access, Basic Auth as programmatic fallback. `TODOIST_TOKEN` lives in `.env` on the server — never passed by the client.
@@ -165,7 +162,7 @@ docker compose up -d
 
 | Variable | Description |
 |---|---|
-| `MEMORY_DOMAIN` | Your domain, e.g. `example.com` — services at `embed.<domain>`, `qdrant.<domain>`, `mcp.<domain>` |
+| `MEMORY_DOMAIN` | Your domain, e.g. `example.com` — MCP available at `mcp.<domain>` |
 | `EMBED_MODEL` | HuggingFace model ID, default `intfloat/multilingual-e5-small` |
 | `ENABLE_TODOIST` | Set to `true` to enable Todoist MCP server (default: `false`) |
 | `ENABLE_VIZ` | Set to `true` to enable visualization dashboard (default: `false`) |

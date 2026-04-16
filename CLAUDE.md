@@ -12,19 +12,16 @@ Self-hosted semantic memory + Todoist integration infrastructure using:
 
 ## Architecture
 
-Three servers (`memory_server.py`, `todoist_server.py`, `viz_server.py`), all HTTP-only:
+Three Docker services: `memory-embeddings` (TEI), `memory-qdrant` (Qdrant), `memory-mcp` (all Python code). TEI and Qdrant are internal — not exposed outside Docker network.
 
 ```
-Claude Code / any HTTP MCP client
-     │
-     ├──▶ HTTPS → mcp.<domain>/memory/mcp  →  memory_server.py  (port 8000)
-     ├──▶ HTTPS → mcp.<domain>/todoist/mcp →  todoist_server.py (port 8001)
-     └──▶ HTTPS → mcp.<domain>/viz         →  viz_server.py     (port 8080)
+Client → Traefik (mcp.<domain>)
+           ├─ /memory/* → memory_server.py  (port 8000, always on)
+           ├─ /todoist/* → todoist_server.py (port 8001, ENABLE_TODOIST)
+           └─ /viz/*     → viz_server.py     (port 8080, ENABLE_VIZ)
 ```
 
-Traefik uses `replacepathregex` middleware to rewrite `/memory(.*)` → `/mcp$1` and `/todoist(.*)` → `/mcp$1` before forwarding — FastMCP always serves at `/mcp`.
-
-A visualization dashboard (`viz_server.py`) is available at `mcp.<domain>/viz` — interactive graph of fact relationships and a timeline view.
+Traefik rewrites `/memory(.*)` → `/mcp$1` and `/todoist(.*)` → `/mcp$1` — FastMCP always serves at `/mcp`.
 
 All services are behind Traefik with Authentik SSO (browser) + Basic Auth (programmatic). One `memory-mcp` container runs all Python services via `entrypoint.py`. Todoist and viz are toggled by `ENABLE_TODOIST` / `ENABLE_VIZ` env vars. Backup runs as a background thread inside `memory_server.py`.
 
@@ -66,18 +63,16 @@ user          string    — from MEMORY_USER env var
 |---|---|---|
 | `MEMORY_USER` | required | Basic Auth username |
 | `MEMORY_PASS` | required | Basic Auth password |
-| `MEMORY_DOMAIN` | required | Domain for embed/qdrant/mcp subdomains |
-| `TODOIST_TOKEN` | required | Todoist API token (todoist_server.py only) |
+| `MEMORY_DOMAIN` | required | Domain — MCP at `mcp.<domain>` |
+| `ENABLE_TODOIST` | `false` | Enable Todoist MCP server |
+| `ENABLE_VIZ` | `false` | Enable visualization dashboard |
+| `TODOIST_TOKEN` | — | Todoist API token (only when `ENABLE_TODOIST=true`) |
 | `CACHE_TTL` | `60` | Search cache TTL in seconds |
 | `DEDUP_THRESHOLD` | `0.97` | Cosine similarity for dedup |
 | `CONTRADICTION_LOW` | `0.60` | Lower bound for contradiction warning |
-| `MCP_PORT` | `8000` / `8001` | HTTP port (`memory_server.py` uses 8000, `todoist_server.py` uses 8001) |
-| `QDRANT_URL` | `https://qdrant.<DOMAIN>` | Override Qdrant URL (e.g. internal Docker: `http://memory-qdrant:6333`) |
-| `EMBED_URL` | `https://embed.<DOMAIN>` | Override TEI URL (e.g. internal Docker: `http://memory-embeddings:80`) |
-| `KEEP_SNAPSHOTS` | `7` | Snapshots to retain (backup service) |
-| `BACKUP_INTERVAL_HOURS` | `24` | Backup frequency in hours (backup service) |
-| `VIZ_PORT` | `8080` | HTTP port for viz_server.py |
-| `VIZ_SIMILARITY_THRESHOLD` | `0.65` | Default cosine similarity threshold for graph edges |
+| `KEEP_SNAPSHOTS` | `7` | Snapshots to retain |
+| `BACKUP_INTERVAL_HOURS` | `24` | Backup frequency in hours |
+| `VIZ_SIMILARITY_THRESHOLD` | `0.65` | Cosine similarity threshold for graph edges |
 
 Never hardcode credentials. Use `.env` file (excluded from git).
 
