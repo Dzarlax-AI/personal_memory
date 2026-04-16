@@ -43,18 +43,21 @@ services:
     image: ghcr.io/dzarlax/personal-memory:latest
     container_name: memory-mcp
     restart: always
-    command: python memory_server.py
     env_file: .env
     environment:
       - MCP_PORT=8000
+      - TODOIST_MCP_PORT=8001
       - QDRANT_URL=http://memory-qdrant:6333
       - EMBED_URL=http://memory-embeddings:80
+      - ENABLE_TODOIST=${ENABLE_TODOIST:-false}
+      - ENABLE_VIZ=${ENABLE_VIZ:-false}
     volumes:
       - qdrant_snapshots:/qdrant/snapshots:rw
     networks:
       - traefik
     labels:
       - "traefik.enable=true"
+      # Memory MCP
       - "traefik.http.routers.memory-mcp.entrypoints=https"
       - "traefik.http.routers.memory-mcp.rule=Host(`mcp.${MEMORY_DOMAIN}`) && PathPrefix(`/memory`)"
       - "traefik.http.routers.memory-mcp.tls=true"
@@ -63,21 +66,7 @@ services:
       - "traefik.http.middlewares.memory-rewrite.replacepathregex.regex=/memory(.*)"
       - "traefik.http.middlewares.memory-rewrite.replacepathregex.replacement=/mcp$$1"
       - "traefik.http.services.memory-mcp.loadbalancer.server.port=8000"
-
-  todoist-mcp:
-    image: ghcr.io/dzarlax/personal-memory:latest
-    container_name: todoist-mcp
-    restart: always
-    command: python todoist_server.py
-    env_file: .env
-    environment:
-      - MCP_PORT=8001
-    profiles:
-      - todoist
-    networks:
-      - traefik
-    labels:
-      - "traefik.enable=true"
+      # Todoist MCP (same container, port 8001)
       - "traefik.http.routers.todoist-mcp.entrypoints=https"
       - "traefik.http.routers.todoist-mcp.rule=Host(`mcp.${MEMORY_DOMAIN}`) && PathPrefix(`/todoist`)"
       - "traefik.http.routers.todoist-mcp.tls=true"
@@ -86,21 +75,7 @@ services:
       - "traefik.http.middlewares.todoist-rewrite.replacepathregex.regex=/todoist(.*)"
       - "traefik.http.middlewares.todoist-rewrite.replacepathregex.replacement=/mcp$$1"
       - "traefik.http.services.todoist-mcp.loadbalancer.server.port=8001"
-
-  memory-viz:
-    image: ghcr.io/dzarlax/personal-memory:latest
-    container_name: memory-viz
-    restart: always
-    command: python viz_server.py
-    env_file: .env
-    environment:
-      - QDRANT_URL=http://memory-qdrant:6333
-    profiles:
-      - viz
-    networks:
-      - traefik
-    labels:
-      - "traefik.enable=true"
+      # Visualization (same container, port 8080)
       - "traefik.http.routers.memory-viz.entrypoints=https"
       - "traefik.http.routers.memory-viz.rule=Host(`mcp.${MEMORY_DOMAIN}`) && PathPrefix(`/viz`)"
       - "traefik.http.routers.memory-viz.tls=true"

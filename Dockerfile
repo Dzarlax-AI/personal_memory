@@ -8,4 +8,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY *.py ./
 COPY static/ ./static/
 
-CMD ["python", "memory_server.py"]
+CMD ["python", "entrypoint.py"]

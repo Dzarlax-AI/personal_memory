@@ -158,10 +158,7 @@ mkdir -p /root/memory/qdrant_storage
 mkdir -p /root/memory/qdrant_snapshots
 cp .env.example .env
 nano .env
-docker compose up -d                          # core: memory + qdrant + embeddings
-docker compose --profile todoist up -d        # + todoist
-docker compose --profile viz up -d            # + visualization
-docker compose --profile todoist --profile viz up -d  # everything
+docker compose up -d
 ```
 
 `.env` variables:
@@ -170,12 +167,14 @@ docker compose --profile todoist --profile viz up -d  # everything
 |---|---|
 | `MEMORY_DOMAIN` | Your domain, e.g. `example.com` — services at `embed.<domain>`, `qdrant.<domain>`, `mcp.<domain>` |
 | `EMBED_MODEL` | HuggingFace model ID, default `intfloat/multilingual-e5-small` |
-| `TODOIST_TOKEN` | Todoist API token — get it at Settings → Integrations → Developer (only needed with `--profile todoist`) |
+| `ENABLE_TODOIST` | Set to `true` to enable Todoist MCP server (default: `false`) |
+| `ENABLE_VIZ` | Set to `true` to enable visualization dashboard (default: `false`) |
+| `TODOIST_TOKEN` | Todoist API token — get it at Settings → Integrations → Developer (only needed when `ENABLE_TODOIST=true`) |
 | `KEEP_SNAPSHOTS` | Number of snapshots to retain (default: `7`) |
 | `BACKUP_INTERVAL_HOURS` | How often the backup runs (default: `24`) |
-| `VIZ_SIMILARITY_THRESHOLD` | Default similarity threshold for graph edges (default: `0.65`, only with `--profile viz`) |
+| `VIZ_SIMILARITY_THRESHOLD` | Default similarity threshold for graph edges (default: `0.65`, only when `ENABLE_VIZ=true`) |
 
-Core services: `memory-embeddings`, `memory-qdrant`, `memory-mcp` (includes backup). Optional: `todoist-mcp`, `memory-viz`.
+Three Docker services: `memory-embeddings`, `memory-qdrant`, `memory-mcp`. The `memory-mcp` container runs all Python services (memory, backup, and optionally todoist + viz) via `entrypoint.py`.
 
 Track TEI model download on first start:
 ```bash

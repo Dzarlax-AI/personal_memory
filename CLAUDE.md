@@ -26,7 +26,7 @@ Traefik uses `replacepathregex` middleware to rewrite `/memory(.*)` → `/mcp$1`
 
 A visualization dashboard (`viz_server.py`) is available at `mcp.<domain>/viz` — interactive graph of fact relationships and a timeline view.
 
-All services are behind Traefik with Authentik SSO (browser) + Basic Auth (programmatic). Qdrant backup runs as a background thread inside `memory-mcp`. Todoist and viz are optional (`profiles: [todoist]`, `profiles: [viz]`).
+All services are behind Traefik with Authentik SSO (browser) + Basic Auth (programmatic). One `memory-mcp` container runs all Python services via `entrypoint.py`. Todoist and viz are toggled by `ENABLE_TODOIST` / `ENABLE_VIZ` env vars. Backup runs as a background thread inside `memory_server.py`.
 
 ## MCP Tools
 
@@ -109,8 +109,13 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - Auth handled by Traefik (Authentik ForwardAuth) — no app-level auth needed
 - Traefik strips `/viz` prefix before forwarding (`stripprefix` middleware)
 
+### entrypoint.py
+- Launches `memory_server.py` always, `todoist_server.py` if `ENABLE_TODOIST=true`, `viz_server.py` if `ENABLE_VIZ=true`
+- Monitors child processes — if any exits, shuts down the container
+- Handles SIGTERM/SIGINT for graceful shutdown
+
 ### Common
-- All Python services share one Dockerfile (`python:3.12-slim` + deps pre-installed)
+- All Python services run in one container (`ghcr.io/dzarlax/personal-memory`), built via GitHub Actions
 - Servers use streamable-http transport on `MCP_PORT`
 - Traefik rewrites `/memory(.*)` → `/mcp$1` and `/todoist(.*)` → `/mcp$1` — FastMCP always serves at `/mcp`
 - Servers are stateless — in-memory cache resets on container restart
@@ -120,11 +125,8 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 ## Setup
 
 ```bash
-cp .env.example .env  # fill in credentials
-docker compose up -d                          # core: memory + qdrant + embeddings
-docker compose --profile todoist up -d        # + todoist
-docker compose --profile viz up -d            # + visualization
-docker compose --profile todoist --profile viz up -d  # everything
+cp .env.example .env  # fill in credentials, set ENABLE_TODOIST / ENABLE_VIZ
+docker compose up -d
 ```
 
 ## Verification
