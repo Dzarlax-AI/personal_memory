@@ -158,7 +158,10 @@ mkdir -p /root/memory/qdrant_storage
 mkdir -p /root/memory/qdrant_snapshots
 cp .env.example .env
 nano .env
-docker compose up -d
+docker compose up -d                          # core: memory + qdrant + embeddings
+docker compose --profile todoist up -d        # + todoist
+docker compose --profile viz up -d            # + visualization
+docker compose --profile todoist --profile viz up -d  # everything
 ```
 
 `.env` variables:
@@ -167,13 +170,12 @@ docker compose up -d
 |---|---|
 | `MEMORY_DOMAIN` | Your domain, e.g. `example.com` — services at `embed.<domain>`, `qdrant.<domain>`, `mcp.<domain>` |
 | `EMBED_MODEL` | HuggingFace model ID, default `intfloat/multilingual-e5-small` |
-| `TODOIST_TOKEN` | Todoist API token — get it at Settings → Integrations → Developer |
+| `TODOIST_TOKEN` | Todoist API token — get it at Settings → Integrations → Developer (only needed with `--profile todoist`) |
 | `KEEP_SNAPSHOTS` | Number of snapshots to retain (default: `7`) |
-| `BACKUP_INTERVAL_HOURS` | How often the backup service runs (default: `24`) |
+| `BACKUP_INTERVAL_HOURS` | How often the backup runs (default: `24`) |
+| `VIZ_SIMILARITY_THRESHOLD` | Default similarity threshold for graph edges (default: `0.65`, only with `--profile viz`) |
 
-| `VIZ_SIMILARITY_THRESHOLD` | Default similarity threshold for graph edges (default: `0.65`) |
-
-This starts 6 services: `memory-embeddings`, `memory-qdrant`, `memory-mcp`, `todoist-mcp`, `memory-viz`, and `memory-backup` (automatic snapshots).
+Core services: `memory-embeddings`, `memory-qdrant`, `memory-mcp` (includes backup). Optional: `todoist-mcp`, `memory-viz`.
 
 Track TEI model download on first start:
 ```bash
@@ -189,25 +191,15 @@ curl https://qdrant.<your-domain>/healthz
 
 ## Backups
 
-The `memory-backup` service runs automatically inside Docker — no cron setup needed.
+Backup runs as a background thread inside `memory-mcp` — no separate service or cron needed.
 
-**How it works:**
 - Creates a Qdrant snapshot every `BACKUP_INTERVAL_HOURS` hours (default: 24)
 - Snapshots are stored at `/root/memory/qdrant_snapshots/` on the host
 - Keeps the last `KEEP_SNAPSHOTS` snapshots (default: 7), deletes older ones
-- Communicates with Qdrant over the internal Docker network — no credentials required
 
-**To trigger a backup manually:**
-```bash
-docker exec memory-backup bash /backup.sh
-```
+**Backup logs** appear in `docker logs memory-mcp`.
 
-**To view backup logs:**
-```bash
-docker logs memory-backup -f
-```
-
-**Snapshots are stored locally on the VPS only.** Transferring them off the server is your responsibility. Point Resilio Sync, rsync, rclone, or any other tool at `/root/memory/qdrant_snapshots/` — snapshots are self-contained `.snapshot` files that appear atomically, so they are safe to copy at any time.
+**Snapshots are stored locally on the VPS only.** Point rsync, rclone, or Resilio Sync at `/root/memory/qdrant_snapshots/` — snapshots are self-contained `.snapshot` files, safe to copy at any time.
 
 **To restore from a snapshot:**
 ```bash

@@ -26,7 +26,7 @@ Traefik uses `replacepathregex` middleware to rewrite `/memory(.*)` → `/mcp$1`
 
 A visualization dashboard (`viz_server.py`) is available at `mcp.<domain>/viz` — interactive graph of fact relationships and a timeline view.
 
-All services are behind Traefik with Authentik SSO (browser) + Basic Auth (programmatic). A sixth service, `memory-backup`, runs inside Docker and creates Qdrant snapshots on a schedule — no cron needed.
+All services are behind Traefik with Authentik SSO (browser) + Basic Auth (programmatic). Qdrant backup runs as a background thread inside `memory-mcp`. Todoist and viz are optional (`profiles: [todoist]`, `profiles: [viz]`).
 
 ## MCP Tools
 
@@ -90,6 +90,7 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - `forget_old` defaults to `dry_run=True` — safe by default
 - Point IDs are UUID5 (deterministic, based on fact text) — collision-safe 128-bit space
 - When `QDRANT_URL` / `EMBED_URL` start with `http://`, Basic Auth is skipped (internal Docker networking)
+- Backup runs as a daemon thread (`_backup_loop`): snapshots Qdrant every `BACKUP_INTERVAL_HOURS`, prunes old snapshots
 
 ### todoist_server.py
 - Thin wrapper over Todoist REST API v1 (`https://api.todoist.com/api/v1`)
@@ -105,22 +106,25 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - `GET /api/graph?threshold=0.65` — scrolls all facts with vectors from Qdrant, computes pairwise cosine similarity, returns nodes + edges
 - `GET /api/facts` — scrolls all facts without vectors (lightweight, for timeline)
 - Queries Qdrant directly via `QDRANT_URL` — no dependency on memory_server.py
-- Separate `requirements-viz.txt` (starlette, uvicorn, httpx, python-dotenv)
 - Auth handled by Traefik (Authentik ForwardAuth) — no app-level auth needed
 - Traefik strips `/viz` prefix before forwarding (`stripprefix` middleware)
 
 ### Common
+- All Python services share one Dockerfile (`python:3.12-slim` + deps pre-installed)
 - Servers use streamable-http transport on `MCP_PORT`
 - Traefik rewrites `/memory(.*)` → `/mcp$1` and `/todoist(.*)` → `/mcp$1` — FastMCP always serves at `/mcp`
 - Servers are stateless — in-memory cache resets on container restart
-- `memory-backup` service connects to Qdrant via `http://memory-qdrant:6333` (internal network, no auth); snapshots land in `/qdrant/snapshots` → bind-mounted to `/root/memory/qdrant_snapshots` on the host
-- Qdrant port `6333` is exposed on `127.0.0.1` only — for manual backup runs from the host (`backup.sh` with default `QDRANT_URL=http://localhost:6333`)
+- Snapshots land in `/qdrant/snapshots` → bind-mounted to `/root/memory/qdrant_snapshots` on the host
+- Qdrant port `6333` is exposed on `127.0.0.1` only
 
 ## Setup
 
 ```bash
 cp .env.example .env  # fill in credentials
-docker compose up -d
+docker compose up -d                          # core: memory + qdrant + embeddings
+docker compose --profile todoist up -d        # + todoist
+docker compose --profile viz up -d            # + visualization
+docker compose --profile todoist --profile viz up -d  # everything
 ```
 
 ## Verification

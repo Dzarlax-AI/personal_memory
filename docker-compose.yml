@@ -24,7 +24,7 @@ services:
     container_name: memory-qdrant
     restart: always
     ports:
-      - "127.0.0.1:6333:6333"  # localhost only — for backup.sh on the host
+      - "127.0.0.1:6333:6333"  # localhost only — for manual backup runs
     volumes:
       - qdrant_storage:/qdrant/storage:rw
       - qdrant_snapshots:/qdrant/snapshots:rw
@@ -39,46 +39,18 @@ services:
       - "traefik.http.routers.memory-qdrant.middlewares=traefik-auth"
       - "traefik.http.services.memory-qdrant.loadbalancer.server.port=6333"
 
-  memory-backup:
-    image: alpine:latest
-    container_name: memory-backup
-    restart: always
-    depends_on:
-      - memory-qdrant
-    volumes:
-      - ./backup.sh:/backup.sh:ro
-      - qdrant_snapshots:/qdrant/snapshots:rw
-    environment:
-      - QDRANT_URL=http://memory-qdrant:6333
-      - COLLECTION=${COLLECTION:-memory}
-      - KEEP_SNAPSHOTS=${KEEP_SNAPSHOTS:-7}
-      - BACKUP_INTERVAL_HOURS=${BACKUP_INTERVAL_HOURS:-24}
-    networks:
-      - traefik
-    command: >
-      sh -c "apk add --no-cache bash curl python3 -q &&
-             echo 'Backup service started, interval: ${BACKUP_INTERVAL_HOURS:-24}h' &&
-             while true; do
-               sleep $((${BACKUP_INTERVAL_HOURS:-24} * 3600));
-               bash /backup.sh;
-             done"
-
   memory-mcp:
-    image: python:3.12-slim
+    build: .
     container_name: memory-mcp
     restart: always
-    working_dir: /app
-    volumes:
-      - ./memory_server.py:/app/memory_server.py:ro
-      - ./requirements.txt:/app/requirements.txt:ro
-      - pip_cache:/root/.cache/pip
-    command: >
-      sh -c "pip install -r requirements.txt -q && python memory_server.py"
+    command: python memory_server.py
     env_file: .env
     environment:
       - MCP_PORT=8000
       - QDRANT_URL=http://memory-qdrant:6333
       - EMBED_URL=http://memory-embeddings:80
+    volumes:
+      - qdrant_snapshots:/qdrant/snapshots:rw
     networks:
       - traefik
     labels:
@@ -93,19 +65,15 @@ services:
       - "traefik.http.services.memory-mcp.loadbalancer.server.port=8000"
 
   todoist-mcp:
-    image: python:3.12-slim
+    build: .
     container_name: todoist-mcp
     restart: always
-    working_dir: /app
-    volumes:
-      - ./todoist_server.py:/app/todoist_server.py:ro
-      - ./requirements.txt:/app/requirements.txt:ro
-      - pip_cache:/root/.cache/pip
-    command: >
-      sh -c "pip install -r requirements.txt -q && python todoist_server.py"
+    command: python todoist_server.py
     env_file: .env
     environment:
       - MCP_PORT=8001
+    profiles:
+      - todoist
     networks:
       - traefik
     labels:
@@ -118,6 +86,28 @@ services:
       - "traefik.http.middlewares.todoist-rewrite.replacepathregex.regex=/todoist(.*)"
       - "traefik.http.middlewares.todoist-rewrite.replacepathregex.replacement=/mcp$$1"
       - "traefik.http.services.todoist-mcp.loadbalancer.server.port=8001"
+
+  memory-viz:
+    build: .
+    container_name: memory-viz
+    restart: always
+    command: python viz_server.py
+    env_file: .env
+    environment:
+      - QDRANT_URL=http://memory-qdrant:6333
+    profiles:
+      - viz
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.memory-viz.entrypoints=https"
+      - "traefik.http.routers.memory-viz.rule=Host(`mcp.${MEMORY_DOMAIN}`) && PathPrefix(`/viz`)"
+      - "traefik.http.routers.memory-viz.tls=true"
+      - "traefik.http.routers.memory-viz.tls.certresolver=letsEncrypt"
+      - "traefik.http.routers.memory-viz.middlewares=authentik-auth,viz-strip"
+      - "traefik.http.middlewares.viz-strip.stripprefix.prefixes=/viz"
+      - "traefik.http.services.memory-viz.loadbalancer.server.port=8080"
 
 volumes:
   qdrant_storage:
@@ -133,34 +123,6 @@ volumes:
       type: none
       o: bind
       device: /root/memory/qdrant_snapshots
-
-  pip_cache:
-
-  # --- Uncomment if you don't have Traefik yet ---
-  # traefik:
-  #   image: traefik:v3
-  #   container_name: traefik
-  #   restart: always
-  #   command:
-  #     - "--entrypoints.https.address=:443"
-  #     - "--providers.docker=true"
-  #     - "--providers.docker.exposedbydefault=false"
-  #     - "--certificatesresolvers.letsEncrypt.acme.tlschallenge=true"
-  #     - "--certificatesresolvers.letsEncrypt.acme.email=your@email.com"
-  #     - "--certificatesresolvers.letsEncrypt.acme.storage=/letsencrypt/acme.json"
-  #   ports:
-  #     - "443:443"
-  #   volumes:
-  #     - "/var/run/docker.sock:/var/run/docker.sock:ro"
-  #     - "letsencrypt:/letsencrypt"
-  #   networks:
-  #     - traefik
-  #   labels:
-  #     - "traefik.enable=true"
-  #     - "traefik.http.middlewares.traefik-auth.basicauth.users=${TRAEFIK_AUTH_USERS}"
-
-# volumes:
-#   letsencrypt:
 
 networks:
   traefik:

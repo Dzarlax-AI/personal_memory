@@ -1,11 +1,15 @@
 import os
 import time
 import uuid
+import logging
+import threading
 import httpx
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -590,12 +594,45 @@ def import_facts(facts: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Backup — daemon thread that snapshots Qdrant on a schedule
+# ---------------------------------------------------------------------------
+
+BACKUP_INTERVAL = int(os.getenv("BACKUP_INTERVAL_HOURS", "24")) * 3600
+KEEP_SNAPSHOTS = int(os.getenv("KEEP_SNAPSHOTS", "7"))
+
+
+def _backup_loop():
+    """Create Qdrant snapshots periodically and prune old ones."""
+    while True:
+        time.sleep(BACKUP_INTERVAL)
+        try:
+            r = qdrant.post(f"/collections/{COLLECTION}/snapshots")
+            r.raise_for_status()
+            name = r.json()["result"]["name"]
+            logger.info("Snapshot created: %s", name)
+
+            if KEEP_SNAPSHOTS > 0:
+                r = qdrant.get(f"/collections/{COLLECTION}/snapshots")
+                r.raise_for_status()
+                names = sorted(s["name"] for s in r.json()["result"])
+                for old in names[:-KEEP_SNAPSHOTS]:
+                    qdrant.delete(f"/collections/{COLLECTION}/snapshots/{old}")
+                    logger.info("Deleted old snapshot: %s", old)
+        except Exception:
+            logger.exception("Backup failed")
+
+
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     _init_collection()
+
+    threading.Thread(target=_backup_loop, daemon=True).start()
+    logger.info("Backup scheduler started (every %dh)", BACKUP_INTERVAL // 3600)
+
     mcp.settings.host = "0.0.0.0"
     mcp.settings.port = int(os.getenv("MCP_PORT", "8000"))
-    # Disable DNS rebinding protection — server runs behind Traefik with Basic Auth
     mcp.settings.transport_security = TransportSecuritySettings(
         enable_dns_rebinding_protection=False
     )
