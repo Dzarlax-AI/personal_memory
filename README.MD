@@ -22,38 +22,37 @@ Two Docker services in this repo: `memory-embeddings` (TEI), `memory-mcp` (Go se
 
 ```mermaid
 graph TD
-    Client["Claude Code / any HTTP MCP client"]
+    Client["Claude Code / HTTP MCP client"]
     Browser["Browser"]
+    TodoistAPI["api.todoist.com"]
 
     subgraph VPS["VPS"]
-        Traefik["Traefik (SSL)"]
+        Traefik["Traefik SSL"]
+        TEI["memory-embeddings TEI"]
+        Qdrant["infra-qdrant"]
 
-        subgraph MCP["memory-mcp container (port 8000)"]
-            App["main.go (Chi router)"]
+        subgraph MCP["memory-mcp container :8000"]
+            App["main.go Chi router"]
             Auth["X-API-Key middleware"]
-            Memory["/memory → memory MCP"]
-            Todoist["/todoist → todoist MCP (optional)"]
-            Viz["/viz → viz dashboard (optional)"]
+            Memory["/memory MCP"]
+            Todoist["/todoist MCP optional"]
+            Viz["/viz dashboard optional"]
             Backup["backup goroutine"]
-            App --- Auth
-            Auth --- Memory
-            Auth --- Todoist
-            App --- Viz
+            App --> Auth
+            Auth --> Memory
+            Auth --> Todoist
+            App --> Viz
         end
-
-        TEI["memory-embeddings\nTEI (internal)"]
-        Qdrant["infra-qdrant\n(shared, internal)"]
     end
 
-    Client -->|"HTTPS + X-API-Key"| Traefik
-    Browser -->|"HTTPS + OIDC"| Traefik
-    Traefik -->|"/memory, /todoist, /health"| Memory
-    Traefik -->|"/viz (via Authentik ForwardAuth)"| Viz
-    Memory -->|"POST /embed"| TEI
-    Memory -->|"search / upsert"| Qdrant
-    Backup -->|"snapshots"| Qdrant
-    Viz -->|"scroll + vectors"| Qdrant
-    Todoist -->|"REST API"| TodoistAPI["api.todoist.com"]
+    Client -->|HTTPS + X-API-Key| Traefik
+    Browser -->|HTTPS + OIDC| Traefik
+    Traefik --> App
+    Memory -->|POST /embed| TEI
+    Memory -->|search / upsert| Qdrant
+    Backup -->|snapshots| Qdrant
+    Viz -->|scroll + vectors| Qdrant
+    Todoist -->|REST API| TodoistAPI
 ```
 
 ### Auth
@@ -73,16 +72,16 @@ Each stored fact is a Qdrant point with the following payload:
 ```mermaid
 classDiagram
     class Fact {
-        string text
-        string user
-        string namespace
-        string[] tags
-        bool permanent
-        string created_at
-        string updated_at
-        string valid_until
-        int recall_count
-        string last_recalled_at
+        +string text
+        +string user
+        +string namespace
+        +List~string~ tags
+        +bool permanent
+        +string created_at
+        +string updated_at
+        +string valid_until
+        +int recall_count
+        +string last_recalled_at
     }
 ```
 
