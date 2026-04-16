@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 )
 
 const collectionName = "memory"
@@ -29,6 +30,20 @@ type Point struct {
 	Vector  []float32              `json:"vector,omitempty"`
 	Payload map[string]interface{} `json:"payload,omitempty"`
 	Score   float64                `json:"score,omitempty"`
+}
+
+// parsePointID converts a Qdrant point ID (int or string) to string.
+func parsePointID(v interface{}) string {
+	switch id := v.(type) {
+	case string:
+		return id
+	case float64:
+		return strconv.FormatInt(int64(id), 10)
+	case json.Number:
+		return id.String()
+	default:
+		return fmt.Sprintf("%v", id)
+	}
 }
 
 // EnsureCollection creates the collection if it doesn't exist.
@@ -96,7 +111,7 @@ func (c *Client) Search(ctx context.Context, vector []float32, limit int, filter
 
 	var result struct {
 		Result []struct {
-			ID      string                 `json:"id"`
+			ID      interface{}            `json:"id"`
 			Score   float64                `json:"score"`
 			Payload map[string]interface{} `json:"payload"`
 		} `json:"result"`
@@ -108,7 +123,7 @@ func (c *Client) Search(ctx context.Context, vector []float32, limit int, filter
 	points := make([]Point, len(result.Result))
 	for i, r := range result.Result {
 		points[i] = Point{
-			ID:      r.ID,
+			ID:      parsePointID(r.ID),
 			Score:   r.Score,
 			Payload: r.Payload,
 		}
@@ -118,19 +133,20 @@ func (c *Client) Search(ctx context.Context, vector []float32, limit int, filter
 
 // ScrollResult holds a page of scroll results.
 type ScrollResult struct {
-	Points []ScrollPoint `json:"points"`
-	Offset *string       `json:"next_page_offset"`
+	Points    []ScrollPoint `json:"points"`
+	RawOffset interface{}   `json:"next_page_offset"`
 }
 
 // ScrollPoint is a point returned by scroll (may include vector).
 type ScrollPoint struct {
-	ID      string                 `json:"id"`
+	ID      string                 `json:"-"`
+	RawID   interface{}            `json:"id"`
 	Vector  []float32              `json:"vector,omitempty"`
 	Payload map[string]interface{} `json:"payload,omitempty"`
 }
 
 // Scroll paginates through all points, optionally with vectors.
-func (c *Client) Scroll(ctx context.Context, limit int, offset *string, filters map[string]interface{}, withVector bool) (*ScrollResult, error) {
+func (c *Client) Scroll(ctx context.Context, limit int, offset interface{}, filters map[string]interface{}, withVector bool) (*ScrollResult, error) {
 	url := fmt.Sprintf("%s/collections/%s/points/scroll", c.url, collectionName)
 	body := map[string]interface{}{
 		"limit":        limit,
@@ -138,7 +154,7 @@ func (c *Client) Scroll(ctx context.Context, limit int, offset *string, filters 
 		"with_vector":  withVector,
 	}
 	if offset != nil {
-		body["offset"] = *offset
+		body["offset"] = offset
 	}
 	if filters != nil {
 		body["filter"] = filters
@@ -155,23 +171,29 @@ func (c *Client) Scroll(ctx context.Context, limit int, offset *string, filters 
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("decode scroll response: %w", err)
 	}
+
+	// Parse point IDs from raw interface{} to string.
+	for i := range result.Result.Points {
+		result.Result.Points[i].ID = parsePointID(result.Result.Points[i].RawID)
+	}
+
 	return &result.Result, nil
 }
 
 // ScrollAll retrieves all points by paginating through scroll.
 func (c *Client) ScrollAll(ctx context.Context, filters map[string]interface{}, withVector bool) ([]ScrollPoint, error) {
 	var all []ScrollPoint
-	var offset *string
+	var offset interface{}
 	for {
 		result, err := c.Scroll(ctx, 100, offset, filters, withVector)
 		if err != nil {
 			return nil, err
 		}
 		all = append(all, result.Points...)
-		if result.Offset == nil {
+		if result.RawOffset == nil {
 			break
 		}
-		offset = result.Offset
+		offset = result.RawOffset
 	}
 	return all, nil
 }
