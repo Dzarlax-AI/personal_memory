@@ -39,13 +39,14 @@ type Config struct {
 	MemoryDomain string
 
 	// RAG
-	EnableRAG             bool
-	RAGDocumentsDir       string
-	RAGChunkMaxBytes      int
-	RAGFolderTopK         int
-	RAGFolderThreshold    float64
-	RAGCollectionChunks   string
-	RAGCollectionFolders  string
+	EnableRAG            bool
+	RAGDocumentsDir      string
+	RAGChunkMaxBytes     int
+	RAGFolderTopK        int
+	RAGFolderThreshold   float64
+	RAGCollectionChunks  string
+	RAGCollectionFolders string
+	RAGReindexInterval   time.Duration // 0 disables the in-server auto-rescan
 }
 
 func Load() *Config {
@@ -79,6 +80,7 @@ func Load() *Config {
 		RAGFolderThreshold:   envFloat("RAG_FOLDER_THRESHOLD", 0.50),
 		RAGCollectionChunks:  envOrDefault("RAG_COLLECTION_CHUNKS", "doc_chunks"),
 		RAGCollectionFolders: envOrDefault("RAG_COLLECTION_FOLDERS", "doc_folders"),
+		RAGReindexInterval:   envDuration("RAG_REINDEX_INTERVAL_MINUTES", 0),
 	}
 }
 
@@ -128,6 +130,13 @@ func envDuration(key string, def time.Duration) time.Duration {
 			return def
 		}
 		return time.Duration(h) * time.Hour
+	}
+	if key == "RAG_REINDEX_INTERVAL_MINUTES" {
+		m, err := strconv.Atoi(v)
+		if err != nil {
+			return def
+		}
+		return time.Duration(m) * time.Minute
 	}
 	s, err := strconv.Atoi(v)
 	if err != nil {

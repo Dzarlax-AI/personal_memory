@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/Dzarlax-AI/personal-memory/internal/config"
 	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
@@ -14,6 +15,11 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
+
+// autoReindexInitialDelay is how long we wait after StartAutoReindex before
+// the first scheduled run. Gives the server a moment to finish booting
+// (the first reindex can hit many files at once).
+const autoReindexInitialDelay = 10 * time.Second
 
 // Server exposes RAG as MCP tools registered on the shared memory MCP server.
 type Server struct {
@@ -200,4 +206,53 @@ func (s *Server) handleReindexDocuments(_ context.Context, _ mcp.CallToolRequest
 		}
 	}()
 	return mcp.NewToolResultText(fmt.Sprintf("Reindex started in background. Directory: %s", s.cfg.RAGDocumentsDir)), nil
+}
+
+// StartAutoReindex spawns a goroutine that runs the indexer on a fixed
+// interval (cfg.RAGReindexInterval). A zero interval disables the loop —
+// in that case the server is purely on-demand via the MCP tool or the
+// standalone cmd/indexer binary. Shares the reindex mutex with the MCP
+// handler so a manual trigger and a scheduled tick can't race.
+func (s *Server) StartAutoReindex(ctx context.Context) {
+	if s.cfg.RAGReindexInterval <= 0 {
+		slog.Info("RAG auto-rescan disabled (set RAG_REINDEX_INTERVAL_MINUTES to enable)")
+		return
+	}
+	go s.autoReindexLoop(ctx)
+}
+
+func (s *Server) autoReindexLoop(ctx context.Context) {
+	interval := s.cfg.RAGReindexInterval
+	slog.Info("RAG auto-rescan started", "interval", interval)
+
+	// Initial delay — don't slam the system during server boot.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(autoReindexInitialDelay):
+	}
+	s.runScheduledReindex(ctx)
+
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("RAG auto-rescan stopping")
+			return
+		case <-tick.C:
+			s.runScheduledReindex(ctx)
+		}
+	}
+}
+
+func (s *Server) runScheduledReindex(ctx context.Context) {
+	if !s.reindexMu.TryLock() {
+		slog.Info("scheduled reindex skipped — another run in progress")
+		return
+	}
+	defer s.reindexMu.Unlock()
+	if err := s.indexer.Run(ctx); err != nil {
+		slog.Error("scheduled reindex failed", "error", err)
+	}
 }

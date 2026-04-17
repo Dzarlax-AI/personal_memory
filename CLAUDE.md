@@ -140,6 +140,7 @@ The Qdrant client unmarshals `id` into `interface{}` and converts to string with
 | `RAG_FOLDER_THRESHOLD` | `0.50` | Min folder similarity score; below this, fall back to flat chunk search |
 | `RAG_COLLECTION_CHUNKS` | `doc_chunks` | Qdrant collection for chunks |
 | `RAG_COLLECTION_FOLDERS` | `doc_folders` | Qdrant collection for folder summaries |
+| `RAG_REINDEX_INTERVAL_MINUTES` | `0` | How often the in-server goroutine auto-re-indexes. 0 disables (run manually or via `cmd/indexer`). |
 
 Never hardcode credentials. Use `.env` file (excluded from git).
 

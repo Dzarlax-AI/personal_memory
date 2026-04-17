@@ -185,6 +185,7 @@ docker compose up -d
 | `RAG_FOLDER_THRESHOLD` | Min folder similarity score; below this we fall back to flat chunk search. Default: `0.50` |
 | `RAG_COLLECTION_CHUNKS` | Qdrant collection name for chunks. Default: `doc_chunks` |
 | `RAG_COLLECTION_FOLDERS` | Qdrant collection name for folder summaries. Default: `doc_folders` |
+| `RAG_REINDEX_INTERVAL_MINUTES` | Auto-rescan cadence in minutes for the in-server goroutine. `0` disables it — trigger manually or via cron. Default: `0` |
 
 Track TEI model download on first start:
 ```bash
@@ -248,11 +249,13 @@ The intended flow is Resilio Sync (or any file sync tool) from your laptop → `
 
 ### Re-indexing
 
-Two ways to trigger it:
+Three ways to trigger it:
 
 **A. From an MCP client** — call `reindex_documents()`. Returns immediately; the indexer runs in a background goroutine on the server's lifetime context (cancelled cleanly on shutdown). A second call while one is in progress returns `"reindex already in progress"` — no queue, no duplication.
 
-**B. Via the standalone binary on the VPS** — useful for cron scheduling, or to run the first full pass without tying up an MCP session:
+**B. Built-in auto-rescan (recommended)** — set `RAG_REINDEX_INTERVAL_MINUTES=30` (or any positive value) in the server env. A goroutine running alongside the HTTP server re-indexes the docs dir on that cadence, sharing the same mutex as the MCP tool so a scheduled run and a manual one can't collide. Zero (the default) keeps the server purely on-demand.
+
+**C. Via the standalone binary on the VPS** — useful for host-level cron scheduling or one-shot first passes:
 
 ```bash
 docker compose exec memory-mcp /personal-memory-indexer
@@ -261,7 +264,6 @@ docker compose exec memory-mcp /personal-memory-indexer
 A typical crontab entry:
 
 ```cron
-# Re-index personal documents every 30 minutes
 */30 * * * * docker compose -f /root/memory/docker-compose.yml exec -T memory-mcp /personal-memory-indexer
 ```
 

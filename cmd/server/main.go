@@ -86,7 +86,10 @@ func main() {
 				os.Exit(1)
 			}
 			ragSrv.RegisterTools(mcpMemory)
-			slog.Info("RAG enabled", "dir", cfg.RAGDocumentsDir)
+			ragSrv.StartAutoReindex(ctx)
+			slog.Info("RAG enabled",
+				"dir", cfg.RAGDocumentsDir,
+				"reindex_interval", cfg.RAGReindexInterval)
 		}
 
 		// Todoist MCP (optional).
