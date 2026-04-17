@@ -3,35 +3,48 @@ package viz
 import (
 	"embed"
 	"encoding/json"
+	"fmt"
+	"io/fs"
 	"net/http"
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 	"github.com/go-chi/chi/v5"
 )
 
-//go:embed static/index.html
+//go:embed all:static
 var staticFS embed.FS
+
+// Order matters: this is how the view fragments are concatenated into the
+// shell, which also determines the DOM order of the view containers.
+var viewNames = []string{"overview", "duplicates", "forgotten", "timeline", "graph", "documents"}
 
 type Handler struct {
 	qdrant           *qdrant.Client
 	defaultThreshold float64
 	defaultMaxEdges  int
 
-	// Optional RAG clients — set via WithDocumentRAG. When nil, the
-	// /api/documents endpoint returns 404 and the frontend hides its tab.
 	docChunks *qdrant.Client
 	docsDir   string
+
+	composedHTML []byte // shell.html with <!-- VIEWS --> expanded, built once at startup
 }
 
 func NewHandler(qc *qdrant.Client, defaultThreshold float64) *Handler {
-	return &Handler{
+	h := &Handler{
 		qdrant:           qc,
 		defaultThreshold: defaultThreshold,
 		defaultMaxEdges:  500,
 	}
+	html, err := buildShellHTML()
+	if err != nil {
+		panic(fmt.Errorf("viz: build shell html: %w", err))
+	}
+	h.composedHTML = html
+	return h
 }
 
 // WithDocumentRAG enables the Documents tab backed by the given chunks
@@ -44,22 +57,44 @@ func (h *Handler) WithDocumentRAG(chunks *qdrant.Client, docsDir string) *Handle
 
 func (h *Handler) Router() chi.Router {
 	r := chi.NewRouter()
-	r.Get("/", h.serveIndex)
+
 	r.Get("/api/facts", h.apiFacts)
 	r.Get("/api/graph", h.apiGraph)
 	r.Get("/api/duplicates", h.apiDuplicates)
 	r.Get("/api/documents", h.apiDocuments)
+
+	// Static assets: /viz/assets/styles.css, /viz/assets/js/*.js
+	if sub, err := fs.Sub(staticFS, "static/assets"); err == nil {
+		r.Handle("/assets/*", http.StripPrefix("/assets/", http.FileServer(http.FS(sub))))
+	}
+
+	// Shell for the root and every recognised tab path
+	// (/viz/, /viz/overview, /viz/documents, …).
+	r.Get("/", h.serveIndex)
+	r.Get("/{tab}", h.serveIndex)
 	return r
 }
 
-func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {
-	data, err := staticFS.ReadFile("static/index.html")
+func buildShellHTML() ([]byte, error) {
+	shell, err := staticFS.ReadFile("static/shell.html")
 	if err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
+		return nil, fmt.Errorf("read shell: %w", err)
 	}
+	var views strings.Builder
+	for _, name := range viewNames {
+		b, err := staticFS.ReadFile("static/views/" + name + ".html")
+		if err != nil {
+			return nil, fmt.Errorf("read view %s: %w", name, err)
+		}
+		views.Write(b)
+		views.WriteString("\n")
+	}
+	return []byte(strings.Replace(string(shell), "<!-- VIEWS -->", views.String(), 1)), nil
+}
+
+func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(data)
+	w.Write(h.composedHTML)
 }
 
 func (h *Handler) apiFacts(w http.ResponseWriter, r *http.Request) {
@@ -103,9 +138,9 @@ func (h *Handler) apiGraph(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type edge struct {
-		From  string  `json:"from"`
-		To    string  `json:"to"`
-		Value float64 `json:"value"`
+		From       string  `json:"from"`
+		To         string  `json:"to"`
+		Similarity float64 `json:"similarity"`
 	}
 
 	var edges []edge
@@ -114,18 +149,17 @@ func (h *Handler) apiGraph(w http.ResponseWriter, r *http.Request) {
 			sim := cosineSimilarity(points[i].Vector, points[j].Vector)
 			if sim >= threshold {
 				edges = append(edges, edge{
-					From:  points[i].ID,
-					To:    points[j].ID,
-					Value: sim,
+					From:       points[i].ID,
+					To:         points[j].ID,
+					Similarity: sim,
 				})
 			}
 		}
 	}
 
-	// Keep only strongest edges.
 	if len(edges) > maxEdges {
 		sort.Slice(edges, func(i, j int) bool {
-			return edges[i].Value > edges[j].Value
+			return edges[i].Similarity > edges[j].Similarity
 		})
 		edges = edges[:maxEdges]
 	}
@@ -151,9 +185,9 @@ func (h *Handler) apiDuplicates(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type dupPair struct {
-		A     map[string]interface{} `json:"a"`
-		B     map[string]interface{} `json:"b"`
-		Score float64                `json:"score"`
+		A          map[string]interface{} `json:"a"`
+		B          map[string]interface{} `json:"b"`
+		Similarity float64                `json:"similarity"`
 	}
 
 	var pairs []dupPair
@@ -162,19 +196,19 @@ func (h *Handler) apiDuplicates(w http.ResponseWriter, r *http.Request) {
 			sim := cosineSimilarity(points[i].Vector, points[j].Vector)
 			if sim >= threshold {
 				pairs = append(pairs, dupPair{
-					A:     pointToNode(points[i]),
-					B:     pointToNode(points[j]),
-					Score: sim,
+					A:          pointToNode(points[i]),
+					B:          pointToNode(points[j]),
+					Similarity: sim,
 				})
 			}
 		}
 	}
 
 	sort.Slice(pairs, func(i, j int) bool {
-		return pairs[i].Score > pairs[j].Score
+		return pairs[i].Similarity > pairs[j].Similarity
 	})
 
-	writeJSON(w, pairs)
+	writeJSON(w, map[string]interface{}{"pairs": pairs})
 }
 
 func pointToNode(p qdrant.ScrollPoint) map[string]interface{} {
@@ -237,7 +271,6 @@ func (h *Handler) apiDocuments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Aggregate per file.
 	fileMap := map[string]*fileInfo{}
 	for _, p := range points {
 		fp, _ := p.Payload["file_path"].(string)
@@ -260,7 +293,6 @@ func (h *Handler) apiDocuments(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Group into folders.
 	folderMap := map[string]*folderInfo{}
 	for _, fi := range fileMap {
 		folder := filepath.Dir(fi.Path)

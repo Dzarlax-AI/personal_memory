@@ -1,0 +1,19 @@
+  <div class="view view-full" id="graph-view" style="position:relative;">
+    <div class="graph-controls">
+      <label>Namespace:</label>
+      <select id="ns-filter"><option value="">All</option></select>
+      <label>Similarity:</label>
+      <input type="range" id="threshold" min="0.50" max="0.99" step="0.01" value="0.85">
+      <span class="threshold-val" id="threshold-val">0.85</span>
+      <span id="tag-filter-label" style="display:none;font-size:13px;color:var(--orange)"></span>
+      <button id="clear-tag-filter" style="display:none;background:var(--border);color:var(--text);border:none;border-radius:4px;padding:2px 8px;font-size:12px;cursor:pointer">clear</button>
+    </div>
+    <div id="graph-container"></div>
+    <div class="legend" id="legend"></div>
+    <div class="detail-panel" id="detail-panel">
+      <button class="close-btn" id="detail-close">&times;</button>
+      <h3>Fact Details</h3>
+      <div class="fact-text" id="detail-text"></div>
+      <div class="meta" id="detail-meta"></div>
+    </div>
+  </div>

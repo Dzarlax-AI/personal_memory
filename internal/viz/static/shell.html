@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Memory Dashboard</title>
+<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+<script src="https://unpkg.com/vis-timeline@7.7.3/standalone/umd/vis-timeline-graph2d.min.js"></script>
+<link href="https://unpkg.com/vis-timeline@7.7.3/styles/vis-timeline-graph2d.min.css" rel="stylesheet">
+<link rel="stylesheet" href="/viz/assets/styles.css">
+</head>
+<body>
+  <div class="header">
+    <h1>Memory Dashboard</h1>
+    <div class="stats" id="stats"></div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab" data-view="overview">Overview</button>
+    <button class="tab" data-view="duplicates">Duplicates <span class="badge" id="dup-badge">...</span></button>
+    <button class="tab" data-view="forgotten">Forgotten <span class="badge" id="forgot-badge">...</span></button>
+    <button class="tab" data-view="timeline">Timeline</button>
+    <button class="tab" data-view="graph">Graph</button>
+    <button class="tab" data-view="documents" id="docs-tab" style="display:none">Documents <span class="badge" id="docs-badge">...</span></button>
+  </div>
+
+  <!-- VIEWS -->
+
+  <script src="/viz/assets/js/shared.js"></script>
+  <script src="/viz/assets/js/overview.js"></script>
+  <script src="/viz/assets/js/duplicates.js"></script>
+  <script src="/viz/assets/js/forgotten.js"></script>
+  <script src="/viz/assets/js/timeline.js"></script>
+  <script src="/viz/assets/js/graph.js"></script>
+  <script src="/viz/assets/js/documents.js"></script>
+  <script src="/viz/assets/js/init.js"></script>
+</body>
+</html>

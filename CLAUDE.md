@@ -62,9 +62,9 @@ internal/
     client.go              — Todoist REST API v1 client
     server.go              — 7 MCP tools
   viz/
-    handler.go             — Chi subrouter: /, /api/facts, /api/graph, /api/duplicates
+    handler.go             — Chi subrouter: /{tab}, /api/facts, /api/graph, /api/duplicates, /api/documents, /assets/*
     similarity.go          — cosine similarity
-    static/index.html      — embedded via go:embed
+    static/                — embedded dashboard: shell.html + views/*.html + assets/{styles.css, js/*.js}
   backup/loop.go           — snapshot + prune goroutine
 ```
 
@@ -179,8 +179,9 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - Stateless — no caching, no local storage
 
 ### viz/handler.go
-- Chi subrouter with 4 routes: `/`, `/api/facts`, `/api/graph`, `/api/duplicates`
-- `static/index.html` is embedded via `go:embed`
+- Chi subrouter with JSON APIs (`/api/facts`, `/api/graph`, `/api/duplicates`, `/api/documents`), asset server (`/assets/*`), and a shell handler for `/` + `/{tab}` — all tab paths return the same HTML (SPA with History API routing on the client)
+- `static/` subtree is embedded via `//go:embed all:static`; `shell.html` is composed with view fragments at handler construction time, cached as `composedHTML`
+- `WithDocumentRAG(chunks, docsDir)` is an opt-in hook; when nil, `/api/documents` returns 404 and the Documents tab is hidden client-side
 - Graph API computes pairwise cosine similarity in-process; caps at `max_edges` strongest edges
 - No auth check here — protected at Traefik layer by Authentik ForwardAuth
 
