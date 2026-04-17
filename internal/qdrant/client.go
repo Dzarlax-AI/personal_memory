@@ -10,16 +10,16 @@ import (
 	"strconv"
 )
 
-const collectionName = "memory"
-
 type Client struct {
 	url        string
+	collection string
 	httpClient *http.Client
 }
 
-func NewClient(url string) *Client {
+func NewClient(url, collection string) *Client {
 	return &Client{
 		url:        url,
+		collection: collection,
 		httpClient: &http.Client{},
 	}
 }
@@ -49,7 +49,7 @@ func parsePointID(v interface{}) string {
 // EnsureCollection creates the collection if it doesn't exist.
 func (c *Client) EnsureCollection(ctx context.Context, vectorSize int) error {
 	// Check if collection exists.
-	url := fmt.Sprintf("%s/collections/%s", c.url, collectionName)
+	url := fmt.Sprintf("%s/collections/%s", c.url, c.collection)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -76,7 +76,7 @@ func (c *Client) EnsureCollection(ctx context.Context, vectorSize int) error {
 
 // Upsert inserts or updates a point.
 func (c *Client) Upsert(ctx context.Context, point Point) error {
-	url := fmt.Sprintf("%s/collections/%s/points", c.url, collectionName)
+	url := fmt.Sprintf("%s/collections/%s/points", c.url, c.collection)
 	body := map[string]interface{}{
 		"points": []map[string]interface{}{
 			{
@@ -91,7 +91,7 @@ func (c *Client) Upsert(ctx context.Context, point Point) error {
 
 // Search performs a vector similarity search with optional filters.
 func (c *Client) Search(ctx context.Context, vector []float32, limit int, filters map[string]interface{}, scoreThreshold *float64) ([]Point, error) {
-	url := fmt.Sprintf("%s/collections/%s/points/search", c.url, collectionName)
+	url := fmt.Sprintf("%s/collections/%s/points/search", c.url, c.collection)
 	body := map[string]interface{}{
 		"vector":       vector,
 		"limit":        limit,
@@ -147,7 +147,7 @@ type ScrollPoint struct {
 
 // Scroll paginates through all points, optionally with vectors.
 func (c *Client) Scroll(ctx context.Context, limit int, offset interface{}, filters map[string]interface{}, withVector bool) (*ScrollResult, error) {
-	url := fmt.Sprintf("%s/collections/%s/points/scroll", c.url, collectionName)
+	url := fmt.Sprintf("%s/collections/%s/points/scroll", c.url, c.collection)
 	body := map[string]interface{}{
 		"limit":        limit,
 		"with_payload": true,
@@ -200,7 +200,7 @@ func (c *Client) ScrollAll(ctx context.Context, filters map[string]interface{}, 
 
 // Delete removes points by IDs.
 func (c *Client) Delete(ctx context.Context, ids []string) error {
-	url := fmt.Sprintf("%s/collections/%s/points/delete", c.url, collectionName)
+	url := fmt.Sprintf("%s/collections/%s/points/delete", c.url, c.collection)
 	body := map[string]interface{}{
 		"points": ids,
 	}
@@ -209,7 +209,7 @@ func (c *Client) Delete(ctx context.Context, ids []string) error {
 
 // SetPayload updates payload fields on a point without re-embedding.
 func (c *Client) SetPayload(ctx context.Context, id string, payload map[string]interface{}) error {
-	url := fmt.Sprintf("%s/collections/%s/points/payload", c.url, collectionName)
+	url := fmt.Sprintf("%s/collections/%s/points/payload", c.url, c.collection)
 	body := map[string]interface{}{
 		"payload": payload,
 		"points":  []string{id},
@@ -219,7 +219,7 @@ func (c *Client) SetPayload(ctx context.Context, id string, payload map[string]i
 
 // CreateSnapshot triggers a snapshot creation.
 func (c *Client) CreateSnapshot(ctx context.Context) (string, error) {
-	url := fmt.Sprintf("%s/collections/%s/snapshots", c.url, collectionName)
+	url := fmt.Sprintf("%s/collections/%s/snapshots", c.url, c.collection)
 	respBody, err := c.postJSON(ctx, url, nil)
 	if err != nil {
 		return "", err
@@ -238,7 +238,7 @@ func (c *Client) CreateSnapshot(ctx context.Context) (string, error) {
 
 // ListSnapshots returns all snapshot names.
 func (c *Client) ListSnapshots(ctx context.Context) ([]string, error) {
-	url := fmt.Sprintf("%s/collections/%s/snapshots", c.url, collectionName)
+	url := fmt.Sprintf("%s/collections/%s/snapshots", c.url, c.collection)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -272,7 +272,7 @@ func (c *Client) ListSnapshots(ctx context.Context) ([]string, error) {
 
 // DeleteSnapshot removes a snapshot by name.
 func (c *Client) DeleteSnapshot(ctx context.Context, name string) error {
-	url := fmt.Sprintf("%s/collections/%s/snapshots/%s", c.url, collectionName, name)
+	url := fmt.Sprintf("%s/collections/%s/snapshots/%s", c.url, c.collection, name)
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
 	if err != nil {
 		return err

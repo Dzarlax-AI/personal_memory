@@ -15,6 +15,7 @@ import (
 	"github.com/Dzarlax-AI/personal-memory/internal/memory"
 	"github.com/Dzarlax-AI/personal-memory/internal/middleware"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
+	"github.com/Dzarlax-AI/personal-memory/internal/rag"
 	"github.com/Dzarlax-AI/personal-memory/internal/todoist"
 	"github.com/Dzarlax-AI/personal-memory/internal/viz"
 	"github.com/go-chi/chi/v5"
@@ -32,7 +33,7 @@ func main() {
 	)
 
 	// Init clients.
-	qc := qdrant.NewClient(cfg.QdrantURL)
+	qc := qdrant.NewClient(cfg.QdrantURL, "memory")
 	ec := embeddings.NewClient(cfg.EmbedURL)
 
 	// Init memory server.
@@ -74,6 +75,19 @@ func main() {
 		r.Handle("/memory", memoryHTTP)
 		r.Handle("/memory/", memoryHTTP)
 		r.Get("/memory/operational", memSrv.OperationalContextHandler())
+
+		// RAG MCP (optional).
+		if cfg.EnableRAG {
+			qcChunks := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionChunks)
+			qcFolders := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionFolders)
+			ragSrv := rag.NewServer(qcChunks, qcFolders, ec, cfg)
+			if err := ragSrv.InitCollections(ctx); err != nil {
+				slog.Error("failed to init RAG collections", "error", err)
+				os.Exit(1)
+			}
+			ragSrv.RegisterTools(mcpMemory)
+			slog.Info("RAG enabled", "dir", cfg.RAGDocumentsDir)
+		}
 
 		// Todoist MCP (optional).
 		if cfg.EnableTodoist && cfg.TodoistToken != "" {

@@ -37,6 +37,15 @@ type Config struct {
 
 	// Domain (for Traefik labels in docker-compose)
 	MemoryDomain string
+
+	// RAG
+	EnableRAG             bool
+	RAGDocumentsDir       string
+	RAGChunkMaxBytes      int
+	RAGFolderTopK         int
+	RAGFolderThreshold    float64
+	RAGCollectionChunks   string
+	RAGCollectionFolders  string
 }
 
 func Load() *Config {
@@ -62,6 +71,14 @@ func Load() *Config {
 		VizSimilarityThreshold: envFloat("VIZ_SIMILARITY_THRESHOLD", 0.65),
 
 		MemoryDomain: os.Getenv("MEMORY_DOMAIN"),
+
+		EnableRAG:            envBool("ENABLE_RAG"),
+		RAGDocumentsDir:      envOrDefault("RAG_DOCUMENTS_DIR", "/root/documents/personal"),
+		RAGChunkMaxBytes:     envInt("RAG_CHUNK_MAX_BYTES", 1500),
+		RAGFolderTopK:        envInt("RAG_FOLDER_TOP_K", 3),
+		RAGFolderThreshold:   envFloat("RAG_FOLDER_THRESHOLD", 0.50),
+		RAGCollectionChunks:  envOrDefault("RAG_COLLECTION_CHUNKS", "doc_chunks"),
+		RAGCollectionFolders: envOrDefault("RAG_COLLECTION_FOLDERS", "doc_folders"),
 	}
 }
 
