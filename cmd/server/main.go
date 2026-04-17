@@ -109,6 +109,10 @@ func main() {
 	// Viz dashboard (optional) — no API key, protected by Traefik + Authentik ForwardAuth.
 	if cfg.EnableViz {
 		vizHandler := viz.NewHandler(qc, cfg.VizSimilarityThreshold)
+		if cfg.EnableRAG {
+			vizChunks := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionChunks)
+			vizHandler = vizHandler.WithDocumentRAG(vizChunks, cfg.RAGDocumentsDir)
+		}
 		r.Mount("/viz", vizHandler.Router())
 		slog.Info("viz dashboard enabled")
 	}

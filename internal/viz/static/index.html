@@ -160,6 +160,38 @@
   .spinner { width: 20px; height: 20px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 10px; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  /* Documents */
+  .docs-list { display: flex; flex-direction: column; gap: 8px; }
+  .folder-row {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 14px;
+  }
+  .folder-header {
+    display: flex; justify-content: space-between; align-items: center;
+    cursor: pointer; user-select: none; gap: 12px;
+  }
+  .folder-header:hover .folder-path { color: var(--accent); }
+  .folder-path {
+    font-weight: 600; font-size: 13px; color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .folder-meta { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+  .folder-files { margin-top: 10px; display: none; }
+  .folder-row.expanded .folder-files { display: block; }
+  .folder-chevron { display: inline-block; width: 10px; font-size: 10px; color: var(--text-muted); }
+  .folder-row.expanded .folder-chevron { transform: rotate(90deg); }
+  .file-row {
+    padding: 8px 0; display: flex; justify-content: space-between;
+    gap: 8px; border-top: 1px solid var(--border); align-items: flex-start;
+  }
+  .file-row:first-child { border-top: none; }
+  .file-name {
+    font-size: 13px; color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .file-heading { color: var(--text-muted); font-size: 11px; margin-top: 2px; }
+  .file-meta { font-size: 11px; color: var(--text-muted); white-space: nowrap; text-align: right; }
+
   /* Timeline overrides */
   .vis-timeline { border: none !important; }
   .vis-item { border-radius: 6px !important; font-size: 12px !important; }
@@ -184,6 +216,7 @@
     <button class="tab" data-view="forgotten">Forgotten <span class="badge" id="forgot-badge">...</span></button>
     <button class="tab" data-view="timeline">Timeline</button>
     <button class="tab" data-view="graph">Graph</button>
+    <button class="tab" data-view="documents" id="docs-tab" style="display:none">Documents <span class="badge" id="docs-badge">...</span></button>
   </div>
 
   <!-- Overview -->
@@ -210,6 +243,13 @@
   <!-- Timeline -->
   <div class="view view-full" id="timeline-view">
     <div id="timeline-container" style="flex:1;"></div>
+  </div>
+
+  <!-- Documents -->
+  <div class="view" id="documents-view">
+    <div class="section-title">Indexed Documents</div>
+    <div class="section-sub" id="docs-summary">Loading...</div>
+    <div id="docs-content"><div class="loading"><div class="spinner"></div>Loading indexed documents...</div></div>
   </div>
 
   <!-- Graph -->
@@ -634,8 +674,76 @@ document.getElementById('ns-filter').addEventListener('change', () => {
   loadGraph();
 });
 
+// --- Documents (RAG) ---
+async function loadDocuments() {
+  try {
+    const res = await fetch(`${BASE}/api/documents`);
+    if (res.status === 404) {
+      document.getElementById('docs-tab').style.display = 'none';
+      return;
+    }
+    if (!res.ok) {
+      document.getElementById('docs-content').innerHTML =
+        `<div class="empty-state">Failed to load documents (${res.status}).</div>`;
+      return;
+    }
+    const data = await res.json();
+    document.getElementById('docs-tab').style.display = '';
+    renderDocuments(data);
+  } catch (e) {
+    document.getElementById('docs-content').innerHTML =
+      `<div class="empty-state">Failed to load documents: ${e.message}</div>`;
+  }
+}
+
+function escapeHtml(s) {
+  return (s || '').replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+function renderDocuments(data) {
+  const s = data.stats || {};
+  const summary = `${s.total_files || 0} files · ${s.total_chunks || 0} chunks · ${s.total_folders || 0} folders`
+    + (s.last_indexed ? ` · last indexed ${s.last_indexed.slice(0, 19).replace('T', ' ')} UTC` : '')
+    + (data.documents_dir ? ` · root: ${escapeHtml(data.documents_dir)}` : '');
+  document.getElementById('docs-summary').innerHTML = summary;
+  document.getElementById('docs-badge').textContent = s.total_files || 0;
+
+  const content = document.getElementById('docs-content');
+  if (!data.folders || data.folders.length === 0) {
+    content.innerHTML = '<div class="empty-state">No documents indexed yet. Run <code>reindex_documents()</code> to populate the index.</div>';
+    return;
+  }
+
+  const html = data.folders.map(f => {
+    const rel = f.relative_path || '/';
+    const files = (f.files || []).map(file => {
+      const heading = file.first_heading ? `<div class="file-heading">${escapeHtml(file.first_heading)}</div>` : '';
+      const date = (file.last_indexed || '').slice(0, 10);
+      return `<div class="file-row">
+        <div>
+          <div class="file-name">${escapeHtml(file.relative_path || file.path)}</div>
+          ${heading}
+        </div>
+        <div class="file-meta">${file.chunks} chunk${file.chunks === 1 ? '' : 's'}<br>${date}</div>
+      </div>`;
+    }).join('');
+    return `<div class="folder-row">
+      <div class="folder-header" onclick="this.parentNode.classList.toggle('expanded')">
+        <span><span class="folder-chevron">▶</span> <span class="folder-path">${escapeHtml(rel)}</span></span>
+        <span class="folder-meta">${f.file_count} file${f.file_count === 1 ? '' : 's'} · ${f.chunk_count} chunks</span>
+      </div>
+      <div class="folder-files">${files}</div>
+    </div>`;
+  }).join('');
+
+  content.innerHTML = `<div class="docs-list">${html}</div>`;
+}
+
 // --- Init ---
 loadFacts();
+loadDocuments();
 </script>
 </body>
 </html>
