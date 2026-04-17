@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "personal-memory": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://mcp.dzarlax.dev/memory",
+        "--header",
+        "Authorization:Bearer ${MEMORY_API_KEY}"
+      ],
+      "env": {
+        "MEMORY_API_KEY": "your-api-key-here"
+      }
+    }
+  }
+}
