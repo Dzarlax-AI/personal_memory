@@ -73,6 +73,7 @@ func main() {
 		memoryHTTP := server.NewStreamableHTTPServer(mcpMemory)
 		r.Handle("/memory", memoryHTTP)
 		r.Handle("/memory/", memoryHTTP)
+		r.Get("/memory/operational", memSrv.OperationalContextHandler())
 
 		// Todoist MCP (optional).
 		if cfg.EnableTodoist && cfg.TodoistToken != "" {

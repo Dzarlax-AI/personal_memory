@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -113,6 +114,12 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 		mcp.WithDescription("Export all facts as JSON."),
 		mcp.WithString("namespace", mcp.Description("Filter by namespace")),
 	), s.exportFacts)
+
+	srv.AddTool(mcp.NewTool("get_operational_context",
+		mcp.WithDescription("Return operational context: all permanent facts plus top facts by recall count. Call at session start for automatic context loading."),
+		mcp.WithString("namespace", mcp.Description("Filter by namespace")),
+		mcp.WithNumber("top_recalled", mcp.Description("Number of top recalled non-permanent facts to include (default 10)")),
+	), s.getOperationalContext)
 }
 
 // --- Tool parameter helpers ---
@@ -772,6 +779,114 @@ func (s *Server) exportFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	}
 
 	return mcp.NewToolResultText(string(b)), nil
+}
+
+func (s *Server) getOperationalFacts(ctx context.Context, namespace string, topRecalled int) ([]qdrant.ScrollPoint, error) {
+	filters := s.buildFilters(nil, namespace)
+
+	points, err := s.qdrant.ScrollAll(ctx, filters, false)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]bool)
+	var permanent []qdrant.ScrollPoint
+	var nonPermanent []qdrant.ScrollPoint
+
+	for _, p := range points {
+		if isExpired(p.Payload) {
+			continue
+		}
+		if v, ok := p.Payload["permanent"].(bool); ok && v {
+			permanent = append(permanent, p)
+			seen[p.ID] = true
+		} else {
+			nonPermanent = append(nonPermanent, p)
+		}
+	}
+
+	// Sort non-permanent by recall_count desc, take top N.
+	sort.Slice(nonPermanent, func(i, j int) bool {
+		ri, _ := nonPermanent[i].Payload["recall_count"].(float64)
+		rj, _ := nonPermanent[j].Payload["recall_count"].(float64)
+		return ri > rj
+	})
+
+	result := permanent
+	added := 0
+	for _, p := range nonPermanent {
+		if added >= topRecalled {
+			break
+		}
+		rc, _ := p.Payload["recall_count"].(float64)
+		if rc == 0 {
+			break // no point including never-recalled facts
+		}
+		if !seen[p.ID] {
+			result = append(result, p)
+			added++
+		}
+	}
+
+	return result, nil
+}
+
+func (s *Server) getOperationalContext(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	namespace := strParam(args, "namespace")
+	topRecalled := intParam(args, "top_recalled", 10)
+
+	points, err := s.getOperationalFacts(ctx, namespace, topRecalled)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("scroll failed: %v", err)), nil
+	}
+
+	if len(points) == 0 {
+		return mcp.NewToolResultText("No operational context found."), nil
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "# Operational Context (%d facts)\n\n", len(points))
+	for _, p := range points {
+		text, _ := p.Payload["text"].(string)
+		ns, _ := p.Payload["namespace"].(string)
+		perm := ""
+		if v, ok := p.Payload["permanent"].(bool); ok && v {
+			perm = " [permanent]"
+		}
+		rc := 0
+		if v, ok := p.Payload["recall_count"].(float64); ok {
+			rc = int(v)
+		}
+		tagsList := formatTagsList(p.Payload["tags"])
+		fmt.Fprintf(&sb, "- %s ns:%s%s recalls:%d %s\n", tagsList, ns, perm, rc, text)
+	}
+	return mcp.NewToolResultText(sb.String()), nil
+}
+
+// OperationalContextHandler returns an HTTP handler for GET /memory/operational.
+// Returns operational facts as plain text, suitable for Claude Code hooks.
+func (s *Server) OperationalContextHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		points, err := s.getOperationalFacts(r.Context(), r.URL.Query().Get("namespace"), 10)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if len(points) == 0 {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		var sb strings.Builder
+		sb.WriteString("# Operational Context\n\n")
+		for _, p := range points {
+			text, _ := p.Payload["text"].(string)
+			ns, _ := p.Payload["namespace"].(string)
+			fmt.Fprintf(&sb, "- [%s] %s\n", ns, text)
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write([]byte(sb.String()))
+	}
 }
 
 // --- Formatting helpers ---
