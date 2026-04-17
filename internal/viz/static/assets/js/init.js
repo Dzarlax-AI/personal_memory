@@ -46,8 +46,9 @@ document.querySelectorAll('.tab').forEach(tab => {
 // Browser back/forward.
 window.addEventListener('popstate', () => activateTab(parseTabFromPath(), false));
 
-// Initial bootstrap.
-(async () => {
-  await Promise.all([loadFacts(), loadDocuments()]);
-  activateTab(parseTabFromPath(), false);
-})();
+// Initial bootstrap. Activate the target tab synchronously so the page
+// renders immediately; data fetches happen in parallel and fill the views
+// as they resolve.
+activateTab(parseTabFromPath(), false);
+loadFacts();
+loadDocuments();

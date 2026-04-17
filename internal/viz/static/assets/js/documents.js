@@ -5,7 +5,13 @@ async function loadDocuments() {
   try {
     const res = await fetch(`${BASE}/api/documents`);
     if (res.status === 404) {
+      // RAG disabled — hide the tab and bounce back to overview if the
+      // user had deeplinked to /viz/documents.
       document.getElementById('docs-tab').style.display = 'none';
+      const docsView = document.getElementById('documents-view');
+      if (docsView && docsView.classList.contains('active')) {
+        activateTab('overview', false);
+      }
       return;
     }
     if (!res.ok) {
