@@ -64,8 +64,10 @@ func (h *Handler) Router() chi.Router {
 	r.Get("/api/documents", h.apiDocuments)
 
 	// Static assets: /viz/assets/styles.css, /viz/assets/js/*.js
+	// StripPrefix without trailing slash so FileServer receives a leading-/ path
+	// (e.g. "/styles.css"), otherwise it treats the bare name as a relative path and 404s.
 	if sub, err := fs.Sub(staticFS, "static/assets"); err == nil {
-		r.Handle("/assets/*", http.StripPrefix("/assets/", http.FileServer(http.FS(sub))))
+		r.Handle("/assets/*", http.StripPrefix("/assets", http.FileServer(http.FS(sub))))
 	}
 
 	// Shell for the root and every recognised tab path

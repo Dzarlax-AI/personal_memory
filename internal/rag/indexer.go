@@ -303,10 +303,10 @@ func isTextFile(path string) bool {
 
 func chunkPointID(filePath string, index int) string {
 	h := sha1.Sum([]byte(fmt.Sprintf("%s:%d", filePath, index)))
-	return fmt.Sprintf("%x-%x-%x-%x-%x", h[0:4], h[4:6], h[6:8], h[8:10], h[10:20])
+	return fmt.Sprintf("%x-%x-%x-%x-%x", h[0:4], h[4:6], h[6:8], h[8:10], h[10:16])
 }
 
 func folderPointID(dir string) string {
 	h := sha1.Sum([]byte("folder:" + dir))
-	return fmt.Sprintf("%x-%x-%x-%x-%x", h[0:4], h[4:6], h[6:8], h[8:10], h[10:20])
+	return fmt.Sprintf("%x-%x-%x-%x-%x", h[0:4], h[4:6], h[6:8], h[8:10], h[10:16])
 }

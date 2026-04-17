@@ -1,6 +1,8 @@
 package viz
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -86,5 +88,22 @@ func TestNewHandler_ComposesHTMLAtConstruction(t *testing.T) {
 	h := NewHandler(nil, 0.65)
 	if len(h.composedHTML) == 0 {
 		t.Fatal("NewHandler must compose HTML eagerly")
+	}
+}
+
+// Regression: StripPrefix("/assets/") with a trailing slash caused the embedded
+// FileServer to 404 every asset because after stripping the prefix the request
+// path had no leading "/".
+func TestAssetRouter_ServesEmbeddedFiles(t *testing.T) {
+	h := NewHandler(nil, 0.65)
+	router := h.Router()
+
+	for _, asset := range []string{"/assets/styles.css", "/assets/js/init.js"} {
+		req := httptest.NewRequest(http.MethodGet, asset, nil)
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Errorf("GET %s: got %d, want 200 (StripPrefix likely has a trailing slash again)", asset, rr.Code)
+		}
 	}
 }
