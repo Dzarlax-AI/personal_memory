@@ -145,12 +145,18 @@ type ScrollPoint struct {
 	Payload map[string]interface{} `json:"payload,omitempty"`
 }
 
-// Scroll paginates through all points, optionally with vectors.
+// Scroll paginates through points with full payload.
 func (c *Client) Scroll(ctx context.Context, limit int, offset interface{}, filters map[string]interface{}, withVector bool) (*ScrollResult, error) {
+	return c.ScrollWithPayload(ctx, limit, offset, filters, true, withVector)
+}
+
+// ScrollWithPayload is like Scroll but accepts an explicit payload selector.
+// withPayload may be: true (all fields), false (none), or []string (specific fields).
+func (c *Client) ScrollWithPayload(ctx context.Context, limit int, offset interface{}, filters map[string]interface{}, withPayload interface{}, withVector bool) (*ScrollResult, error) {
 	url := fmt.Sprintf("%s/collections/%s/points/scroll", c.url, c.collection)
 	body := map[string]interface{}{
 		"limit":        limit,
-		"with_payload": true,
+		"with_payload": withPayload,
 		"with_vector":  withVector,
 	}
 	if offset != nil {
@@ -172,7 +178,6 @@ func (c *Client) Scroll(ctx context.Context, limit int, offset interface{}, filt
 		return nil, fmt.Errorf("decode scroll response: %w", err)
 	}
 
-	// Parse point IDs from raw interface{} to string.
 	for i := range result.Result.Points {
 		result.Result.Points[i].ID = parsePointID(result.Result.Points[i].RawID)
 	}
@@ -180,12 +185,17 @@ func (c *Client) Scroll(ctx context.Context, limit int, offset interface{}, filt
 	return &result.Result, nil
 }
 
-// ScrollAll retrieves all points by paginating through scroll.
+// ScrollAll retrieves all points with full payload.
 func (c *Client) ScrollAll(ctx context.Context, filters map[string]interface{}, withVector bool) ([]ScrollPoint, error) {
+	return c.ScrollAllWithPayload(ctx, filters, true, withVector)
+}
+
+// ScrollAllWithPayload paginates through all points with an explicit payload selector.
+func (c *Client) ScrollAllWithPayload(ctx context.Context, filters map[string]interface{}, withPayload interface{}, withVector bool) ([]ScrollPoint, error) {
 	var all []ScrollPoint
 	var offset interface{}
 	for {
-		result, err := c.Scroll(ctx, 100, offset, filters, withVector)
+		result, err := c.ScrollWithPayload(ctx, 100, offset, filters, withPayload, withVector)
 		if err != nil {
 			return nil, err
 		}
@@ -203,6 +213,15 @@ func (c *Client) Delete(ctx context.Context, ids []string) error {
 	url := fmt.Sprintf("%s/collections/%s/points/delete", c.url, c.collection)
 	body := map[string]interface{}{
 		"points": ids,
+	}
+	return c.postDiscard(ctx, url, body)
+}
+
+// DeleteByFilter removes all points matching the filter in a single request.
+func (c *Client) DeleteByFilter(ctx context.Context, filter map[string]interface{}) error {
+	url := fmt.Sprintf("%s/collections/%s/points/delete", c.url, c.collection)
+	body := map[string]interface{}{
+		"filter": filter,
 	}
 	return c.postDiscard(ctx, url, body)
 }

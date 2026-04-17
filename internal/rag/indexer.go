@@ -106,9 +106,12 @@ func (idx *Indexer) Run(ctx context.Context) error {
 }
 
 // snapshotState scrolls the chunks collection once and returns a map keyed
-// by file_path summarising each file's stored hash and chunk count.
+// by file_path summarising each file's stored hash and chunk count. Only the
+// fields needed for change detection are transferred — skipping the bulky
+// `text` field cuts the scroll payload roughly 10x on a mature index.
 func (idx *Indexer) snapshotState(ctx context.Context) (map[string]*fileState, error) {
-	all, err := idx.chunks.ScrollAll(ctx, nil, false)
+	fields := []string{"file_path", "file_hash", "total_chunks"}
+	all, err := idx.chunks.ScrollAllWithPayload(ctx, nil, fields, false)
 	if err != nil {
 		return nil, err
 	}
@@ -267,25 +270,14 @@ func (idx *Indexer) cleanupStale(
 	}
 }
 
-// deleteFileChunks removes all chunk points for a file.
+// deleteFileChunks removes all chunk points for a file in a single request.
 func (idx *Indexer) deleteFileChunks(ctx context.Context, path string) error {
 	filter := map[string]interface{}{
 		"must": []map[string]interface{}{
 			{"key": "file_path", "match": map[string]interface{}{"value": path}},
 		},
 	}
-	points, err := idx.chunks.ScrollAll(ctx, filter, false)
-	if err != nil {
-		return err
-	}
-	ids := make([]string, len(points))
-	for i, p := range points {
-		ids[i] = p.ID
-	}
-	if len(ids) > 0 {
-		return idx.chunks.Delete(ctx, ids)
-	}
-	return nil
+	return idx.chunks.DeleteByFilter(ctx, filter)
 }
 
 func isTextFile(path string) bool {
