@@ -37,6 +37,16 @@ type Config struct {
 
 	// Domain (for Traefik labels in docker-compose)
 	MemoryDomain string
+
+	// RAG
+	EnableRAG            bool
+	RAGDocumentsDir      string
+	RAGChunkMaxBytes     int
+	RAGFolderTopK        int
+	RAGFolderThreshold   float64
+	RAGCollectionChunks  string
+	RAGCollectionFolders string
+	RAGReindexInterval   time.Duration // 0 disables the in-server auto-rescan
 }
 
 func Load() *Config {
@@ -62,6 +72,15 @@ func Load() *Config {
 		VizSimilarityThreshold: envFloat("VIZ_SIMILARITY_THRESHOLD", 0.65),
 
 		MemoryDomain: os.Getenv("MEMORY_DOMAIN"),
+
+		EnableRAG:            envBool("ENABLE_RAG"),
+		RAGDocumentsDir:      envOrDefault("RAG_DOCUMENTS_DIR", "/root/documents/personal"),
+		RAGChunkMaxBytes:     envInt("RAG_CHUNK_MAX_BYTES", 1500),
+		RAGFolderTopK:        envInt("RAG_FOLDER_TOP_K", 3),
+		RAGFolderThreshold:   envFloat("RAG_FOLDER_THRESHOLD", 0.50),
+		RAGCollectionChunks:  envOrDefault("RAG_COLLECTION_CHUNKS", "doc_chunks"),
+		RAGCollectionFolders: envOrDefault("RAG_COLLECTION_FOLDERS", "doc_folders"),
+		RAGReindexInterval:   envDuration("RAG_REINDEX_INTERVAL_MINUTES", 0),
 	}
 }
 
@@ -111,6 +130,13 @@ func envDuration(key string, def time.Duration) time.Duration {
 			return def
 		}
 		return time.Duration(h) * time.Hour
+	}
+	if key == "RAG_REINDEX_INTERVAL_MINUTES" {
+		m, err := strconv.Atoi(v)
+		if err != nil {
+			return def
+		}
+		return time.Duration(m) * time.Minute
 	}
 	s, err := strconv.Atoi(v)
 	if err != nil {

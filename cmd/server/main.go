@@ -15,6 +15,7 @@ import (
 	"github.com/Dzarlax-AI/personal-memory/internal/memory"
 	"github.com/Dzarlax-AI/personal-memory/internal/middleware"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
+	"github.com/Dzarlax-AI/personal-memory/internal/rag"
 	"github.com/Dzarlax-AI/personal-memory/internal/todoist"
 	"github.com/Dzarlax-AI/personal-memory/internal/viz"
 	"github.com/go-chi/chi/v5"
@@ -32,7 +33,7 @@ func main() {
 	)
 
 	// Init clients.
-	qc := qdrant.NewClient(cfg.QdrantURL)
+	qc := qdrant.NewClient(cfg.QdrantURL, "memory")
 	ec := embeddings.NewClient(cfg.EmbedURL)
 
 	// Init memory server.
@@ -75,6 +76,22 @@ func main() {
 		r.Handle("/memory/", memoryHTTP)
 		r.Get("/memory/operational", memSrv.OperationalContextHandler())
 
+		// RAG MCP (optional).
+		if cfg.EnableRAG {
+			qcChunks := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionChunks)
+			qcFolders := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionFolders)
+			ragSrv := rag.NewServer(ctx, qcChunks, qcFolders, ec, cfg)
+			if err := ragSrv.EnsureCollections(ctx); err != nil {
+				slog.Error("failed to init RAG collections", "error", err)
+				os.Exit(1)
+			}
+			ragSrv.RegisterTools(mcpMemory)
+			ragSrv.StartAutoReindex(ctx)
+			slog.Info("RAG enabled",
+				"dir", cfg.RAGDocumentsDir,
+				"reindex_interval", cfg.RAGReindexInterval)
+		}
+
 		// Todoist MCP (optional).
 		if cfg.EnableTodoist && cfg.TodoistToken != "" {
 			tc := todoist.NewClient(cfg.TodoistToken)
@@ -95,6 +112,10 @@ func main() {
 	// Viz dashboard (optional) — no API key, protected by Traefik + Authentik ForwardAuth.
 	if cfg.EnableViz {
 		vizHandler := viz.NewHandler(qc, cfg.VizSimilarityThreshold)
+		if cfg.EnableRAG {
+			vizChunks := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionChunks)
+			vizHandler = vizHandler.WithDocumentRAG(vizChunks, cfg.RAGDocumentsDir)
+		}
 		r.Mount("/viz", vizHandler.Router())
 		slog.Info("viz dashboard enabled")
 	}

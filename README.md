@@ -1,8 +1,8 @@
 # Personal Memory Stack
 
-Self-hosted semantic memory + Todoist integration for any MCP-compatible AI client. Stores and retrieves facts using vector embeddings, and exposes Todoist as a server-side MCP tool — no third-party cloud auth needed, all credentials stay on your VPS.
+Self-hosted semantic memory + Todoist + hierarchical document RAG for any MCP-compatible AI client. Stores and retrieves facts using vector embeddings, searches your personal markdown documents with a folder-first retrieval strategy, and exposes Todoist as a server-side MCP tool — no third-party cloud auth needed, all credentials stay on your VPS.
 
-Written in Go as a single static binary.
+Written in Go as a single static binary (plus a standalone indexer binary for cron-based re-indexing).
 
 ## Stack
 
@@ -25,6 +25,7 @@ graph TD
     Client["Claude Code / HTTP MCP client"]
     Browser["Browser"]
     TodoistAPI["api.todoist.com"]
+    Docs["personal docs .md/.txt"]
 
     subgraph VPS["VPS"]
         Traefik["Traefik SSL"]
@@ -34,7 +35,7 @@ graph TD
         subgraph MCP["memory-mcp container :8000"]
             App["main.go Chi router"]
             Auth["X-API-Key middleware"]
-            Memory["/memory MCP"]
+            Memory["/memory MCP (facts + RAG tools)"]
             Todoist["/todoist MCP optional"]
             Viz["/viz dashboard optional"]
             Backup["backup goroutine"]
@@ -43,16 +44,21 @@ graph TD
             Auth --> Todoist
             App --> Viz
         end
+
+        Indexer["memory-mcp-indexer cron-scheduled"]
     end
 
     Client -->|HTTPS + X-API-Key| Traefik
     Browser -->|HTTPS + OIDC| Traefik
     Traefik --> App
-    Memory -->|POST /embed| TEI
-    Memory -->|search / upsert| Qdrant
+    Memory -->|POST /embed batch| TEI
+    Memory -->|memory + doc_chunks + doc_folders| Qdrant
     Backup -->|snapshots| Qdrant
     Viz -->|scroll + vectors| Qdrant
     Todoist -->|REST API| TodoistAPI
+    Indexer -->|walk + hash + embed| Docs
+    Indexer -->|upsert chunks + folder summaries| Qdrant
+    Indexer -->|POST /embed batch| TEI
 ```
 
 ### Auth
@@ -62,8 +68,12 @@ graph TD
 
 ### Visualization (`mcp.<domain>/viz`)
 
-- **Graph** — interactive force-directed network (vis.js). Nodes = facts, edges = cosine similarity above threshold.
-- **Timeline** — facts plotted by creation date, grouped by namespace.
+- **Overview** — treemap of facts by namespace + project tag, plus an activity heatmap.
+- **Duplicates** — near-duplicate pairs (cosine ≥ 0.90) for cleanup.
+- **Forgotten** — facts with `recall_count = 0`.
+- **Timeline** — facts plotted by creation date, grouped by namespace (vis-timeline).
+- **Graph** — interactive force-directed network (vis-network). Nodes = facts, edges = cosine similarity above threshold.
+- **Documents** *(shown only when `ENABLE_RAG=true`)* — collapsible folder tree of everything the RAG indexer has stored, with per-folder and per-file chunk counts and last-indexed timestamps.
 
 ## Data Model
 
@@ -127,6 +137,13 @@ Point IDs: new points use deterministic UUID-v5-like hex IDs (SHA1 of text). Leg
 | `update_task(task_id, content?, due_string?, priority?, labels?)` | Update an existing task. |
 | `delete_task(task_id)` | Delete a task permanently. |
 
+### rag (registered on `/memory` when `ENABLE_RAG=true`)
+
+| Tool | Description |
+|---|---|
+| `search_documents(query, limit?, mode?)` | Semantic search over personal documents. Default `mode="hierarchical"`: finds top folders first, then searches chunks within them (with flat fallback if no folder scores above threshold). `mode="flat"` forces a plain vector search across all chunks. File paths are returned relative to `RAG_DOCUMENTS_DIR`. |
+| `reindex_documents()` | Launches incremental re-indexing in the background. Returns immediately. Skips unchanged files (SHA256 hash); detects and rebuilds half-indexed files; mutex-guarded so only one run at a time. Stale-file cleanup is aborted if the walk was incomplete or would remove more than half the index. |
+
 ## Prerequisites (VPS)
 
 - Docker + Docker Compose
@@ -161,6 +178,14 @@ docker compose up -d
 | `DEDUP_THRESHOLD` | Cosine similarity above which a new fact is treated as a duplicate (default: `0.97`) |
 | `CONTRADICTION_LOW` | Lower bound for contradiction warnings (default: `0.60`) |
 | `CACHE_TTL` | In-memory cache TTL for `recall_facts`, in seconds (default: `60`) |
+| `ENABLE_RAG` | Set to `true` to enable the document-RAG tools (`search_documents`, `reindex_documents`) on the `/memory` endpoint. Default: `false` |
+| `RAG_DOCUMENTS_DIR` | Root directory to index. Hidden dirs (`.git`, `.sync`, …) are skipped. Default: `/root/documents/personal` |
+| `RAG_CHUNK_MAX_BYTES` | Max chunk size (bytes). Markdown is split heading → paragraph → sentence → hard split. Default: `1500` |
+| `RAG_FOLDER_TOP_K` | Number of top folders to consider in hierarchical search. Default: `3` |
+| `RAG_FOLDER_THRESHOLD` | Min folder similarity score; below this we fall back to flat chunk search. Default: `0.50` |
+| `RAG_COLLECTION_CHUNKS` | Qdrant collection name for chunks. Default: `doc_chunks` |
+| `RAG_COLLECTION_FOLDERS` | Qdrant collection name for folder summaries. Default: `doc_folders` |
+| `RAG_REINDEX_INTERVAL_MINUTES` | Auto-rescan cadence in minutes for the in-server goroutine. `0` disables it — trigger manually or via cron. Default: `0` |
 
 Track TEI model download on first start:
 ```bash
@@ -192,6 +217,63 @@ curl -X POST "http://localhost:6333/collections/memory/snapshots/recover" \
   -H "Content-Type: application/json" \
   -d '{"location": "file:///qdrant/snapshots/memory/<snapshot-name>.snapshot"}'
 ```
+
+## Document RAG (optional)
+
+When `ENABLE_RAG=true`, two extra MCP tools are registered on `/memory` and the `memory-mcp` image ships with a second binary (`/personal-memory-indexer`) for offline indexing.
+
+### How it works
+
+1. **Walk** `RAG_DOCUMENTS_DIR` for `.md` / `.markdown` / `.txt` files. Hidden directories (`.git`, `.sync`, `.trash`, …) are skipped.
+2. **Chunk** each markdown file along headings (H1–H3), then paragraphs, then sentences, falling back to a rune-aware hard split when a sentence still exceeds `RAG_CHUNK_MAX_BYTES`.
+3. **Embed** all chunks for a file in a batch, using the same TEI instance the memory layer uses (batch size 32 per HTTP call).
+4. **Upsert** into the `doc_chunks` collection with payload `{text, file_path, folder_path, chunk_index, total_chunks, heading, file_hash, indexed_at}`.
+5. **Summarize each folder** (no LLM — folder summary is just the filename list + each file's first H1/H2/H3 + a snippet from up to 5 files) and upsert into `doc_folders`.
+
+Re-indexing is incremental — unchanged files are detected via SHA256 `file_hash` stored in Qdrant payload, and skipped. A single `ScrollAll` at the start of each run loads all existing hashes in one request, so even with thousands of files there's no per-file round-trip. Half-indexed files from prior partial failures (where `actualCount != total_chunks`) are detected and rebuilt on the next run.
+
+### Querying
+
+```bash
+curl -X POST https://mcp.<domain>/memory \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"method":"tools/call","params":{"name":"search_documents","arguments":{"query":"architecture decisions"}}}'
+```
+
+Response is a JSON array of matching chunks with `score`, `text`, `file_path` (relative to `RAG_DOCUMENTS_DIR`), `heading`, and `chunk_index`.
+
+### Getting documents onto the VPS
+
+The intended flow is Resilio Sync (or any file sync tool) from your laptop → `RAG_DOCUMENTS_DIR` on the VPS. The indexer is FS-agnostic; it only reads files and hashes content.
+
+### Re-indexing
+
+Three ways to trigger it:
+
+**A. From an MCP client** — call `reindex_documents()`. Returns immediately; the indexer runs in a background goroutine on the server's lifetime context (cancelled cleanly on shutdown). A second call while one is in progress returns `"reindex already in progress"` — no queue, no duplication.
+
+**B. Built-in auto-rescan (recommended)** — set `RAG_REINDEX_INTERVAL_MINUTES=30` (or any positive value) in the server env. A goroutine running alongside the HTTP server re-indexes the docs dir on that cadence, sharing the same mutex as the MCP tool so a scheduled run and a manual one can't collide. Zero (the default) keeps the server purely on-demand.
+
+**C. Via the standalone binary on the VPS** — useful for host-level cron scheduling or one-shot first passes:
+
+```bash
+docker compose exec memory-mcp /personal-memory-indexer
+```
+
+A typical crontab entry:
+
+```cron
+*/30 * * * * docker compose -f /root/memory/docker-compose.yml exec -T memory-mcp /personal-memory-indexer
+```
+
+The binary respects the same `RAG_*` and `QDRANT_URL` / `EMBED_URL` env vars as the server and exits 0 on success.
+
+### Safety
+
+- If the directory walk errors on any path (transient permission issue, Resilio mid-sync, NFS glitch), stale-file cleanup for that run is skipped — the index is never wiped because of a read hiccup.
+- If the number of walked files is less than half of what Qdrant currently has indexed, cleanup is also skipped and logged.
+- Old chunks for a changed file are only deleted after all new chunks have been successfully embedded — an embedding failure leaves the previous version intact.
 
 ## Client Setup
 
@@ -244,26 +326,45 @@ A ready-to-edit example is also available in [`claude_desktop_config.example.jso
 ## Building
 
 ```bash
-go build ./cmd/server
+go build ./cmd/server ./cmd/indexer
 go test ./...
 ```
 
-Or via Docker (multi-stage build → ~32MB image):
+Or via Docker (multi-stage build, both binaries in the final image):
 ```bash
 docker build -t personal-memory .
 ```
 
+The resulting image ships `/personal-memory` (the MCP server, set as ENTRYPOINT) and `/personal-memory-indexer` (standalone RAG indexer for cron / one-shot use).
+
+### Image tags (GHCR)
+
+`.github/workflows/docker.yml` runs `go vet` + `go test`, builds, and pushes to `ghcr.io/dzarlax-ai/personal-memory` on every push to `main` or any `feature/**` branch.
+
+| Tag | Source | Use case |
+|---|---|---|
+| `latest` | `main` only | Stable production deploy |
+| `main` | `main` | Pinned alias for `latest` |
+| `beta` | any `feature/**` push (moves) | Testing the newest feature-branch build |
+| `feature-<name>` | the matching branch | Pinning to a specific feature (e.g. `feature-rag`) |
+| `sha-<short>` | every push | Reproducible pin by commit |
+
+To test a feature branch before merging: point your deploy's `image:` at `:beta` or `:feature-<name>`, run, verify, then merge to `main` and switch back to `:latest`.
+
 ## Project Layout
 
 ```
-cmd/server/          entrypoint
+cmd/
+  server/            entrypoint for the MCP server
+  indexer/           standalone RAG indexer binary (cron-friendly)
 internal/
   config/            env vars → struct
-  middleware/        X-API-Key auth
-  qdrant/            Qdrant REST client
-  embeddings/        TEI REST client
+  middleware/        X-API-Key + Bearer auth
+  qdrant/            Qdrant REST client (upsert, search, scroll, delete, snapshots, field index)
+  embeddings/        TEI REST client (Embed + EmbedBatch)
   memory/            memory MCP server (11 tools) + in-memory cache
   todoist/           todoist MCP server (7 tools) + REST client
+  rag/               document RAG (chunker, folder summariser, indexer, MCP tools)
   viz/               viz dashboard handler + cosine similarity + embedded index.html
   backup/            Qdrant snapshot loop
 ```
