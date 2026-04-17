@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 )
 
 func TestBuildShellHTML_Succeeds(t *testing.T) {
@@ -91,19 +93,25 @@ func TestNewHandler_ComposesHTMLAtConstruction(t *testing.T) {
 	}
 }
 
-// Regression: StripPrefix("/assets/") with a trailing slash caused the embedded
-// FileServer to 404 every asset because after stripping the prefix the request
-// path had no leading "/".
+// Regression: assets 404'd for two different reasons.
+// 1. StripPrefix("/assets/") with a trailing slash made FileServer receive
+//    a path without a leading "/" → 404.
+// 2. chi.Mount does not rewrite r.URL.Path, only RoutePath, so any
+//    StripPrefix call that assumes the URL is already stripped of the
+//    mount prefix silently fails.
+// This test mounts the router at /viz like production does, so both
+// regressions would reproduce here.
 func TestAssetRouter_ServesEmbeddedFiles(t *testing.T) {
 	h := NewHandler(nil, 0.65)
-	router := h.Router()
+	main := chi.NewRouter()
+	main.Mount("/viz", h.Router())
 
-	for _, asset := range []string{"/assets/styles.css", "/assets/js/init.js"} {
+	for _, asset := range []string{"/viz/assets/styles.css", "/viz/assets/js/init.js"} {
 		req := httptest.NewRequest(http.MethodGet, asset, nil)
 		rr := httptest.NewRecorder()
-		router.ServeHTTP(rr, req)
+		main.ServeHTTP(rr, req)
 		if rr.Code != http.StatusOK {
-			t.Errorf("GET %s: got %d, want 200 (StripPrefix likely has a trailing slash again)", asset, rr.Code)
+			t.Errorf("GET %s: got %d, want 200", asset, rr.Code)
 		}
 	}
 }

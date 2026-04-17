@@ -63,11 +63,17 @@ func (h *Handler) Router() chi.Router {
 	r.Get("/api/duplicates", h.apiDuplicates)
 	r.Get("/api/documents", h.apiDocuments)
 
-	// Static assets: /viz/assets/styles.css, /viz/assets/js/*.js
-	// StripPrefix without trailing slash so FileServer receives a leading-/ path
-	// (e.g. "/styles.css"), otherwise it treats the bare name as a relative path and 404s.
+	// Static assets: /viz/assets/styles.css, /viz/assets/js/*.js.
+	// chi.Mount does NOT rewrite r.URL.Path — only its internal RoutePath — so
+	// we can't strip "/assets" from the incoming URL (it still has the mount
+	// prefix, e.g. "/viz/assets/styles.css"). Use chi.RouteContext to get the
+	// full matched pattern and strip that instead.
 	if sub, err := fs.Sub(staticFS, "static/assets"); err == nil {
-		r.Handle("/assets/*", http.StripPrefix("/assets", http.FileServer(http.FS(sub))))
+		r.Get("/assets/*", func(w http.ResponseWriter, req *http.Request) {
+			rctx := chi.RouteContext(req.Context())
+			prefix := strings.TrimSuffix(rctx.RoutePattern(), "/*")
+			http.StripPrefix(prefix, http.FileServer(http.FS(sub))).ServeHTTP(w, req)
+		})
 	}
 
 	// Shell for the root and every recognised tab path
