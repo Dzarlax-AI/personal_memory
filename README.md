@@ -381,17 +381,31 @@ To get the most out of persistent memory, instruct your AI client to use it proa
 ````markdown
 ## Personal Memory (MCP: personal-memory)
 
-The `personal-memory` MCP server is always available. Use it proactively — don't wait to be asked.
+The `personal-memory` MCP server is always available. Use it proactively — don't wait to be asked. Two distinct knowledge stores live behind it:
 
-### When to recall
+- **`recall_facts` / `store_fact`** — short, explicit facts you deliberately saved (preferences, decisions, profile, project stack choices). Use these for things the user told you or you agreed on.
+- **`search_documents`** — semantic search over the user's personal markdown library (articles, notes, course materials, playbooks, meeting notes). Use this when the user asks "how to…", "what do I know about…", or references an article/note they think they have.
+
+### When to recall facts
 - At the start of any session involving a known project — run `recall_facts` to load context
 - Before making architectural decisions — check if relevant preferences or past decisions are stored
-- When the user references established context ("as usual", "like before", "you know I prefer...")
+- When the user references established context ("as usual", "like before", "you know I prefer…")
+
+### When to search documents
+- The user asks a broad knowledge question likely covered by their saved articles/notes
+- The user says "I saved something on…", "there was that piece about…"
+- Before giving a generic answer on a topic they may have curated content about
+
+Default mode is `hierarchical` (folders first, then chunks). Switch to `mode="flat"` for very specific queries that span topics across folders. File paths returned are relative to the docs root (e.g. `PM enforcement/Articles/…`).
+
+`reindex_documents` — almost never needed manually. The server auto-rescans every 30 minutes; call it only when the user says "I just added docs, pick them up now".
 
 ### When to store
 - User states a preference or decision that should persist ("always use X", "never do Y")
 - A non-obvious fact about a project is established (tech stack, naming convention, key dependency)
 - Something important was learned that would be useful in future sessions
+
+Do NOT `store_fact` for content that lives in the user's markdown docs — that's already indexed and searchable via `search_documents`.
 
 ### Namespace convention
 Always specify a namespace. Never store everything in `default`.
