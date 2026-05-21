@@ -136,13 +136,14 @@ func (h *Handler) apiGraph(w http.ResponseWriter, r *http.Request) {
 	}
 	namespace := r.URL.Query().Get("namespace")
 	tag := r.URL.Query().Get("tag")
+	textState := r.URL.Query().Get("text")
 
 	points, err := h.qdrant.ScrollAll(r.Context(), nil, true)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	points = filterGraphPoints(points, namespace, tag)
+	points = filterGraphPoints(points, namespace, tag, textState)
 
 	nodes := make([]map[string]interface{}, 0, len(points))
 	for _, p := range points {
@@ -182,8 +183,8 @@ func (h *Handler) apiGraph(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func filterGraphPoints(points []qdrant.ScrollPoint, namespace, tag string) []qdrant.ScrollPoint {
-	if namespace == "" && tag == "" {
+func filterGraphPoints(points []qdrant.ScrollPoint, namespace, tag, textState string) []qdrant.ScrollPoint {
+	if namespace == "" && tag == "" && textState == "" {
 		return points
 	}
 
@@ -199,6 +200,13 @@ func filterGraphPoints(points []qdrant.ScrollPoint, namespace, tag string) []qdr
 			}
 		}
 		if tag != "" && !payloadHasTag(p.Payload["tags"], tag) {
+			continue
+		}
+		text, _ := payloadText(p.Payload)
+		if textState == "missing" && text != "" {
+			continue
+		}
+		if textState == "present" && text == "" {
 			continue
 		}
 		filtered = append(filtered, p)

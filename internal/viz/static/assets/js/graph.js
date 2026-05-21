@@ -6,6 +6,7 @@ async function loadGraph() {
   const threshold = document.getElementById('threshold').value;
   const selectedNamespace = graphFilter.namespace || document.getElementById('ns-filter').value;
   const selectedTag = graphFilter.projectTag || document.getElementById('tag-filter').value;
+  const selectedText = graphFilter.text || document.getElementById('text-filter').value;
   try {
     await loadFacts();
   } catch (e) {
@@ -14,6 +15,7 @@ async function loadGraph() {
   const params = new URLSearchParams({ threshold });
   if (selectedNamespace) params.set('namespace', selectedNamespace);
   if (selectedTag) params.set('tag', selectedTag);
+  if (selectedText) params.set('text', selectedText);
   const res = await fetch(`${BASE}/api/graph?${params.toString()}`);
   graphDataCache = await res.json();
 
@@ -29,6 +31,7 @@ async function loadGraph() {
     graphFilter.projectTag = '';
     tagLabel.style.display = 'none';
   }
+  graphFilter.text = selectedText;
   renderGraphVis(graphDataCache);
 }
 
@@ -65,6 +68,11 @@ function renderGraphVis(graphData) {
   if (nsVal) filtered = filtered.filter(n => matchesNamespaceFilter(n.namespace, nsVal));
   if (graphFilter.projectTag) {
     filtered = filtered.filter(n => (n.tags || []).includes(graphFilter.projectTag));
+  }
+  if (graphFilter.text === 'missing') {
+    filtered = filtered.filter(n => n.text_missing);
+  } else if (graphFilter.text === 'present') {
+    filtered = filtered.filter(n => !n.text_missing);
   }
   const filteredIds = new Set(filtered.map(n => n.id));
 
@@ -225,9 +233,10 @@ document.getElementById('detail-close').addEventListener('click', hideDetail);
 document.getElementById('save-tags').addEventListener('click', saveSelectedTags);
 
 document.getElementById('reset-graph-filters').addEventListener('click', () => {
-  graphFilter = { namespace: '', projectTag: '' };
+  graphFilter = { namespace: '', projectTag: '', text: '' };
   document.getElementById('ns-filter').value = '';
   document.getElementById('tag-filter').value = '';
+  document.getElementById('text-filter').value = '';
   document.getElementById('threshold').value = '0.85';
   document.getElementById('threshold-val').textContent = '0.85';
   loadGraph();
@@ -241,6 +250,7 @@ document.getElementById('ns-filter').addEventListener('change', () => {
   graphFilter = {
     namespace: document.getElementById('ns-filter').value,
     projectTag: document.getElementById('tag-filter').value,
+    text: document.getElementById('text-filter').value,
   };
   loadGraph();
 });
@@ -248,6 +258,15 @@ document.getElementById('tag-filter').addEventListener('change', () => {
   graphFilter = {
     namespace: document.getElementById('ns-filter').value,
     projectTag: document.getElementById('tag-filter').value,
+    text: document.getElementById('text-filter').value,
+  };
+  loadGraph();
+});
+document.getElementById('text-filter').addEventListener('change', () => {
+  graphFilter = {
+    namespace: document.getElementById('ns-filter').value,
+    projectTag: document.getElementById('tag-filter').value,
+    text: document.getElementById('text-filter').value,
   };
   loadGraph();
 });

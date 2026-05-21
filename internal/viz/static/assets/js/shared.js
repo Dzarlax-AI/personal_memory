@@ -70,4 +70,4 @@ let factsPromise = null;
 let graphDataCache = null;
 let network = null;
 let timeline = null;
-let graphFilter = { namespace: '', projectTag: '' };
+let graphFilter = { namespace: '', projectTag: '', text: '' };

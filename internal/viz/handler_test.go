@@ -147,7 +147,7 @@ func TestFilterGraphPoints_AppliesNamespaceAndTagBeforeEdgeLimit(t *testing.T) {
 		{ID: "3", Payload: map[string]interface{}{"namespace": "work", "tags": []interface{}{"personal-memory"}}},
 	}
 
-	filtered := filterGraphPoints(points, "projects", "personal-memory")
+	filtered := filterGraphPoints(points, "projects", "personal-memory", "")
 	if len(filtered) != 1 {
 		t.Fatalf("len(filtered) = %d, want 1", len(filtered))
 	}
@@ -164,7 +164,7 @@ func TestFilterGraphPoints_MatchesMissingNamespaceSentinel(t *testing.T) {
 		{ID: "4", Payload: map[string]interface{}{"namespace": "projects"}},
 	}
 
-	filtered := filterGraphPoints(points, "__missing__", "")
+	filtered := filterGraphPoints(points, "__missing__", "", "")
 	if len(filtered) != 3 {
 		t.Fatalf("len(filtered) = %d, want 3", len(filtered))
 	}
@@ -172,6 +172,23 @@ func TestFilterGraphPoints_MatchesMissingNamespaceSentinel(t *testing.T) {
 		if filtered[i].ID != want {
 			t.Fatalf("filtered[%d].ID = %q, want %q", i, filtered[i].ID, want)
 		}
+	}
+}
+
+func TestFilterGraphPoints_AppliesTextState(t *testing.T) {
+	points := []qdrant.ScrollPoint{
+		{ID: "1", Payload: map[string]interface{}{"text": "stored fact"}},
+		{ID: "2", Payload: map[string]interface{}{"recall_count": 3, "recovery_status": "lost_text"}},
+	}
+
+	missing := filterGraphPoints(points, "", "", "missing")
+	if len(missing) != 1 || missing[0].ID != "2" {
+		t.Fatalf("missing filter = %#v, want only point 2", missing)
+	}
+
+	present := filterGraphPoints(points, "", "", "present")
+	if len(present) != 1 || present[0].ID != "1" {
+		t.Fatalf("present filter = %#v, want only point 1", present)
 	}
 }
 
