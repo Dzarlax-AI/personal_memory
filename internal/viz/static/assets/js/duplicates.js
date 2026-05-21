@@ -20,12 +20,12 @@ async function loadDuplicates() {
       <div class="dup-score ${scoreClass}">${(score * 100).toFixed(1)}% — ${scoreLabel}</div>
       <div class="dup-facts">
         <div>
-          ${escapeHtml((p.a.text || '').slice(0, 200))}${(p.a.text || '').length > 200 ? '...' : ''}
-          <div class="dup-meta">${escapeHtml(p.a.namespace)} | ${escapeHtml((p.a.tags || []).join(', '))} | recalls: ${Number(p.a.recall_count || 0)}</div>
+          ${escapeHtml(factText(p.a).slice(0, 200))}${factText(p.a).length > 200 ? '...' : ''}
+          <div class="dup-meta">${escapeHtml(normalizeNamespace(p.a.namespace))} | ${escapeHtml((p.a.tags || []).join(', '))} | recalls: ${Number(p.a.recall_count || 0)}</div>
         </div>
         <div>
-          ${escapeHtml((p.b.text || '').slice(0, 200))}${(p.b.text || '').length > 200 ? '...' : ''}
-          <div class="dup-meta">${escapeHtml(p.b.namespace)} | ${escapeHtml((p.b.tags || []).join(', '))} | recalls: ${Number(p.b.recall_count || 0)}</div>
+          ${escapeHtml(factText(p.b).slice(0, 200))}${factText(p.b).length > 200 ? '...' : ''}
+          <div class="dup-meta">${escapeHtml(normalizeNamespace(p.b.namespace))} | ${escapeHtml((p.b.tags || []).join(', '))} | recalls: ${Number(p.b.recall_count || 0)}</div>
         </div>
       </div>
     </div>`;

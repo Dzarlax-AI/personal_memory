@@ -28,7 +28,7 @@ async function initFacts() {
 }
 
 function renderStats(nodes) {
-  const ns = [...new Set(nodes.map(n => n.namespace))].length;
+  const ns = [...new Set(nodes.map(n => normalizeNamespace(n.namespace)))].length;
   const permanent = nodes.filter(n => n.permanent).length;
   const neverRecalled = nodes.filter(n => n.recall_count === 0).length;
   document.getElementById('stats').innerHTML = `
@@ -44,10 +44,11 @@ function renderTreemap(nodes) {
   const container = document.getElementById('treemap');
   const nsByNs = {};
   nodes.forEach(n => {
-    if (!nsByNs[n.namespace]) nsByNs[n.namespace] = {};
-    const proj = getProjectTag(n.tags) || '_general';
-    if (!nsByNs[n.namespace][proj]) nsByNs[n.namespace][proj] = 0;
-    nsByNs[n.namespace][proj]++;
+    const ns = normalizeNamespace(n.namespace);
+    if (!nsByNs[ns]) nsByNs[ns] = {};
+      const proj = getProjectTag(n.tags) || '_no_tag';
+    if (!nsByNs[ns][proj]) nsByNs[ns][proj] = 0;
+    nsByNs[ns][proj]++;
   });
 
   container.innerHTML = '';
@@ -62,16 +63,16 @@ function renderTreemap(nodes) {
     const color = nsColor(ns);
     const div = document.createElement('div');
     div.className = 'treemap-ns';
-    div.style.flex = `${Math.max(total / 10, 1)}`;
+    div.style.flex = `${Math.min(Math.max(Math.sqrt(total) / 3, 1), 4)}`;
 
     const projectsSorted = Object.entries(projects).sort((a, b) => b[1] - a[1]);
     const tiles = projectsSorted.map(([proj, count]) => {
-      const size = Math.max(60 + count * 8, 60);
-      const alpha = proj === '_general' ? '33' : '55';
-      const name = proj === '_general' ? 'general' : proj;
-      const tag = proj === '_general' ? '' : proj;
+      const size = Math.round(Math.min(72 + Math.sqrt(count) * 16, 220));
+      const alpha = proj === '_no_tag' ? '33' : '55';
+      const name = proj === '_no_tag' ? 'no tag' : proj;
+      const tag = proj === '_no_tag' ? '' : proj;
       return `<div class="treemap-tile" style="background:${color}${alpha};min-width:${size}px"
-        data-namespace="${escapeAttr(ns)}" data-tag="${escapeAttr(tag)}">
+        data-namespace="${escapeAttr(graphNamespaceFilter(ns))}" data-tag="${escapeAttr(tag)}">
         <span class="tile-name">${escapeHtml(name)}</span>
         <span class="tile-count">${count} fact${count === 1 ? '' : 's'}</span>
       </div>`;
@@ -126,9 +127,9 @@ function renderHeatmap(nodes) {
 }
 
 function navigateToGraph(namespace, projectTag) {
-  graphFilter = { namespace: namespace || '', projectTag: projectTag || '' };
+  graphFilter = { namespace: graphNamespaceFilter(namespace), projectTag: projectTag || '' };
   activateTab('graph');
   const sel = document.getElementById('ns-filter');
-  if (sel) sel.value = namespace || '';
+  if (sel) sel.value = graphFilter.namespace;
   if (typeof loadGraph === 'function') loadGraph();
 }

@@ -11,16 +11,16 @@ async function loadTimeline() {
     }
   }
   const nodes = factsData.nodes.filter(n => n.created_at);
-  const namespaces = [...new Set(nodes.map(n => n.namespace))].sort();
+  const namespaces = [...new Set(nodes.map(n => normalizeNamespace(n.namespace)))].sort();
   const groups = new vis.DataSet();
   namespaces.forEach(ns => groups.add({ id: ns, content: escapeHtml(ns), style: `color:${nsColor(ns)};` }));
 
   const items = new vis.DataSet(nodes.map((n, i) => ({
     id: i,
-    content: escapeHtml(n.text.length > 80 ? n.text.slice(0, 80) + '...' : n.text),
-    title: escapeHtml(n.text),
+    content: escapeHtml(factText(n).length > 80 ? factText(n).slice(0, 80) + '...' : factText(n)),
+    title: escapeHtml(factText(n)),
     start: n.created_at,
-    group: n.namespace,
+    group: normalizeNamespace(n.namespace),
     style: `background-color:${nsColor(n.namespace)};color:#0d1117;border-color:${nsColor(n.namespace)};`,
   })));
 

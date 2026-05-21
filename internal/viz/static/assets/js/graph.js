@@ -3,48 +3,70 @@
 async function loadGraph() {
   const threshold = document.getElementById('threshold').value;
   const selectedNamespace = graphFilter.namespace || document.getElementById('ns-filter').value;
+  const selectedTag = graphFilter.projectTag || document.getElementById('tag-filter').value;
+  try {
+    await loadFacts();
+  } catch (e) {
+    // The graph endpoint can still render without the lightweight filter source.
+  }
   const params = new URLSearchParams({ threshold });
   if (selectedNamespace) params.set('namespace', selectedNamespace);
-  if (graphFilter.projectTag) params.set('tag', graphFilter.projectTag);
+  if (selectedTag) params.set('tag', selectedTag);
   const res = await fetch(`${BASE}/api/graph?${params.toString()}`);
   graphDataCache = await res.json();
 
-  populateNsFilter(graphDataCache.nodes, selectedNamespace);
+  const filterNodes = factsData?.nodes || graphDataCache.nodes;
+  populateNsFilter(filterNodes, selectedNamespace);
+  populateTagFilter(filterNodes, selectedNamespace, selectedTag);
   const tagLabel = document.getElementById('tag-filter-label');
-  const clearBtn = document.getElementById('clear-tag-filter');
-  if (graphFilter.projectTag) {
-    tagLabel.textContent = `#${graphFilter.projectTag}`;
+  if (selectedTag) {
+    graphFilter.projectTag = selectedTag;
+    tagLabel.textContent = `#${selectedTag}`;
     tagLabel.style.display = '';
-    clearBtn.style.display = '';
   } else {
+    graphFilter.projectTag = '';
     tagLabel.style.display = 'none';
-    clearBtn.style.display = 'none';
   }
   renderGraphVis(graphDataCache);
 }
 
 function populateNsFilter(nodes, selectedNamespace = '') {
   const sel = document.getElementById('ns-filter');
-  const namespaces = [...new Set(nodes.map(n => n.namespace))].sort();
+  const namespaces = [...new Set(nodes.map(n => normalizeNamespace(n.namespace)))].sort();
   sel.innerHTML = '<option value="">All</option>';
   namespaces.forEach(ns => {
     const opt = document.createElement('option');
-    opt.value = ns; opt.textContent = ns;
+    opt.value = graphNamespaceFilter(ns); opt.textContent = ns;
     sel.appendChild(opt);
   });
   if (selectedNamespace) sel.value = selectedNamespace;
 }
 
+function populateTagFilter(nodes, selectedNamespace = '', selectedTag = '') {
+  const sel = document.getElementById('tag-filter');
+  const scoped = selectedNamespace
+    ? nodes.filter(n => matchesNamespaceFilter(n.namespace, selectedNamespace))
+    : nodes;
+  const tags = [...new Set(scoped.flatMap(n => tagsList(n.tags)))].sort();
+  sel.innerHTML = '<option value="">All</option>';
+  tags.forEach(tag => {
+    const opt = document.createElement('option');
+    opt.value = tag; opt.textContent = tag;
+    sel.appendChild(opt);
+  });
+  if (selectedTag) sel.value = selectedTag;
+}
+
 function renderGraphVis(graphData) {
   const nsVal = document.getElementById('ns-filter').value;
   let filtered = graphData.nodes;
-  if (nsVal) filtered = filtered.filter(n => n.namespace === nsVal);
+  if (nsVal) filtered = filtered.filter(n => matchesNamespaceFilter(n.namespace, nsVal));
   if (graphFilter.projectTag) {
     filtered = filtered.filter(n => (n.tags || []).includes(graphFilter.projectTag));
   }
   const filteredIds = new Set(filtered.map(n => n.id));
 
-  const namespaces = [...new Set(filtered.map(n => n.namespace))];
+  const namespaces = [...new Set(filtered.map(n => normalizeNamespace(n.namespace)))];
   const clusterRadius = 300 + filtered.length * 2;
   const nsPositions = {};
   namespaces.forEach((ns, i) => {
@@ -53,15 +75,17 @@ function renderGraphVis(graphData) {
   });
 
   const visNodes = filtered.map(n => {
-    const center = nsPositions[n.namespace];
-    const spread = 60 + Math.sqrt(filtered.filter(f => f.namespace === n.namespace).length) * 12;
+    const ns = normalizeNamespace(n.namespace);
+    const center = nsPositions[ns];
+    const spread = 60 + Math.sqrt(filtered.filter(f => normalizeNamespace(f.namespace) === ns).length) * 12;
+    const text = factText(n);
     return {
-      id: n.id, label: '', title: escapeHtml(n.text),
+      id: n.id, label: '', title: escapeHtml(text),
       x: center.x + (Math.random() - 0.5) * spread,
       y: center.y + (Math.random() - 0.5) * spread,
-      color: { background: nsColor(n.namespace), border: nsColor(n.namespace),
-        highlight: { background: '#fff', border: nsColor(n.namespace) },
-        hover: { background: '#fff', border: nsColor(n.namespace) } },
+      color: { background: nsColor(ns), border: nsColor(ns),
+        highlight: { background: '#fff', border: nsColor(ns) },
+        hover: { background: '#fff', border: nsColor(ns) } },
       font: { color: '#e6edf3', size: 12, strokeWidth: 3, strokeColor: '#0d1117' },
       size: 8 + Math.min(n.recall_count, 15),
       borderWidth: n.permanent ? 3 : 1, shape: 'dot', _data: n,
@@ -70,7 +94,7 @@ function renderGraphVis(graphData) {
 
   namespaces.forEach(ns => {
     const center = nsPositions[ns];
-    const count = filtered.filter(n => n.namespace === ns).length;
+    const count = filtered.filter(n => normalizeNamespace(n.namespace) === ns).length;
     visNodes.push({
       id: '__label__' + ns, label: `${ns} (${count})`,
       x: center.x, y: center.y - 50 - Math.sqrt(count) * 8,
@@ -102,7 +126,10 @@ function renderGraphVis(graphData) {
     network.setOptions({ physics: false });
     network.fit({ animation: false });
     const nsCounts = {};
-    filtered.forEach(n => nsCounts[n.namespace] = (nsCounts[n.namespace] || 0) + 1);
+    filtered.forEach(n => {
+      const ns = normalizeNamespace(n.namespace);
+      nsCounts[ns] = (nsCounts[ns] || 0) + 1;
+    });
     document.getElementById('legend').innerHTML = Object.entries(nsCounts)
       .sort((a, b) => b[1] - a[1])
       .map(([ns, c]) => `<div class="legend-item"><span class="legend-dot" style="background:${nsColor(ns)}"></span>${escapeHtml(ns)} ${c}</div>`)
@@ -112,7 +139,8 @@ function renderGraphVis(graphData) {
   network.on('hoverNode', p => {
     const node = visNodes.find(n => n.id === p.node);
     if (node && node._data) {
-      const short = node._data.text.length > 60 ? node._data.text.slice(0, 60) + '...' : node._data.text;
+      const text = factText(node._data);
+      const short = text.length > 60 ? text.slice(0, 60) + '...' : text;
       data.nodes.update({ id: p.node, label: short });
     }
   });
@@ -127,14 +155,26 @@ function renderGraphVis(graphData) {
 }
 
 function showDetail(fact) {
-  document.getElementById('detail-text').textContent = fact.text;
+  document.getElementById('detail-text').textContent = factText(fact);
+  const id = fact.id || '';
+  const keys = Array.isArray(fact.payload_keys) ? fact.payload_keys : [];
   document.getElementById('detail-meta').innerHTML = `
-    <span style="color:${nsColor(fact.namespace)}">${escapeHtml(fact.namespace)}</span>
-    ${(fact.tags || []).map(t => `<span>#${escapeHtml(t)}</span>`).join('')}<br>
+    <span>ID: ${escapeHtml(id.slice(0, 12))}${id.length > 12 ? '...' : ''}</span><br>
+    <span style="color:${nsColor(fact.namespace)}">${escapeHtml(normalizeNamespace(fact.namespace))}</span>
+    ${tagsList(fact.tags).map(t => `<span class="tag-chip">#${escapeHtml(t)}</span>`).join('')}<br>
     <span>Created: ${escapeHtml((fact.created_at || '').slice(0, 10))}</span>
     <span>Recalls: ${Number(fact.recall_count || 0)}</span>
     ${fact.permanent ? '<span style="color:var(--orange)">Permanent</span>' : ''}
   `;
+  const payloadDetails = document.getElementById('payload-details');
+  const payloadKeys = document.getElementById('payload-keys');
+  if (keys.length > 0) {
+    payloadKeys.textContent = keys.join(', ');
+    payloadDetails.style.display = '';
+  } else {
+    payloadKeys.textContent = '';
+    payloadDetails.style.display = 'none';
+  }
   document.getElementById('detail-panel').classList.add('visible');
 }
 function hideDetail() { document.getElementById('detail-panel').classList.remove('visible'); }
@@ -143,13 +183,13 @@ function hideDetail() { document.getElementById('detail-panel').classList.remove
 // elements exist in the initial DOM so there's no timing issue.
 document.getElementById('detail-close').addEventListener('click', hideDetail);
 
-document.getElementById('clear-tag-filter').addEventListener('click', () => {
-  graphFilter.projectTag = '';
-  if (graphDataCache) {
-    document.getElementById('tag-filter-label').style.display = 'none';
-    document.getElementById('clear-tag-filter').style.display = 'none';
-    renderGraphVis(graphDataCache);
-  }
+document.getElementById('reset-graph-filters').addEventListener('click', () => {
+  graphFilter = { namespace: '', projectTag: '' };
+  document.getElementById('ns-filter').value = '';
+  document.getElementById('tag-filter').value = '';
+  document.getElementById('threshold').value = '0.85';
+  document.getElementById('threshold-val').textContent = '0.85';
+  loadGraph();
 });
 
 document.getElementById('threshold').addEventListener('input', e => {
@@ -157,6 +197,16 @@ document.getElementById('threshold').addEventListener('input', e => {
 });
 document.getElementById('threshold').addEventListener('change', loadGraph);
 document.getElementById('ns-filter').addEventListener('change', () => {
-  graphFilter = { namespace: document.getElementById('ns-filter').value, projectTag: '' };
+  graphFilter = {
+    namespace: document.getElementById('ns-filter').value,
+    projectTag: document.getElementById('tag-filter').value,
+  };
+  loadGraph();
+});
+document.getElementById('tag-filter').addEventListener('change', () => {
+  graphFilter = {
+    namespace: document.getElementById('ns-filter').value,
+    projectTag: document.getElementById('tag-filter').value,
+  };
   loadGraph();
 });

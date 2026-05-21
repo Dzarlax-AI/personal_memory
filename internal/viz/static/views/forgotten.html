@@ -1,5 +1,22 @@
   <div class="view" id="forgotten-view">
     <div class="section-title">Never Recalled</div>
     <div class="section-sub">Facts with recall_count = 0. If they're never useful, consider removing them.</div>
+    <div class="filter-toolbar">
+      <label>Namespace:
+        <select id="forgotten-ns-filter"><option value="">All</option></select>
+      </label>
+      <label>Tag:
+        <select id="forgotten-tag-filter"><option value="">All</option></select>
+      </label>
+      <label>Sort:
+        <select id="forgotten-sort">
+          <option value="oldest">Oldest</option>
+          <option value="newest">Newest</option>
+          <option value="namespace">Namespace</option>
+        </select>
+      </label>
+      <label class="checkbox-label"><input type="checkbox" id="forgotten-permanent-only"> Permanent only</label>
+      <span class="toolbar-count" id="forgotten-count"></span>
+    </div>
     <div class="forgotten-list" id="forgotten-list"></div>
   </div>

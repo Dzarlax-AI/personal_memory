@@ -189,7 +189,11 @@ func filterGraphPoints(points []qdrant.ScrollPoint, namespace, tag string) []qdr
 	filtered := make([]qdrant.ScrollPoint, 0, len(points))
 	for _, p := range points {
 		if namespace != "" {
-			if ns, _ := p.Payload["namespace"].(string); ns != namespace {
+			if namespace == "__missing__" {
+				if !payloadNamespaceMissing(p.Payload["namespace"]) {
+					continue
+				}
+			} else if ns, _ := p.Payload["namespace"].(string); ns != namespace {
 				continue
 			}
 		}
@@ -199,6 +203,11 @@ func filterGraphPoints(points []qdrant.ScrollPoint, namespace, tag string) []qdr
 		filtered = append(filtered, p)
 	}
 	return filtered
+}
+
+func payloadNamespaceMissing(raw interface{}) bool {
+	ns, ok := raw.(string)
+	return raw == nil || !ok || ns == "" || ns == "null"
 }
 
 func payloadHasTag(raw interface{}, tag string) bool {
@@ -263,13 +272,48 @@ func (h *Handler) apiDuplicates(w http.ResponseWriter, r *http.Request) {
 func pointToNode(p qdrant.ScrollPoint) map[string]interface{} {
 	return map[string]interface{}{
 		"id":           p.ID,
-		"text":         p.Payload["text"],
+		"text":         payloadText(p.Payload),
+		"payload_keys": payloadKeys(p.Payload),
 		"namespace":    p.Payload["namespace"],
 		"tags":         p.Payload["tags"],
-		"created_at":   p.Payload["created_at"],
+		"created_at":   payloadString(p.Payload, "created_at", "created", "timestamp", "date"),
 		"permanent":    p.Payload["permanent"],
 		"recall_count": p.Payload["recall_count"],
 	}
+}
+
+func payloadText(payload map[string]interface{}) string {
+	if text := payloadString(payload, "text", "fact", "content", "memory", "body", "note", "value"); text != "" {
+		return text
+	}
+	if metadata, ok := payload["metadata"].(map[string]interface{}); ok {
+		if text := payloadString(metadata, "text", "fact", "content", "memory", "body", "note", "value"); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func payloadString(payload map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		v, ok := payload[key]
+		if !ok || v == nil {
+			continue
+		}
+		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+func payloadKeys(payload map[string]interface{}) []string {
+	keys := make([]string, 0, len(payload))
+	for key := range payload {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func writeJSON(w http.ResponseWriter, data interface{}) {

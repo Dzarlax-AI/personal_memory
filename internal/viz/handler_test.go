@@ -155,3 +155,59 @@ func TestFilterGraphPoints_AppliesNamespaceAndTagBeforeEdgeLimit(t *testing.T) {
 		t.Fatalf("filtered[0].ID = %q, want %q", filtered[0].ID, "1")
 	}
 }
+
+func TestFilterGraphPoints_MatchesMissingNamespaceSentinel(t *testing.T) {
+	points := []qdrant.ScrollPoint{
+		{ID: "1", Payload: map[string]interface{}{"namespace": nil}},
+		{ID: "2", Payload: map[string]interface{}{"namespace": ""}},
+		{ID: "3", Payload: map[string]interface{}{"namespace": "null"}},
+		{ID: "4", Payload: map[string]interface{}{"namespace": "projects"}},
+	}
+
+	filtered := filterGraphPoints(points, "__missing__", "")
+	if len(filtered) != 3 {
+		t.Fatalf("len(filtered) = %d, want 3", len(filtered))
+	}
+	for i, want := range []string{"1", "2", "3"} {
+		if filtered[i].ID != want {
+			t.Fatalf("filtered[%d].ID = %q, want %q", i, filtered[i].ID, want)
+		}
+	}
+}
+
+func TestPointToNode_UsesLegacyTextFallbacks(t *testing.T) {
+	node := pointToNode(qdrant.ScrollPoint{
+		ID: "1",
+		Payload: map[string]interface{}{
+			"fact":       "legacy fact text",
+			"created":    "2026-05-21T10:00:00Z",
+			"namespace":  "projects",
+			"recall_cnt": 12,
+		},
+	})
+
+	if node["text"] != "legacy fact text" {
+		t.Fatalf("text = %q, want legacy fallback", node["text"])
+	}
+	if node["created_at"] != "2026-05-21T10:00:00Z" {
+		t.Fatalf("created_at = %q, want created fallback", node["created_at"])
+	}
+}
+
+func TestPointToNode_ExposesPayloadKeysForTextlessPoints(t *testing.T) {
+	node := pointToNode(qdrant.ScrollPoint{
+		ID:      "1",
+		Payload: map[string]interface{}{"recall_count": 27},
+	})
+
+	if node["text"] != "" {
+		t.Fatalf("text = %q, want empty text", node["text"])
+	}
+	keys, ok := node["payload_keys"].([]string)
+	if !ok {
+		t.Fatalf("payload_keys has type %T, want []string", node["payload_keys"])
+	}
+	if len(keys) != 1 || keys[0] != "recall_count" {
+		t.Fatalf("payload_keys = %#v, want [recall_count]", keys)
+	}
+}

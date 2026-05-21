@@ -72,14 +72,62 @@ body {
   color: var(--text-secondary);
 }
 
+.filter-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+.filter-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.filter-toolbar select,
+.filter-toolbar input[type="search"] {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  font-size: var(--text-sm);
+}
+.filter-toolbar input[type="search"] { min-width: 240px; }
+.checkbox-label input { margin: 0; }
+.toolbar-count {
+  color: var(--text-secondary);
+  margin-left: auto;
+  font-size: var(--text-xs);
+}
+.toolbar-btn {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 5px 10px;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.toolbar-btn:hover { border-color: var(--accent); color: var(--accent); }
+
 /* Overview — treemap + heatmap */
-.treemap { display: flex; flex-wrap: wrap; gap: 12px; align-content: flex-start; }
+.treemap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-content: flex-start;
+  overflow-x: hidden;
+}
 .treemap-ns {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 14px;
-  min-width: 200px;
+  min-width: 220px;
+  max-width: 100%;
   flex: 1;
 }
 .treemap-ns h3 { font-size: var(--text-sm); margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
@@ -95,9 +143,16 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  max-width: 100%;
+  overflow: hidden;
 }
 .treemap-tile:hover { transform: scale(1.05); cursor: pointer; }
-.treemap-tile .tile-name { font-weight: 600; }
+.treemap-tile .tile-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .treemap-tile .tile-count { font-size: 11px; opacity: 0.7; }
 
 .heatmap-grid { display: grid; grid-template-columns: repeat(auto-fill, 18px); gap: 3px; }
@@ -168,7 +223,7 @@ body {
 /* Graph */
 #graph-container { width: 100%; flex: 1; min-height: 0; }
 .graph-controls {
-  display: flex; align-items: center; gap: 12px;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   padding: 10px 20px;
   background: var(--surface); border-bottom: 1px solid var(--border);
 }
@@ -211,6 +266,18 @@ body {
 .detail-panel .fact-text { font-size: var(--text-sm); line-height: 1.5; margin-bottom: 12px; }
 .detail-panel .meta { font-size: var(--text-xs); color: var(--text-secondary); }
 .detail-panel .meta span { display: inline-block; margin-right: 12px; margin-bottom: 4px; }
+.tag-chip {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+}
+.payload-details {
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+.payload-details summary { cursor: pointer; color: var(--text); }
 .detail-panel .close-btn {
   position: absolute; top: 8px; right: 12px;
   background: none; border: none;
@@ -260,6 +327,7 @@ body {
 }
 .file-heading { color: var(--text-secondary); font-size: var(--text-xs); margin-top: 2px; }
 .file-meta { font-size: var(--text-xs); color: var(--text-secondary); white-space: nowrap; text-align: right; }
+.status-warn { color: var(--warn); }
 
 /* vis.js overrides — inherit theme colors */
 .vis-timeline { border: none !important; }
