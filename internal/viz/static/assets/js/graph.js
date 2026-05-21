@@ -1,5 +1,7 @@
 // Graph tab: force-directed network of facts with similarity edges.
 
+let selectedFact = null;
+
 async function loadGraph() {
   const threshold = document.getElementById('threshold').value;
   const selectedNamespace = graphFilter.namespace || document.getElementById('ns-filter').value;
@@ -155,7 +157,10 @@ function renderGraphVis(graphData) {
 }
 
 function showDetail(fact) {
-  document.getElementById('detail-text').textContent = factText(fact);
+  selectedFact = fact;
+  const detailText = document.getElementById('detail-text');
+  detailText.textContent = factText(fact);
+  detailText.classList.toggle('missing-text', Boolean(fact.text_missing));
   const id = fact.id || '';
   const keys = Array.isArray(fact.payload_keys) ? fact.payload_keys : [];
   document.getElementById('detail-meta').innerHTML = `
@@ -166,22 +171,58 @@ function showDetail(fact) {
     <span>Recalls: ${Number(fact.recall_count || 0)}</span>
     ${fact.permanent ? '<span style="color:var(--orange)">Permanent</span>' : ''}
   `;
+  document.getElementById('detail-tags').value = tagsList(fact.tags).join(', ');
+  document.getElementById('tag-save-status').textContent = '';
   const payloadDetails = document.getElementById('payload-details');
   const payloadKeys = document.getElementById('payload-keys');
+  const payloadJSON = document.getElementById('payload-json');
   if (keys.length > 0) {
     payloadKeys.textContent = keys.join(', ');
+    payloadJSON.textContent = JSON.stringify(fact.payload || {}, null, 2);
     payloadDetails.style.display = '';
   } else {
     payloadKeys.textContent = '';
+    payloadJSON.textContent = '';
     payloadDetails.style.display = 'none';
   }
   document.getElementById('detail-panel').classList.add('visible');
 }
-function hideDetail() { document.getElementById('detail-panel').classList.remove('visible'); }
+function hideDetail() {
+  selectedFact = null;
+  document.getElementById('detail-panel').classList.remove('visible');
+}
+
+async function saveSelectedTags() {
+  if (!selectedFact || !selectedFact.id) return;
+  const status = document.getElementById('tag-save-status');
+  const tags = document.getElementById('detail-tags').value
+    .split(',')
+    .map(t => t.trim())
+    .filter(Boolean);
+  status.textContent = 'Saving...';
+  try {
+    const res = await fetch(`${BASE}/api/facts/${encodeURIComponent(selectedFact.id)}/tags`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Viz-Action': 'update-tags',
+      },
+      body: JSON.stringify({ tags }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    selectedFact.tags = data.tags || tags;
+    status.textContent = 'Saved';
+    showDetail(selectedFact);
+  } catch (err) {
+    status.textContent = `Error: ${err.message || err}`;
+  }
+}
 
 // Graph-specific control listeners. Registered once the script loads — the
 // elements exist in the initial DOM so there's no timing issue.
 document.getElementById('detail-close').addEventListener('click', hideDetail);
+document.getElementById('save-tags').addEventListener('click', saveSelectedTags);
 
 document.getElementById('reset-graph-filters').addEventListener('click', () => {
   graphFilter = { namespace: '', projectTag: '' };

@@ -62,6 +62,7 @@ func (h *Handler) Router() chi.Router {
 	r.Get("/api/graph", h.apiGraph)
 	r.Get("/api/duplicates", h.apiDuplicates)
 	r.Get("/api/documents", h.apiDocuments)
+	r.Patch("/api/facts/{id}/tags", h.apiUpdateFactTags)
 
 	// Static assets: /viz/assets/styles.css, /viz/assets/js/*.js.
 	// chi.Mount does NOT rewrite r.URL.Path — only its internal RoutePath — so
@@ -270,41 +271,100 @@ func (h *Handler) apiDuplicates(w http.ResponseWriter, r *http.Request) {
 }
 
 func pointToNode(p qdrant.ScrollPoint) map[string]interface{} {
+	text, source := payloadText(p.Payload)
 	return map[string]interface{}{
 		"id":           p.ID,
-		"text":         payloadText(p.Payload),
+		"text":         text,
+		"text_source":  source,
+		"text_missing": text == "",
 		"payload_keys": payloadKeys(p.Payload),
+		"payload":      p.Payload,
 		"namespace":    p.Payload["namespace"],
 		"tags":         p.Payload["tags"],
-		"created_at":   payloadString(p.Payload, "created_at", "created", "timestamp", "date"),
+		"created_at":   payloadStringValue(p.Payload, "created_at", "created", "timestamp", "date"),
 		"permanent":    p.Payload["permanent"],
 		"recall_count": p.Payload["recall_count"],
 	}
 }
 
-func payloadText(payload map[string]interface{}) string {
-	if text := payloadString(payload, "text", "fact", "content", "memory", "body", "note", "value"); text != "" {
-		return text
+func payloadText(payload map[string]interface{}) (string, string) {
+	if text, key := payloadString(payload, "text", "fact", "content", "memory", "body", "note", "value"); text != "" {
+		return text, key
 	}
-	if metadata, ok := payload["metadata"].(map[string]interface{}); ok {
-		if text := payloadString(metadata, "text", "fact", "content", "memory", "body", "note", "value"); text != "" {
-			return text
-		}
+	if text, path := deepPayloadText(payload, 0, ""); text != "" {
+		return text, path
 	}
-	return ""
+	return "", ""
 }
 
-func payloadString(payload map[string]interface{}, keys ...string) string {
+func payloadString(payload map[string]interface{}, keys ...string) (string, string) {
 	for _, key := range keys {
 		v, ok := payload[key]
 		if !ok || v == nil {
 			continue
 		}
 		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-			return s
+			return s, key
 		}
 	}
-	return ""
+	return "", ""
+}
+
+func payloadStringValue(payload map[string]interface{}, keys ...string) string {
+	value, _ := payloadString(payload, keys...)
+	return value
+}
+
+func deepPayloadText(v interface{}, depth int, path string) (string, string) {
+	if depth > 5 {
+		return "", ""
+	}
+	switch value := v.(type) {
+	case map[string]interface{}:
+		keys := make([]string, 0, len(value))
+		for key := range value {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			nextPath := key
+			if path != "" {
+				nextPath = path + "." + key
+			}
+			if isTextLikeKey(key) {
+				if s, ok := value[key].(string); ok && strings.TrimSpace(s) != "" {
+					return s, nextPath
+				}
+			}
+		}
+		for _, key := range keys {
+			nextPath := key
+			if path != "" {
+				nextPath = path + "." + key
+			}
+			if text, source := deepPayloadText(value[key], depth+1, nextPath); text != "" {
+				return text, source
+			}
+		}
+	case []interface{}:
+		for i, item := range value {
+			nextPath := fmt.Sprintf("%s[%d]", path, i)
+			if text, source := deepPayloadText(item, depth+1, nextPath); text != "" {
+				return text, source
+			}
+		}
+	}
+	return "", ""
+}
+
+func isTextLikeKey(key string) bool {
+	k := strings.ToLower(key)
+	for _, candidate := range []string{"text", "fact", "content", "memory", "body", "note", "value", "message", "description", "summary", "title"} {
+		if k == candidate || strings.HasSuffix(k, "_"+candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 func payloadKeys(payload map[string]interface{}) []string {
@@ -319,6 +379,49 @@ func payloadKeys(payload map[string]interface{}) []string {
 func writeJSON(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
+}
+
+func (h *Handler) apiUpdateFactTags(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("X-Viz-Action") != "update-tags" {
+		http.Error(w, "missing X-Viz-Action header", http.StatusForbidden)
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		http.Error(w, "missing point id", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Tags []string `json:"tags"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	tags := normalizeTags(req.Tags)
+	if err := h.qdrant.SetPayload(r.Context(), id, map[string]interface{}{"tags": tags}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]interface{}{"id": id, "tags": tags})
+}
+
+func normalizeTags(tags []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		t := strings.TrimSpace(tag)
+		if t == "" {
+			continue
+		}
+		if _, ok := seen[t]; ok {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // --- Documents (RAG) ---

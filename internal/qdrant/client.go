@@ -254,7 +254,7 @@ func (c *Client) SetPayload(ctx context.Context, id string, payload map[string]i
 		"payload": payload,
 		"points":  []interface{}{qdrantPointID(id)},
 	}
-	return c.putWithMethod(ctx, http.MethodPut, url, body)
+	return c.putWithMethod(ctx, http.MethodPost, url, body)
 }
 
 // CreateSnapshot triggers a snapshot creation.
