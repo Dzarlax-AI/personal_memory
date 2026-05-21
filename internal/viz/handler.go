@@ -133,12 +133,15 @@ func (h *Handler) apiGraph(w http.ResponseWriter, r *http.Request) {
 			maxEdges = n
 		}
 	}
+	namespace := r.URL.Query().Get("namespace")
+	tag := r.URL.Query().Get("tag")
 
 	points, err := h.qdrant.ScrollAll(r.Context(), nil, true)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	points = filterGraphPoints(points, namespace, tag)
 
 	nodes := make([]map[string]interface{}, 0, len(points))
 	for _, p := range points {
@@ -176,6 +179,44 @@ func (h *Handler) apiGraph(w http.ResponseWriter, r *http.Request) {
 		"nodes": nodes,
 		"edges": edges,
 	})
+}
+
+func filterGraphPoints(points []qdrant.ScrollPoint, namespace, tag string) []qdrant.ScrollPoint {
+	if namespace == "" && tag == "" {
+		return points
+	}
+
+	filtered := make([]qdrant.ScrollPoint, 0, len(points))
+	for _, p := range points {
+		if namespace != "" {
+			if ns, _ := p.Payload["namespace"].(string); ns != namespace {
+				continue
+			}
+		}
+		if tag != "" && !payloadHasTag(p.Payload["tags"], tag) {
+			continue
+		}
+		filtered = append(filtered, p)
+	}
+	return filtered
+}
+
+func payloadHasTag(raw interface{}, tag string) bool {
+	switch tags := raw.(type) {
+	case []string:
+		for _, t := range tags {
+			if t == tag {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, v := range tags {
+			if t, ok := v.(string); ok && t == tag {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (h *Handler) apiDuplicates(w http.ResponseWriter, r *http.Request) {

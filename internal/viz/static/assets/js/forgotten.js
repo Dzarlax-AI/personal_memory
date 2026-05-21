@@ -17,9 +17,9 @@ function renderForgotten(nodes) {
     return `<div class="forgotten-item">
       <div class="fact-text">${escapeHtml((n.text || '').slice(0, 200))}${(n.text || '').length > 200 ? '...' : ''}</div>
       <div class="meta-col">
-        <span style="color:${nsColor(n.namespace)}">${n.namespace}</span>
-        ${proj ? `<span>${proj}</span>` : ''}
-        <span>${date}</span>
+        <span style="color:${nsColor(n.namespace)}">${escapeHtml(n.namespace)}</span>
+        ${proj ? `<span>${escapeHtml(proj)}</span>` : ''}
+        <span>${escapeHtml(date)}</span>
         ${n.permanent ? '<span style="color:var(--orange)">permanent</span>' : ''}
       </div>
     </div>`;

@@ -30,7 +30,7 @@ body {
   font-size: var(--text-sm);
   color: var(--text-secondary);
 }
-.viz-stat-num { color: var(--accent); font-weight: 600; }
+.stat-num { color: var(--accent); font-weight: 600; }
 
 /* Tab-nav override — DS's default margin/padding-bottom is for a content
    section below, we want a tight dashboard strip instead. */

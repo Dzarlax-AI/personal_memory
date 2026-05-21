@@ -56,5 +56,5 @@ window.addEventListener('popstate', () => activateTab(parseTabFromPath(), false)
 // renders immediately; data fetches happen in parallel and fill the views
 // as they resolve.
 activateTab(parseTabFromPath(), false);
-loadFacts();
+initFacts();
 loadDocuments();

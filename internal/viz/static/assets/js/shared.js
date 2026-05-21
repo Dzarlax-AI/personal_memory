@@ -30,8 +30,13 @@ function escapeHtml(s) {
   }[c]));
 }
 
+function escapeAttr(s) {
+  return escapeHtml(String(s || ''));
+}
+
 // Cross-view state. Mutated by the view modules; read by init/router.
 let factsData = null;
+let factsPromise = null;
 let graphDataCache = null;
 let network = null;
 let timeline = null;

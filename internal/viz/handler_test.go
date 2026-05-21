@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -74,6 +75,28 @@ func TestBuildShellHTML_AssetsReferenced(t *testing.T) {
 	if !strings.Contains(s, "/viz/assets/vendor/dzarlax.css") {
 		t.Error("shell does not reference the design-system bundle")
 	}
+	for _, asset := range []string{
+		"/viz/assets/vendor/vis-network.min.js",
+		"/viz/assets/vendor/vis-timeline-graph2d.min.js",
+		"/viz/assets/vendor/vis-timeline-graph2d.min.css",
+	} {
+		if !strings.Contains(s, asset) {
+			t.Errorf("shell does not reference %s", asset)
+		}
+	}
+}
+
+func TestBuildShellHTML_NoRuntimeCDNReferences(t *testing.T) {
+	html, err := buildShellHTML()
+	if err != nil {
+		t.Fatalf("buildShellHTML: %v", err)
+	}
+	s := string(html)
+	for _, blocked := range []string{"https://unpkg.com/", "https://cdn.jsdelivr.net/", "https://statically.io/"} {
+		if strings.Contains(s, blocked) {
+			t.Errorf("shell contains runtime CDN reference %q", blocked)
+		}
+	}
 }
 
 func TestBuildShellHTML_DarkModeDefault(t *testing.T) {
@@ -94,11 +117,12 @@ func TestNewHandler_ComposesHTMLAtConstruction(t *testing.T) {
 }
 
 // Regression: assets 404'd for two different reasons.
-// 1. StripPrefix("/assets/") with a trailing slash made FileServer receive
-//    a path without a leading "/" → 404.
-// 2. chi.Mount does not rewrite r.URL.Path, only RoutePath, so any
-//    StripPrefix call that assumes the URL is already stripped of the
-//    mount prefix silently fails.
+//  1. StripPrefix("/assets/") with a trailing slash made FileServer receive
+//     a path without a leading "/" → 404.
+//  2. chi.Mount does not rewrite r.URL.Path, only RoutePath, so any
+//     StripPrefix call that assumes the URL is already stripped of the
+//     mount prefix silently fails.
+//
 // This test mounts the router at /viz like production does, so both
 // regressions would reproduce here.
 func TestAssetRouter_ServesEmbeddedFiles(t *testing.T) {
@@ -106,12 +130,28 @@ func TestAssetRouter_ServesEmbeddedFiles(t *testing.T) {
 	main := chi.NewRouter()
 	main.Mount("/viz", h.Router())
 
-	for _, asset := range []string{"/viz/assets/styles.css", "/viz/assets/js/init.js"} {
+	for _, asset := range []string{"/viz/assets/styles.css", "/viz/assets/js/init.js", "/viz/assets/vendor/dzarlax.css"} {
 		req := httptest.NewRequest(http.MethodGet, asset, nil)
 		rr := httptest.NewRecorder()
 		main.ServeHTTP(rr, req)
 		if rr.Code != http.StatusOK {
 			t.Errorf("GET %s: got %d, want 200", asset, rr.Code)
 		}
+	}
+}
+
+func TestFilterGraphPoints_AppliesNamespaceAndTagBeforeEdgeLimit(t *testing.T) {
+	points := []qdrant.ScrollPoint{
+		{ID: "1", Payload: map[string]interface{}{"namespace": "projects", "tags": []interface{}{"personal-memory"}}},
+		{ID: "2", Payload: map[string]interface{}{"namespace": "projects", "tags": []interface{}{"health"}}},
+		{ID: "3", Payload: map[string]interface{}{"namespace": "work", "tags": []interface{}{"personal-memory"}}},
+	}
+
+	filtered := filterGraphPoints(points, "projects", "personal-memory")
+	if len(filtered) != 1 {
+		t.Fatalf("len(filtered) = %d, want 1", len(filtered))
+	}
+	if filtered[0].ID != "1" {
+		t.Fatalf("filtered[0].ID = %q, want %q", filtered[0].ID, "1")
 	}
 }

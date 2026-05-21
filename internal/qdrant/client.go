@@ -46,6 +46,13 @@ func parsePointID(v interface{}) string {
 	}
 }
 
+func qdrantPointID(id string) interface{} {
+	if parsed, err := strconv.ParseUint(id, 10, 64); err == nil {
+		return int64(parsed)
+	}
+	return id
+}
+
 // EnsureCollection creates the collection if it doesn't exist.
 func (c *Client) EnsureCollection(ctx context.Context, vectorSize int) error {
 	// Check if collection exists.
@@ -211,8 +218,12 @@ func (c *Client) ScrollAllWithPayload(ctx context.Context, filters map[string]in
 // Delete removes points by IDs.
 func (c *Client) Delete(ctx context.Context, ids []string) error {
 	url := fmt.Sprintf("%s/collections/%s/points/delete", c.url, c.collection)
+	points := make([]interface{}, len(ids))
+	for i, id := range ids {
+		points[i] = qdrantPointID(id)
+	}
 	body := map[string]interface{}{
-		"points": ids,
+		"points": points,
 	}
 	return c.postDiscard(ctx, url, body)
 }
@@ -241,7 +252,7 @@ func (c *Client) SetPayload(ctx context.Context, id string, payload map[string]i
 	url := fmt.Sprintf("%s/collections/%s/points/payload", c.url, c.collection)
 	body := map[string]interface{}{
 		"payload": payload,
-		"points":  []string{id},
+		"points":  []interface{}{qdrantPointID(id)},
 	}
 	return c.putWithMethod(ctx, http.MethodPut, url, body)
 }

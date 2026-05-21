@@ -32,8 +32,8 @@ function renderDocuments(data) {
   const s = data.stats || {};
   const summary = `${s.total_files || 0} files · ${s.total_chunks || 0} chunks · ${s.total_folders || 0} folders`
     + (s.last_indexed ? ` · last indexed ${s.last_indexed.slice(0, 19).replace('T', ' ')} UTC` : '')
-    + (data.documents_dir ? ` · root: ${escapeHtml(data.documents_dir)}` : '');
-  document.getElementById('docs-summary').innerHTML = summary;
+    + (data.documents_dir ? ` · root: ${data.documents_dir}` : '');
+  document.getElementById('docs-summary').textContent = summary;
   document.getElementById('docs-badge').textContent = s.total_files || 0;
 
   const content = document.getElementById('docs-content');

@@ -2,10 +2,14 @@
 
 async function loadGraph() {
   const threshold = document.getElementById('threshold').value;
-  const res = await fetch(`${BASE}/api/graph?threshold=${threshold}`);
+  const selectedNamespace = graphFilter.namespace || document.getElementById('ns-filter').value;
+  const params = new URLSearchParams({ threshold });
+  if (selectedNamespace) params.set('namespace', selectedNamespace);
+  if (graphFilter.projectTag) params.set('tag', graphFilter.projectTag);
+  const res = await fetch(`${BASE}/api/graph?${params.toString()}`);
   graphDataCache = await res.json();
 
-  populateNsFilter(graphDataCache.nodes);
+  populateNsFilter(graphDataCache.nodes, selectedNamespace);
   const tagLabel = document.getElementById('tag-filter-label');
   const clearBtn = document.getElementById('clear-tag-filter');
   if (graphFilter.projectTag) {
@@ -19,7 +23,7 @@ async function loadGraph() {
   renderGraphVis(graphDataCache);
 }
 
-function populateNsFilter(nodes) {
+function populateNsFilter(nodes, selectedNamespace = '') {
   const sel = document.getElementById('ns-filter');
   const namespaces = [...new Set(nodes.map(n => n.namespace))].sort();
   sel.innerHTML = '<option value="">All</option>';
@@ -28,6 +32,7 @@ function populateNsFilter(nodes) {
     opt.value = ns; opt.textContent = ns;
     sel.appendChild(opt);
   });
+  if (selectedNamespace) sel.value = selectedNamespace;
 }
 
 function renderGraphVis(graphData) {
@@ -51,7 +56,7 @@ function renderGraphVis(graphData) {
     const center = nsPositions[n.namespace];
     const spread = 60 + Math.sqrt(filtered.filter(f => f.namespace === n.namespace).length) * 12;
     return {
-      id: n.id, label: '', title: n.text,
+      id: n.id, label: '', title: escapeHtml(n.text),
       x: center.x + (Math.random() - 0.5) * spread,
       y: center.y + (Math.random() - 0.5) * spread,
       color: { background: nsColor(n.namespace), border: nsColor(n.namespace),
@@ -100,7 +105,7 @@ function renderGraphVis(graphData) {
     filtered.forEach(n => nsCounts[n.namespace] = (nsCounts[n.namespace] || 0) + 1);
     document.getElementById('legend').innerHTML = Object.entries(nsCounts)
       .sort((a, b) => b[1] - a[1])
-      .map(([ns, c]) => `<div class="legend-item"><span class="legend-dot" style="background:${nsColor(ns)}"></span>${ns} ${c}</div>`)
+      .map(([ns, c]) => `<div class="legend-item"><span class="legend-dot" style="background:${nsColor(ns)}"></span>${escapeHtml(ns)} ${c}</div>`)
       .join('');
   });
 
@@ -124,10 +129,10 @@ function renderGraphVis(graphData) {
 function showDetail(fact) {
   document.getElementById('detail-text').textContent = fact.text;
   document.getElementById('detail-meta').innerHTML = `
-    <span style="color:${nsColor(fact.namespace)}">${fact.namespace}</span>
-    ${(fact.tags || []).map(t => `<span>#${t}</span>`).join('')}<br>
-    <span>Created: ${(fact.created_at || '').slice(0, 10)}</span>
-    <span>Recalls: ${fact.recall_count}</span>
+    <span style="color:${nsColor(fact.namespace)}">${escapeHtml(fact.namespace)}</span>
+    ${(fact.tags || []).map(t => `<span>#${escapeHtml(t)}</span>`).join('')}<br>
+    <span>Created: ${escapeHtml((fact.created_at || '').slice(0, 10))}</span>
+    <span>Recalls: ${Number(fact.recall_count || 0)}</span>
     ${fact.permanent ? '<span style="color:var(--orange)">Permanent</span>' : ''}
   `;
   document.getElementById('detail-panel').classList.add('visible');
@@ -152,6 +157,6 @@ document.getElementById('threshold').addEventListener('input', e => {
 });
 document.getElementById('threshold').addEventListener('change', loadGraph);
 document.getElementById('ns-filter').addEventListener('change', () => {
-  graphFilter.projectTag = '';
+  graphFilter = { namespace: document.getElementById('ns-filter').value, projectTag: '' };
   loadGraph();
 });

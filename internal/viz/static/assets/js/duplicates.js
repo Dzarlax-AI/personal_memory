@@ -21,11 +21,11 @@ async function loadDuplicates() {
       <div class="dup-facts">
         <div>
           ${escapeHtml((p.a.text || '').slice(0, 200))}${(p.a.text || '').length > 200 ? '...' : ''}
-          <div class="dup-meta">${p.a.namespace} | ${(p.a.tags || []).join(', ')} | recalls: ${p.a.recall_count}</div>
+          <div class="dup-meta">${escapeHtml(p.a.namespace)} | ${escapeHtml((p.a.tags || []).join(', '))} | recalls: ${Number(p.a.recall_count || 0)}</div>
         </div>
         <div>
           ${escapeHtml((p.b.text || '').slice(0, 200))}${(p.b.text || '').length > 200 ? '...' : ''}
-          <div class="dup-meta">${p.b.namespace} | ${(p.b.tags || []).join(', ')} | recalls: ${p.b.recall_count}</div>
+          <div class="dup-meta">${escapeHtml(p.b.namespace)} | ${escapeHtml((p.b.tags || []).join(', '))} | recalls: ${Number(p.b.recall_count || 0)}</div>
         </div>
       </div>
     </div>`;

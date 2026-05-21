@@ -21,6 +21,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
+      - run: make dev-deps
       - run: go vet ./...
       - run: go test ./...
 
@@ -57,5 +58,7 @@ jobs:
         with:
           context: .
           push: true
+          build-args: |
+            DS_CACHEBUST=${{ github.run_id }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

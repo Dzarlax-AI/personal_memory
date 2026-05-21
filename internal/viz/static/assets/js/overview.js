@@ -1,12 +1,30 @@
 // Overview tab: stats, treemap, activity heatmap.
 
 async function loadFacts() {
-  const res = await fetch(`${BASE}/api/facts`);
-  factsData = await res.json();
-  renderStats(factsData.nodes);
-  renderTreemap(factsData.nodes);
-  renderForgotten(factsData.nodes);
-  renderHeatmap(factsData.nodes);
+  if (factsData) return factsData;
+  if (factsPromise) return factsPromise;
+
+  factsPromise = (async () => {
+    const res = await fetch(`${BASE}/api/facts`);
+    if (!res.ok) throw new Error(`facts request failed: ${res.status}`);
+    factsData = await res.json();
+    renderStats(factsData.nodes);
+    renderTreemap(factsData.nodes);
+    renderForgotten(factsData.nodes);
+    renderHeatmap(factsData.nodes);
+    return factsData;
+  })();
+
+  return factsPromise;
+}
+
+async function initFacts() {
+  try {
+    await loadFacts();
+  } catch (e) {
+    document.getElementById('treemap').innerHTML =
+      `<div class="empty-state">Failed to load facts: ${escapeHtml(e.message)}</div>`;
+  }
 }
 
 function renderStats(nodes) {
@@ -53,18 +71,24 @@ function renderTreemap(nodes) {
       const name = proj === '_general' ? 'general' : proj;
       const tag = proj === '_general' ? '' : proj;
       return `<div class="treemap-tile" style="background:${color}${alpha};min-width:${size}px"
-        onclick="navigateToGraph('${ns}', '${tag}')">
-        <span class="tile-name">${name}</span>
-        <span class="tile-count">${count} fact${count > 1 ? 's' : ''}</span>
+        data-namespace="${escapeAttr(ns)}" data-tag="${escapeAttr(tag)}">
+        <span class="tile-name">${escapeHtml(name)}</span>
+        <span class="tile-count">${count} fact${count === 1 ? '' : 's'}</span>
       </div>`;
     }).join('');
 
     div.innerHTML = `
-      <h3><span class="ns-dot" style="background:${color}"></span> ${ns} <span class="ns-count">${total}</span></h3>
+      <h3><span class="ns-dot" style="background:${color}"></span> ${escapeHtml(ns)} <span class="ns-count">${total}</span></h3>
       <div class="treemap-projects">${tiles}</div>
     `;
     container.appendChild(div);
   }
+
+  container.querySelectorAll('.treemap-tile').forEach(tile => {
+    tile.addEventListener('click', () => {
+      navigateToGraph(tile.dataset.namespace || '', tile.dataset.tag || '');
+    });
+  });
 }
 
 function renderHeatmap(nodes) {
@@ -88,7 +112,7 @@ function renderHeatmap(nodes) {
     const key = d.toISOString().slice(0, 10);
     const count = datesMap[key] || 0;
     const intensity = count > 0 ? Math.min(0.3 + (count / maxCount) * 0.7, 1) : 0;
-    const color = count > 0 ? `rgba(88, 166, 255, ${intensity})` : 'var(--surface2)';
+    const color = count > 0 ? `rgba(88, 166, 255, ${intensity})` : 'var(--surface-2)';
     cells += `<div class="heatmap-cell" style="background:${color}" title="${key}: ${count} facts"></div>`;
   }
 
@@ -101,7 +125,6 @@ function renderHeatmap(nodes) {
   container.appendChild(heatDiv);
 }
 
-// Called from inline onclick handlers in the treemap tiles.
 function navigateToGraph(namespace, projectTag) {
   graphFilter = { namespace: namespace || '', projectTag: projectTag || '' };
   activateTab('graph');
