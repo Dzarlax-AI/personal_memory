@@ -147,7 +147,7 @@ func TestFilterGraphPoints_AppliesNamespaceAndTagBeforeEdgeLimit(t *testing.T) {
 		{ID: "3", Payload: map[string]interface{}{"namespace": "work", "tags": []interface{}{"personal-memory"}}},
 	}
 
-	filtered := filterGraphPoints(points, "projects", "personal-memory", "")
+	filtered := filterGraphPoints(points, "projects", "personal-memory", "", "")
 	if len(filtered) != 1 {
 		t.Fatalf("len(filtered) = %d, want 1", len(filtered))
 	}
@@ -164,7 +164,7 @@ func TestFilterGraphPoints_MatchesMissingNamespaceSentinel(t *testing.T) {
 		{ID: "4", Payload: map[string]interface{}{"namespace": "projects"}},
 	}
 
-	filtered := filterGraphPoints(points, "__missing__", "", "")
+	filtered := filterGraphPoints(points, "__missing__", "", "", "")
 	if len(filtered) != 3 {
 		t.Fatalf("len(filtered) = %d, want 3", len(filtered))
 	}
@@ -181,14 +181,29 @@ func TestFilterGraphPoints_AppliesTextState(t *testing.T) {
 		{ID: "2", Payload: map[string]interface{}{"recall_count": 3, "recovery_status": "lost_text"}},
 	}
 
-	missing := filterGraphPoints(points, "", "", "missing")
+	missing := filterGraphPoints(points, "", "", "", "missing")
 	if len(missing) != 1 || missing[0].ID != "2" {
 		t.Fatalf("missing filter = %#v, want only point 2", missing)
 	}
 
-	present := filterGraphPoints(points, "", "", "present")
+	present := filterGraphPoints(points, "", "", "", "present")
 	if len(present) != 1 || present[0].ID != "1" {
 		t.Fatalf("present filter = %#v, want only point 1", present)
+	}
+}
+
+func TestFilterGraphPoints_FiltersPrimaryTagSeparatelyFromTags(t *testing.T) {
+	points := []qdrant.ScrollPoint{
+		{ID: "1", Payload: map[string]interface{}{"tags": []interface{}{"personal-memory", "architecture"}, "primary_tag": "personal-memory"}},
+		{ID: "2", Payload: map[string]interface{}{"tags": []interface{}{"personal-memory", "architecture"}, "primary_tag": "architecture"}},
+	}
+
+	filtered := filterGraphPoints(points, "", "", "personal-memory", "")
+	if len(filtered) != 1 {
+		t.Fatalf("len(filtered) = %d, want 1", len(filtered))
+	}
+	if filtered[0].ID != "1" {
+		t.Fatalf("filtered[0].ID = %q, want %q", filtered[0].ID, "1")
 	}
 }
 
@@ -208,6 +223,31 @@ func TestPointToNode_UsesLegacyTextFallbacks(t *testing.T) {
 	}
 	if node["created_at"] != "2026-05-21T10:00:00Z" {
 		t.Fatalf("created_at = %q, want created fallback", node["created_at"])
+	}
+}
+
+func TestPointToNode_ExposesPrimaryTag(t *testing.T) {
+	node := pointToNode(qdrant.ScrollPoint{
+		ID: "1",
+		Payload: map[string]interface{}{
+			"text":        "fact text",
+			"tags":        []interface{}{"health", "decision"},
+			"primary_tag": "health",
+		},
+	})
+
+	if node["primary_tag"] != "health" {
+		t.Fatalf("primary_tag = %q, want health", node["primary_tag"])
+	}
+}
+
+func TestNormalizeFactTags_AddsPrimaryTag(t *testing.T) {
+	tags, primary := normalizeFactTags([]string{"decision"}, "health")
+	if primary != "health" {
+		t.Fatalf("primary = %q, want health", primary)
+	}
+	if len(tags) != 2 || tags[0] != "decision" || tags[1] != "health" {
+		t.Fatalf("tags = %#v, want sorted [decision health]", tags)
 	}
 }
 

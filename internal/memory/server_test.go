@@ -68,3 +68,33 @@ func TestFormatTagsList(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeFactTags_UsesSingleTagAsPrimary(t *testing.T) {
+	tags, primary := normalizeFactTags([]string{" health "}, "")
+	if primary != "health" {
+		t.Fatalf("primary = %q, want health", primary)
+	}
+	if len(tags) != 1 || tags[0] != "health" {
+		t.Fatalf("tags = %#v, want [health]", tags)
+	}
+}
+
+func TestNormalizeFactTags_AddsPrimaryToTags(t *testing.T) {
+	tags, primary := normalizeFactTags([]string{"decision"}, "health")
+	if primary != "health" {
+		t.Fatalf("primary = %q, want health", primary)
+	}
+	if len(tags) != 2 || tags[0] != "decision" || tags[1] != "health" {
+		t.Fatalf("tags = %#v, want [decision health]", tags)
+	}
+}
+
+func TestNormalizeFactTags_LeavesMultiTagPrimaryEmpty(t *testing.T) {
+	tags, primary := normalizeFactTags([]string{"health", "decision"}, "")
+	if primary != "" {
+		t.Fatalf("primary = %q, want empty", primary)
+	}
+	if len(tags) != 2 {
+		t.Fatalf("tags = %#v, want two tags", tags)
+	}
+}

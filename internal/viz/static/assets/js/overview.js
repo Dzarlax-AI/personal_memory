@@ -46,9 +46,9 @@ function renderTreemap(nodes) {
   nodes.forEach(n => {
     const ns = normalizeNamespace(n.namespace);
     if (!nsByNs[ns]) nsByNs[ns] = {};
-      const proj = getProjectTag(n.tags) || '_no_tag';
-    if (!nsByNs[ns][proj]) nsByNs[ns][proj] = 0;
-    nsByNs[ns][proj]++;
+    const group = primaryTag(n) || '_no_primary_tag';
+    if (!nsByNs[ns][group]) nsByNs[ns][group] = 0;
+    nsByNs[ns][group]++;
   });
 
   container.innerHTML = '';
@@ -65,12 +65,12 @@ function renderTreemap(nodes) {
     div.className = 'treemap-ns';
     div.style.flex = `${Math.min(Math.max(Math.sqrt(total) / 3, 1), 4)}`;
 
-    const projectsSorted = Object.entries(projects).sort((a, b) => b[1] - a[1]);
-    const tiles = projectsSorted.map(([proj, count]) => {
+    const groupsSorted = Object.entries(projects).sort((a, b) => b[1] - a[1]);
+    const tiles = groupsSorted.map(([group, count]) => {
       const size = Math.round(Math.min(72 + Math.sqrt(count) * 16, 220));
-      const alpha = proj === '_no_tag' ? '33' : '55';
-      const name = proj === '_no_tag' ? 'no tag' : proj;
-      const tag = proj === '_no_tag' ? '' : proj;
+      const alpha = group === '_no_primary_tag' ? '33' : '55';
+      const name = group === '_no_primary_tag' ? 'no primary tag' : group;
+      const tag = group === '_no_primary_tag' ? '' : group;
       return `<div class="treemap-tile" style="background:${color}${alpha};min-width:${size}px"
         data-namespace="${escapeAttr(graphNamespaceFilter(ns))}" data-tag="${escapeAttr(tag)}">
         <span class="tile-name">${escapeHtml(name)}</span>
@@ -127,7 +127,7 @@ function renderHeatmap(nodes) {
 }
 
 function navigateToGraph(namespace, projectTag) {
-  graphFilter = { namespace: graphNamespaceFilter(namespace), projectTag: projectTag || '', text: '' };
+  graphFilter = { namespace: graphNamespaceFilter(namespace), projectTag: '', primaryTag: projectTag || '', text: '' };
   activateTab('graph');
   const sel = document.getElementById('ns-filter');
   if (sel) sel.value = graphFilter.namespace;

@@ -56,13 +56,13 @@ function renderForgottenList() {
 
   container.innerHTML = forgotten.map(n => {
     const date = (n.created_at || '').slice(0, 10);
-    const projectTag = getProjectTag(n.tags);
+    const primary = primaryTag(n);
     const text = factText(n);
     return `<div class="forgotten-item">
       <div class="fact-text">${escapeHtml(text.slice(0, 200))}${text.length > 200 ? '...' : ''}</div>
       <div class="meta-col">
         <span style="color:${nsColor(n.namespace)}">${escapeHtml(normalizeNamespace(n.namespace))}</span>
-        ${projectTag ? `<span>${escapeHtml(projectTag)}</span>` : ''}
+        ${primary ? `<span>${escapeHtml(primary)}</span>` : '<span>no primary tag</span>'}
         <span>${escapeHtml(date)}</span>
         ${n.permanent ? '<span style="color:var(--orange)">permanent</span>' : ''}
       </div>

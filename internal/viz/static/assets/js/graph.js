@@ -6,6 +6,7 @@ async function loadGraph() {
   const threshold = document.getElementById('threshold').value;
   const selectedNamespace = graphFilter.namespace || document.getElementById('ns-filter').value;
   const selectedTag = graphFilter.projectTag || document.getElementById('tag-filter').value;
+  const selectedPrimaryTag = graphFilter.primaryTag || '';
   const selectedText = graphFilter.text || document.getElementById('text-filter').value;
   try {
     await loadFacts();
@@ -14,7 +15,8 @@ async function loadGraph() {
   }
   const params = new URLSearchParams({ threshold });
   if (selectedNamespace) params.set('namespace', selectedNamespace);
-  if (selectedTag) params.set('tag', selectedTag);
+  if (selectedPrimaryTag) params.set('primary_tag', selectedPrimaryTag);
+  else if (selectedTag) params.set('tag', selectedTag);
   if (selectedText) params.set('text', selectedText);
   const res = await fetch(`${BASE}/api/graph?${params.toString()}`);
   graphDataCache = await res.json();
@@ -23,7 +25,11 @@ async function loadGraph() {
   populateNsFilter(filterNodes, selectedNamespace);
   populateTagFilter(filterNodes, selectedNamespace, selectedTag);
   const tagLabel = document.getElementById('tag-filter-label');
-  if (selectedTag) {
+  if (selectedPrimaryTag) {
+    graphFilter.projectTag = '';
+    tagLabel.textContent = `primary: ${selectedPrimaryTag}`;
+    tagLabel.style.display = '';
+  } else if (selectedTag) {
     graphFilter.projectTag = selectedTag;
     tagLabel.textContent = `#${selectedTag}`;
     tagLabel.style.display = '';
@@ -66,8 +72,10 @@ function renderGraphVis(graphData) {
   const nsVal = document.getElementById('ns-filter').value;
   let filtered = graphData.nodes;
   if (nsVal) filtered = filtered.filter(n => matchesNamespaceFilter(n.namespace, nsVal));
-  if (graphFilter.projectTag) {
-    filtered = filtered.filter(n => (n.tags || []).includes(graphFilter.projectTag));
+  if (graphFilter.primaryTag) {
+    filtered = filtered.filter(n => primaryTag(n) === graphFilter.primaryTag);
+  } else if (graphFilter.projectTag) {
+    filtered = filtered.filter(n => tagsList(n.tags).includes(graphFilter.projectTag));
   }
   if (graphFilter.text === 'missing') {
     filtered = filtered.filter(n => n.text_missing);
@@ -174,12 +182,14 @@ function showDetail(fact) {
   document.getElementById('detail-meta').innerHTML = `
     <span>ID: ${escapeHtml(id.slice(0, 12))}${id.length > 12 ? '...' : ''}</span><br>
     <span style="color:${nsColor(fact.namespace)}">${escapeHtml(normalizeNamespace(fact.namespace))}</span>
+    ${primaryTag(fact) ? `<span class="tag-chip">primary: ${escapeHtml(primaryTag(fact))}</span>` : ''}
     ${tagsList(fact.tags).map(t => `<span class="tag-chip">#${escapeHtml(t)}</span>`).join('')}<br>
     <span>Created: ${escapeHtml((fact.created_at || '').slice(0, 10))}</span>
     <span>Recalls: ${Number(fact.recall_count || 0)}</span>
     ${fact.permanent ? '<span style="color:var(--orange)">Permanent</span>' : ''}
   `;
   document.getElementById('detail-tags').value = tagsList(fact.tags).join(', ');
+  document.getElementById('detail-primary-tag').value = primaryTag(fact) || '';
   document.getElementById('tag-save-status').textContent = '';
   const payloadDetails = document.getElementById('payload-details');
   const payloadKeys = document.getElementById('payload-keys');
@@ -207,6 +217,7 @@ async function saveSelectedTags() {
     .split(',')
     .map(t => t.trim())
     .filter(Boolean);
+  const primary_tag = document.getElementById('detail-primary-tag').value.trim();
   status.textContent = 'Saving...';
   try {
     const res = await fetch(`${BASE}/api/facts/${encodeURIComponent(selectedFact.id)}/tags`, {
@@ -215,11 +226,12 @@ async function saveSelectedTags() {
         'Content-Type': 'application/json',
         'X-Viz-Action': 'update-tags',
       },
-      body: JSON.stringify({ tags }),
+      body: JSON.stringify({ tags, primary_tag }),
     });
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     selectedFact.tags = data.tags || tags;
+    selectedFact.primary_tag = data.primary_tag || '';
     status.textContent = 'Saved';
     showDetail(selectedFact);
   } catch (err) {
@@ -233,7 +245,7 @@ document.getElementById('detail-close').addEventListener('click', hideDetail);
 document.getElementById('save-tags').addEventListener('click', saveSelectedTags);
 
 document.getElementById('reset-graph-filters').addEventListener('click', () => {
-  graphFilter = { namespace: '', projectTag: '', text: '' };
+  graphFilter = { namespace: '', projectTag: '', primaryTag: '', text: '' };
   document.getElementById('ns-filter').value = '';
   document.getElementById('tag-filter').value = '';
   document.getElementById('text-filter').value = '';
@@ -250,6 +262,7 @@ document.getElementById('ns-filter').addEventListener('change', () => {
   graphFilter = {
     namespace: document.getElementById('ns-filter').value,
     projectTag: document.getElementById('tag-filter').value,
+    primaryTag: '',
     text: document.getElementById('text-filter').value,
   };
   loadGraph();
@@ -258,6 +271,7 @@ document.getElementById('tag-filter').addEventListener('change', () => {
   graphFilter = {
     namespace: document.getElementById('ns-filter').value,
     projectTag: document.getElementById('tag-filter').value,
+    primaryTag: '',
     text: document.getElementById('text-filter').value,
   };
   loadGraph();
@@ -266,6 +280,7 @@ document.getElementById('text-filter').addEventListener('change', () => {
   graphFilter = {
     namespace: document.getElementById('ns-filter').value,
     projectTag: document.getElementById('tag-filter').value,
+    primaryTag: '',
     text: document.getElementById('text-filter').value,
   };
   loadGraph();

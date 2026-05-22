@@ -51,6 +51,8 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 	srv.AddTool(mcp.NewTool("store_fact",
 		mcp.WithDescription("Store a fact in semantic memory. Deduplicates (cosine >= threshold) and warns on contradictions."),
 		mcp.WithString("fact", mcp.Description("The fact to store"), mcp.Required()),
+		mcp.WithString("tags", mcp.Description("Comma-separated semantic tags")),
+		mcp.WithString("primary_tag", mcp.Description("Single primary tag for overview grouping; must also be present in tags")),
 		mcp.WithString("namespace", mcp.Description("Namespace (default: default)")),
 		mcp.WithBoolean("permanent", mcp.Description("Never deleted by forget_old")),
 		mcp.WithString("valid_until", mcp.Description("ISO date after which fact expires")),
@@ -67,6 +69,8 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 		mcp.WithDescription("Find a fact by similarity to old_query and replace it with new_fact."),
 		mcp.WithString("old_query", mcp.Description("Query to find the fact to update"), mcp.Required()),
 		mcp.WithString("new_fact", mcp.Description("New fact text"), mcp.Required()),
+		mcp.WithString("tags", mcp.Description("Comma-separated semantic tags")),
+		mcp.WithString("primary_tag", mcp.Description("Single primary tag for overview grouping; must also be present in tags")),
 		mcp.WithString("namespace", mcp.Description("Namespace")),
 		mcp.WithBoolean("permanent", mcp.Description("Set permanent flag")),
 	), s.updateFact)
@@ -161,6 +165,10 @@ func tagsParam(args map[string]interface{}) []string {
 	if !ok || v == nil {
 		return nil
 	}
+	return tagsParamFromPayload(v)
+}
+
+func tagsParamFromPayload(v interface{}) []string {
 	switch t := v.(type) {
 	case []interface{}:
 		tags := make([]string, 0, len(t))
@@ -179,7 +187,40 @@ func tagsParam(args map[string]interface{}) []string {
 	return nil
 }
 
+func stringFromPayload(v interface{}) string {
+	s, _ := v.(string)
+	return s
+}
+
 // --- Helpers ---
+
+func normalizeFactTags(tags []string, primary string) ([]string, string) {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(tags)+1)
+	for _, tag := range tags {
+		t := strings.TrimSpace(tag)
+		if t == "" {
+			continue
+		}
+		if _, ok := seen[t]; ok {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+
+	primary = strings.TrimSpace(primary)
+	if primary != "" {
+		if _, ok := seen[primary]; !ok {
+			out = append(out, primary)
+		}
+		return out, primary
+	}
+	if len(out) == 1 {
+		return out, out[0]
+	}
+	return out, ""
+}
 
 func pointID(text string) string {
 	h := sha1.New()
@@ -244,7 +285,7 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	if fact == "" {
 		return mcp.NewToolResultError("fact is required"), nil
 	}
-	tags := tagsParam(args)
+	tags, primaryTag := normalizeFactTags(tagsParam(args), strParam(args, "primary_tag"))
 	namespace := strParam(args, "namespace")
 	if namespace == "" {
 		namespace = "default"
@@ -283,6 +324,7 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		"user":         s.user,
 		"namespace":    namespace,
 		"tags":         tags,
+		"primary_tag":  primaryTag,
 		"permanent":    permanent,
 		"created_at":   nowISO(),
 		"recall_count": 0,
@@ -342,6 +384,7 @@ func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			"text":         p.Payload["text"],
 			"score":        p.Score,
 			"tags":         p.Payload["tags"],
+			"primary_tag":  p.Payload["primary_tag"],
 			"namespace":    p.Payload["namespace"],
 			"recall_count": p.Payload["recall_count"],
 		}
@@ -354,7 +397,7 @@ func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 				rc = int(v)
 			}
 			_ = s.qdrant.SetPayload(context.Background(), id, map[string]interface{}{
-				"recall_count":    rc + 1,
+				"recall_count":     rc + 1,
 				"last_recalled_at": nowISO(),
 			})
 		}(p.ID, p.Payload)
@@ -388,10 +431,8 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	}
 
 	old := results[0]
-	// Delete old point.
-	if err := s.qdrant.Delete(ctx, []string{old.ID}); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("delete old failed: %v", err)), nil
-	}
+	oldText, _ := old.Payload["text"].(string)
+	newID := pointID(newFact)
 
 	// Embed new fact.
 	newVec, err := s.embed.Embed(ctx, newFact)
@@ -407,22 +448,37 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		payload["namespace"] = ns
 	}
 	if tags := tagsParam(args); tags != nil {
-		payload["tags"] = tags
+		primary := strParam(args, "primary_tag")
+		if primary == "" {
+			primary = stringFromPayload(payload["primary_tag"])
+		}
+		normalizedTags, primaryTag := normalizeFactTags(tags, primary)
+		payload["tags"] = normalizedTags
+		payload["primary_tag"] = primaryTag
+	} else if primary := strParam(args, "primary_tag"); primary != "" {
+		normalizedTags, primaryTag := normalizeFactTags(tagsParamFromPayload(payload["tags"]), primary)
+		payload["tags"] = normalizedTags
+		payload["primary_tag"] = primaryTag
 	}
 	if v, ok := args["permanent"]; ok && v != nil {
 		payload["permanent"] = v
 	}
 
 	if err := s.qdrant.Upsert(ctx, qdrant.Point{
-		ID:      pointID(newFact),
+		ID:      newID,
 		Vector:  newVec,
 		Payload: payload,
 	}); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("store updated fact failed: %v", err)), nil
 	}
 
+	if old.ID != newID {
+		if err := s.qdrant.Delete(ctx, []string{old.ID}); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("delete old failed: %v", err)), nil
+		}
+	}
+
 	s.cache.Invalidate()
-	oldText, _ := old.Payload["text"].(string)
 	return mcp.NewToolResultText(fmt.Sprintf("Updated: '%s' → '%s'", oldText, newFact)), nil
 }
 
@@ -550,11 +606,15 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			"text":         text,
 			"user":         s.user,
 			"namespace":    namespace,
-			"tags":         f["tags"],
+			"tags":         nil,
+			"primary_tag":  nil,
 			"permanent":    f["permanent"],
 			"created_at":   f["created_at"],
 			"recall_count": 0,
 		}
+		tags, primaryTag := normalizeFactTags(tagsParamFromPayload(f["tags"]), stringFromPayload(f["primary_tag"]))
+		payload["tags"] = tags
+		payload["primary_tag"] = primaryTag
 		if v, ok := f["valid_until"]; ok {
 			payload["valid_until"] = v
 		}
@@ -607,10 +667,11 @@ func (s *Server) findRelated(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			continue
 		}
 		hits = append(hits, map[string]interface{}{
-			"text":      p.Payload["text"],
-			"score":     p.Score,
-			"tags":      p.Payload["tags"],
-			"namespace": p.Payload["namespace"],
+			"text":        p.Payload["text"],
+			"score":       p.Score,
+			"tags":        p.Payload["tags"],
+			"primary_tag": p.Payload["primary_tag"],
+			"namespace":   p.Payload["namespace"],
 		})
 		if len(hits) >= limit {
 			break
@@ -645,7 +706,8 @@ func (s *Server) listFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 			perm = " [permanent]"
 		}
 		tagsList := formatTagsList(p.Payload["tags"])
-		lines = append(lines, fmt.Sprintf("- [%s] %s ns:%s%s recalls:%d %s", createdAt, tagsList, ns, perm, rc, text))
+		primary := formatPrimaryTag(p.Payload["primary_tag"])
+		lines = append(lines, fmt.Sprintf("- [%s] %s%s ns:%s%s recalls:%d %s", createdAt, tagsList, primary, ns, perm, rc, text))
 	}
 
 	if len(lines) == 0 {
@@ -665,6 +727,8 @@ func (s *Server) getStats(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	expired := 0
 	namespaces := make(map[string]int)
 	tags := make(map[string]int)
+	primaryTags := make(map[string]int)
+	missingPrimary := 0
 	var mostRecalled string
 	maxRecalls := 0
 
@@ -678,12 +742,13 @@ func (s *Server) getStats(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 		if ns, ok := p.Payload["namespace"].(string); ok {
 			namespaces[ns]++
 		}
-		if tagList, ok := p.Payload["tags"].([]interface{}); ok {
-			for _, t := range tagList {
-				if s, ok := t.(string); ok {
-					tags[s]++
-				}
-			}
+		for _, tag := range tagsParamFromPayload(p.Payload["tags"]) {
+			tags[tag]++
+		}
+		if primary, ok := p.Payload["primary_tag"].(string); ok && strings.TrimSpace(primary) != "" {
+			primaryTags[primary]++
+		} else {
+			missingPrimary++
 		}
 		if rc, ok := p.Payload["recall_count"].(float64); ok && int(rc) > maxRecalls {
 			maxRecalls = int(rc)
@@ -718,6 +783,20 @@ func (s *Server) getStats(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 		fmt.Fprintf(&sb, "  %s: %d\n", tc.tag, tc.count)
 	}
 
+	sb.WriteString("\nPrimary tags:\n")
+	sorted = sorted[:0]
+	for t, c := range primaryTags {
+		sorted = append(sorted, tagCount{t, c})
+	}
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].count > sorted[j].count })
+	for i, tc := range sorted {
+		if i >= 20 {
+			break
+		}
+		fmt.Fprintf(&sb, "  %s: %d\n", tc.tag, tc.count)
+	}
+	fmt.Fprintf(&sb, "  no primary_tag: %d\n", missingPrimary)
+
 	if mostRecalled != "" {
 		fmt.Fprintf(&sb, "\nMost recalled (%d times): %s", maxRecalls, mostRecalled)
 	}
@@ -737,12 +816,8 @@ func (s *Server) listTags(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 
 	tags := make(map[string]int)
 	for _, p := range points {
-		if tagList, ok := p.Payload["tags"].([]interface{}); ok {
-			for _, t := range tagList {
-				if s, ok := t.(string); ok {
-					tags[s]++
-				}
-			}
+		for _, tag := range tagsParamFromPayload(p.Payload["tags"]) {
+			tags[tag]++
 		}
 	}
 
@@ -859,7 +934,8 @@ func (s *Server) getOperationalContext(ctx context.Context, req mcp.CallToolRequ
 			rc = int(v)
 		}
 		tagsList := formatTagsList(p.Payload["tags"])
-		fmt.Fprintf(&sb, "- %s ns:%s%s recalls:%d %s\n", tagsList, ns, perm, rc, text)
+		primary := formatPrimaryTag(p.Payload["primary_tag"])
+		fmt.Fprintf(&sb, "- %s%s ns:%s%s recalls:%d %s\n", tagsList, primary, ns, perm, rc, text)
 	}
 	return mcp.NewToolResultText(sb.String()), nil
 }
@@ -900,10 +976,11 @@ func formatFacts(hits []map[string]interface{}) string {
 		text, _ := h["text"].(string)
 		ns, _ := h["namespace"].(string)
 		tagsList := formatTagsList(h["tags"])
+		primary := formatPrimaryTag(h["primary_tag"])
 
-		line := fmt.Sprintf("- [%.3f] %s ns:%s %s", h["score"], tagsList, ns, text)
+		line := fmt.Sprintf("- [%.3f] %s%s ns:%s %s", h["score"], tagsList, primary, ns, text)
 		if rc, ok := h["recall_count"].(float64); ok && rc > 0 {
-			line = fmt.Sprintf("- [%.3f] %s ns:%s recalls:%.0f %s", h["score"], tagsList, ns, rc, text)
+			line = fmt.Sprintf("- [%.3f] %s%s ns:%s recalls:%.0f %s", h["score"], tagsList, primary, ns, rc, text)
 		}
 		lines = append(lines, line)
 	}
@@ -931,4 +1008,12 @@ func formatTagsList(v interface{}) string {
 		return "[" + strings.Join(tags, ", ") + "]"
 	}
 	return "[]"
+}
+
+func formatPrimaryTag(v interface{}) string {
+	primary, _ := v.(string)
+	if primary == "" {
+		return ""
+	}
+	return fmt.Sprintf(" primary:%s", primary)
 }
