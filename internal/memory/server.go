@@ -431,10 +431,8 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	}
 
 	old := results[0]
-	// Delete old point.
-	if err := s.qdrant.Delete(ctx, []string{old.ID}); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("delete old failed: %v", err)), nil
-	}
+	oldText, _ := old.Payload["text"].(string)
+	newID := pointID(newFact)
 
 	// Embed new fact.
 	newVec, err := s.embed.Embed(ctx, newFact)
@@ -463,15 +461,20 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	}
 
 	if err := s.qdrant.Upsert(ctx, qdrant.Point{
-		ID:      pointID(newFact),
+		ID:      newID,
 		Vector:  newVec,
 		Payload: payload,
 	}); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("store updated fact failed: %v", err)), nil
 	}
 
+	if old.ID != newID {
+		if err := s.qdrant.Delete(ctx, []string{old.ID}); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("delete old failed: %v", err)), nil
+		}
+	}
+
 	s.cache.Invalidate()
-	oldText, _ := old.Payload["text"].(string)
 	return mcp.NewToolResultText(fmt.Sprintf("Updated: '%s' → '%s'", oldText, newFact)), nil
 }
 

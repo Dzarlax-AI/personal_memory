@@ -15,7 +15,9 @@ function nsColor(ns) {
 }
 
 function tagsList(tags) {
-  return Array.isArray(tags) ? tags.filter(t => typeof t === 'string' && t.trim() !== '') : [];
+  return Array.isArray(tags)
+    ? tags.map(t => typeof t === 'string' ? t.trim() : '').filter(Boolean)
+    : [];
 }
 
 function primaryTag(fact) {
