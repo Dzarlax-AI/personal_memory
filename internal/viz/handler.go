@@ -289,6 +289,7 @@ func pointToNode(p qdrant.ScrollPoint) map[string]interface{} {
 		"payload":      p.Payload,
 		"namespace":    p.Payload["namespace"],
 		"tags":         p.Payload["tags"],
+		"primary_tag":  p.Payload["primary_tag"],
 		"created_at":   payloadStringValue(p.Payload, "created_at", "created", "timestamp", "date"),
 		"permanent":    p.Payload["permanent"],
 		"recall_count": p.Payload["recall_count"],
@@ -408,23 +409,24 @@ func (h *Handler) apiUpdateFactTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Tags []string `json:"tags"`
+		Tags       []string `json:"tags"`
+		PrimaryTag string   `json:"primary_tag"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	tags := normalizeTags(req.Tags)
-	if err := h.qdrant.SetPayload(r.Context(), id, map[string]interface{}{"tags": tags}); err != nil {
+	tags, primaryTag := normalizeFactTags(req.Tags, req.PrimaryTag)
+	if err := h.qdrant.SetPayload(r.Context(), id, map[string]interface{}{"tags": tags, "primary_tag": primaryTag}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]interface{}{"id": id, "tags": tags})
+	writeJSON(w, map[string]interface{}{"id": id, "tags": tags, "primary_tag": primaryTag})
 }
 
-func normalizeTags(tags []string) []string {
+func normalizeFactTags(tags []string, primary string) ([]string, string) {
 	seen := map[string]struct{}{}
-	out := make([]string, 0, len(tags))
+	out := make([]string, 0, len(tags)+1)
 	for _, tag := range tags {
 		t := strings.TrimSpace(tag)
 		if t == "" {
@@ -437,7 +439,18 @@ func normalizeTags(tags []string) []string {
 		out = append(out, t)
 	}
 	sort.Strings(out)
-	return out
+	primary = strings.TrimSpace(primary)
+	if primary != "" {
+		if _, ok := seen[primary]; !ok {
+			out = append(out, primary)
+			sort.Strings(out)
+		}
+		return out, primary
+	}
+	if len(out) == 1 {
+		return out, out[0]
+	}
+	return out, ""
 }
 
 // --- Documents (RAG) ---

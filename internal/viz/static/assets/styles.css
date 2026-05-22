@@ -280,6 +280,7 @@ body {
   font-size: var(--text-xs);
   color: var(--text-secondary);
 }
+.tag-editor-row + label { margin-top: 8px; }
 .tag-editor-row { display: flex; gap: 8px; }
 .tag-editor input {
   min-width: 0;

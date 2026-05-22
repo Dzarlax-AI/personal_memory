@@ -174,12 +174,14 @@ function showDetail(fact) {
   document.getElementById('detail-meta').innerHTML = `
     <span>ID: ${escapeHtml(id.slice(0, 12))}${id.length > 12 ? '...' : ''}</span><br>
     <span style="color:${nsColor(fact.namespace)}">${escapeHtml(normalizeNamespace(fact.namespace))}</span>
+    ${primaryTag(fact) ? `<span class="tag-chip">primary: ${escapeHtml(primaryTag(fact))}</span>` : ''}
     ${tagsList(fact.tags).map(t => `<span class="tag-chip">#${escapeHtml(t)}</span>`).join('')}<br>
     <span>Created: ${escapeHtml((fact.created_at || '').slice(0, 10))}</span>
     <span>Recalls: ${Number(fact.recall_count || 0)}</span>
     ${fact.permanent ? '<span style="color:var(--orange)">Permanent</span>' : ''}
   `;
   document.getElementById('detail-tags').value = tagsList(fact.tags).join(', ');
+  document.getElementById('detail-primary-tag').value = primaryTag(fact) || '';
   document.getElementById('tag-save-status').textContent = '';
   const payloadDetails = document.getElementById('payload-details');
   const payloadKeys = document.getElementById('payload-keys');
@@ -207,6 +209,7 @@ async function saveSelectedTags() {
     .split(',')
     .map(t => t.trim())
     .filter(Boolean);
+  const primary_tag = document.getElementById('detail-primary-tag').value.trim();
   status.textContent = 'Saving...';
   try {
     const res = await fetch(`${BASE}/api/facts/${encodeURIComponent(selectedFact.id)}/tags`, {
@@ -215,11 +218,12 @@ async function saveSelectedTags() {
         'Content-Type': 'application/json',
         'X-Viz-Action': 'update-tags',
       },
-      body: JSON.stringify({ tags }),
+      body: JSON.stringify({ tags, primary_tag }),
     });
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     selectedFact.tags = data.tags || tags;
+    selectedFact.primary_tag = data.primary_tag || '';
     status.textContent = 'Saved';
     showDetail(selectedFact);
   } catch (err) {

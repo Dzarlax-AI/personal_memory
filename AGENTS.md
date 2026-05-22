@@ -71,8 +71,8 @@ internal/
 ## MCP Tools
 
 ### Writing
-- `store_fact(fact, tags?, namespace?, permanent?, valid_until?)` — embed and save a fact; deduplicates (cosine ≥ 0.97); warns on contradictions (0.60–0.97)
-- `update_fact(old_query, new_fact, ...)` — find by similarity, replace, preserve metadata
+- `store_fact(fact, tags?, primary_tag?, namespace?, permanent?, valid_until?)` — embed and save a fact; deduplicates (cosine ≥ 0.97); warns on contradictions (0.60–0.97)
+- `update_fact(old_query, new_fact, tags?, primary_tag?, ...)` — find by similarity, replace, preserve metadata
 - `delete_fact(query, namespace?)` — find by similarity and delete
 - `forget_old(days?, namespace?, dry_run?)` — delete old facts; skips `permanent=true`; defaults to dry run
 - `import_facts(facts)` — bulk import from JSON string
@@ -98,6 +98,7 @@ internal/
 text              string    — the fact
 namespace         string    — logical group (default: "default")
 tags              []string  — labels
+primary_tag       string    — primary grouping tag; empty or also present in tags
 permanent         bool      — never deleted by forget_old
 valid_until       string    — ISO date; expired facts excluded from search
 created_at        string    — ISO datetime
@@ -152,6 +153,7 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - `recall_count` is updated via `qdrant.SetPayload` in a background goroutine — no re-embedding
 - `forget_old` defaults to `dry_run=true` — safe by default
 - New point IDs are SHA1-based hex UUIDs (deterministic by text); legacy numeric IDs are handled on read
+- `primary_tag` is an explicit grouping signal for visualization and model routing. Do not infer it from a hardcoded project list. If exactly one tag is stored and `primary_tag` is omitted, the server promotes that tag to `primary_tag`; if multiple tags are stored, clients should set `primary_tag` explicitly.
 - TEI and Qdrant accessed via Docker network (no auth needed)
 
 ### qdrant/client.go

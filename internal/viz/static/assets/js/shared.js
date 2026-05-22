@@ -14,21 +14,13 @@ function nsColor(ns) {
   return NS_COLORS[key];
 }
 
-const PROJECT_TAGS = new Set([
-  'personal-assistant','personal-memory','personal-ai-stack','rss-summariser',
-  'health','finance','clinics','meta-enricher','city-dashboard','homedash',
-  'jerkyvault','spotify-mcp','todoist-bot','insights','pm-enforcement','clui-cc'
-]);
-
-function getProjectTag(tags) {
-  for (const t of (tags || [])) {
-    if (PROJECT_TAGS.has(t)) return t;
-  }
-  return null;
-}
-
 function tagsList(tags) {
   return Array.isArray(tags) ? tags.filter(t => typeof t === 'string' && t.trim() !== '') : [];
+}
+
+function primaryTag(fact) {
+  const primary = typeof fact.primary_tag === 'string' ? fact.primary_tag.trim() : '';
+  return primary && tagsList(fact.tags).includes(primary) ? primary : null;
 }
 
 function normalizeNamespace(ns) {

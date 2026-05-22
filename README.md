@@ -68,7 +68,7 @@ graph TD
 
 ### Visualization (`mcp.<domain>/viz`)
 
-- **Overview** — treemap of facts by namespace + project tag, plus an activity heatmap.
+- **Overview** — treemap of facts by namespace + `primary_tag`, plus an activity heatmap.
 - **Duplicates** — near-duplicate pairs (cosine ≥ 0.90) for cleanup.
 - **Forgotten** — facts with `recall_count = 0`.
 - **Timeline** — facts plotted by creation date, grouped by namespace (vis-timeline).
@@ -86,6 +86,7 @@ classDiagram
         +string user
         +string namespace
         +List~string~ tags
+        +string primary_tag
         +bool permanent
         +string created_at
         +string updated_at
@@ -96,6 +97,8 @@ classDiagram
 ```
 
 - **namespace** — logical group (`work`, `personal`, `projects`, …)
+- **tags** — semantic labels used for filtering and retrieval
+- **primary_tag** — one tag selected as the fact's primary overview group. It is either empty or also present in `tags`. If exactly one tag is supplied and `primary_tag` is omitted, the server uses that tag as `primary_tag`; with multiple tags, clients should set it explicitly.
 - **permanent** — if `true`, never deleted by `forget_old()`
 - **valid_until** — ISO date; expired facts are excluded from search results
 - **recall_count** — incremented each time the fact is returned by `recall_facts`
@@ -108,8 +111,8 @@ Point IDs: new points use deterministic UUID-v5-like hex IDs (SHA1 of text). Leg
 
 | Tool | Description |
 |---|---|
-| `store_fact(fact, tags?, namespace?, permanent?, valid_until?)` | Embed and save a fact. Skips near-duplicates (cosine ≥ 0.97). Warns about potentially contradicting facts (cosine 0.60–0.97). |
-| `update_fact(old_query, new_fact, tags?, namespace?, permanent?)` | Semantically find a fact and replace it. Preserves metadata unless overridden. |
+| `store_fact(fact, tags?, primary_tag?, namespace?, permanent?, valid_until?)` | Embed and save a fact. Skips near-duplicates (cosine ≥ 0.97). Warns about potentially contradicting facts (cosine 0.60–0.97). |
+| `update_fact(old_query, new_fact, tags?, primary_tag?, namespace?, permanent?)` | Semantically find a fact and replace it. Preserves metadata unless overridden. |
 | `delete_fact(query, namespace?)` | Semantically find and delete the closest matching fact. |
 | `forget_old(days?, namespace?, dry_run?)` | Delete facts older than N days. Skips `permanent=true`. Default: `dry_run=true`. |
 | `import_facts(facts)` | Bulk import from a JSON array (e.g. from `export_facts`). Deduplicates on import. |
@@ -405,24 +408,41 @@ Default mode is `hierarchical` (folders first, then chunks). Switch to `mode="fl
 - A non-obvious fact about a project is established (tech stack, naming convention, key dependency)
 - Something important was learned that would be useful in future sessions
 
+When calling `store_fact`, include:
+- `namespace` — broad context bucket
+- `tags` — semantic labels for retrieval
+- `primary_tag` — the single main topic for visualization and routing
+
 Do NOT `store_fact` for content that lives in the user's markdown docs — that's already indexed and searchable via `search_documents`.
 
 ### Namespace convention
-Always specify a namespace. Never store everything in `default`.
+Always specify a namespace. Never store everything in `default`. Keep namespaces broad and portable; do not create a namespace for every project or topic.
 
 | Context | Namespace |
 |---|---|
 | Personal preferences, habits | `personal` |
-| Current project | `<project-name>` |
+| Personal projects | `projects` |
 | Cross-project technical preferences | `tech` |
 | Work / professional context | `work` |
+| Job search, CVs, interviews | `job-search` |
 
 ### Permanent facts
 Use `permanent=True` for facts that should never expire:
 fundamental preferences, identity facts, long-term architectural decisions.
 
 ### Tags
-- `#decision` — architectural or product decisions
-- `#preference` — personal or workflow preferences
-- `#constraint` — things to avoid or never do
+Use tags for both topic labels and semantic labels. Prefer stable, lowercase kebab-case tags.
+
+Examples:
+- Topic tags: `personal-memory`, `health`, `finance`, `design-system`
+- Semantic tags: `decision`, `preference`, `constraint`, `architecture`, `deployment`
+
+### Primary tags
+Always set `primary_tag` when storing a fact with multiple tags. It controls high-level grouping in the visualization and must name the main topic a future model should use to route the fact. Keep `primary_tag` as one of the regular `tags`; if you pass only `primary_tag`, the server will also add it to `tags`.
+
+Good:
+`store_fact(fact="...", namespace="projects", tags=["personal-memory", "architecture", "decision"], primary_tag="personal-memory")`
+
+Avoid:
+`store_fact(fact="...", namespace="personal-memory", tags=["architecture", "decision"])`
 ````

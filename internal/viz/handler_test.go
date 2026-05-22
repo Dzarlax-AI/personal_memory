@@ -211,6 +211,31 @@ func TestPointToNode_UsesLegacyTextFallbacks(t *testing.T) {
 	}
 }
 
+func TestPointToNode_ExposesPrimaryTag(t *testing.T) {
+	node := pointToNode(qdrant.ScrollPoint{
+		ID: "1",
+		Payload: map[string]interface{}{
+			"text":        "fact text",
+			"tags":        []interface{}{"health", "decision"},
+			"primary_tag": "health",
+		},
+	})
+
+	if node["primary_tag"] != "health" {
+		t.Fatalf("primary_tag = %q, want health", node["primary_tag"])
+	}
+}
+
+func TestNormalizeFactTags_AddsPrimaryTag(t *testing.T) {
+	tags, primary := normalizeFactTags([]string{"decision"}, "health")
+	if primary != "health" {
+		t.Fatalf("primary = %q, want health", primary)
+	}
+	if len(tags) != 2 || tags[0] != "decision" || tags[1] != "health" {
+		t.Fatalf("tags = %#v, want sorted [decision health]", tags)
+	}
+}
+
 func TestPointToNode_ExposesPayloadKeysForTextlessPoints(t *testing.T) {
 	node := pointToNode(qdrant.ScrollPoint{
 		ID:      "1",
