@@ -448,7 +448,11 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		payload["namespace"] = ns
 	}
 	if tags := tagsParam(args); tags != nil {
-		normalizedTags, primaryTag := normalizeFactTags(tags, strParam(args, "primary_tag"))
+		primary := strParam(args, "primary_tag")
+		if primary == "" {
+			primary = stringFromPayload(payload["primary_tag"])
+		}
+		normalizedTags, primaryTag := normalizeFactTags(tags, primary)
 		payload["tags"] = normalizedTags
 		payload["primary_tag"] = primaryTag
 	} else if primary := strParam(args, "primary_tag"); primary != "" {

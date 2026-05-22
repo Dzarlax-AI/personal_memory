@@ -127,7 +127,7 @@ function renderHeatmap(nodes) {
 }
 
 function navigateToGraph(namespace, projectTag) {
-  graphFilter = { namespace: graphNamespaceFilter(namespace), projectTag: projectTag || '', text: '' };
+  graphFilter = { namespace: graphNamespaceFilter(namespace), projectTag: '', primaryTag: projectTag || '', text: '' };
   activateTab('graph');
   const sel = document.getElementById('ns-filter');
   if (sel) sel.value = graphFilter.namespace;

@@ -136,6 +136,7 @@ func (h *Handler) apiGraph(w http.ResponseWriter, r *http.Request) {
 	}
 	namespace := r.URL.Query().Get("namespace")
 	tag := r.URL.Query().Get("tag")
+	primaryTag := r.URL.Query().Get("primary_tag")
 	textState := r.URL.Query().Get("text")
 
 	points, err := h.qdrant.ScrollAll(r.Context(), nil, true)
@@ -143,7 +144,7 @@ func (h *Handler) apiGraph(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	points = filterGraphPoints(points, namespace, tag, textState)
+	points = filterGraphPoints(points, namespace, tag, primaryTag, textState)
 
 	nodes := make([]map[string]interface{}, 0, len(points))
 	for _, p := range points {
@@ -183,8 +184,8 @@ func (h *Handler) apiGraph(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func filterGraphPoints(points []qdrant.ScrollPoint, namespace, tag, textState string) []qdrant.ScrollPoint {
-	if namespace == "" && tag == "" && textState == "" {
+func filterGraphPoints(points []qdrant.ScrollPoint, namespace, tag, primaryTag, textState string) []qdrant.ScrollPoint {
+	if namespace == "" && tag == "" && primaryTag == "" && textState == "" {
 		return points
 	}
 
@@ -201,6 +202,11 @@ func filterGraphPoints(points []qdrant.ScrollPoint, namespace, tag, textState st
 		}
 		if tag != "" && !payloadHasTag(p.Payload["tags"], tag) {
 			continue
+		}
+		if primaryTag != "" {
+			if primary, _ := p.Payload["primary_tag"].(string); primary != primaryTag {
+				continue
+			}
 		}
 		text, _ := payloadText(p.Payload)
 		if textState == "missing" && text != "" {

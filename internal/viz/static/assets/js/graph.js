@@ -6,6 +6,7 @@ async function loadGraph() {
   const threshold = document.getElementById('threshold').value;
   const selectedNamespace = graphFilter.namespace || document.getElementById('ns-filter').value;
   const selectedTag = graphFilter.projectTag || document.getElementById('tag-filter').value;
+  const selectedPrimaryTag = graphFilter.primaryTag || '';
   const selectedText = graphFilter.text || document.getElementById('text-filter').value;
   try {
     await loadFacts();
@@ -14,7 +15,8 @@ async function loadGraph() {
   }
   const params = new URLSearchParams({ threshold });
   if (selectedNamespace) params.set('namespace', selectedNamespace);
-  if (selectedTag) params.set('tag', selectedTag);
+  if (selectedPrimaryTag) params.set('primary_tag', selectedPrimaryTag);
+  else if (selectedTag) params.set('tag', selectedTag);
   if (selectedText) params.set('text', selectedText);
   const res = await fetch(`${BASE}/api/graph?${params.toString()}`);
   graphDataCache = await res.json();
@@ -23,7 +25,11 @@ async function loadGraph() {
   populateNsFilter(filterNodes, selectedNamespace);
   populateTagFilter(filterNodes, selectedNamespace, selectedTag);
   const tagLabel = document.getElementById('tag-filter-label');
-  if (selectedTag) {
+  if (selectedPrimaryTag) {
+    graphFilter.projectTag = '';
+    tagLabel.textContent = `primary: ${selectedPrimaryTag}`;
+    tagLabel.style.display = '';
+  } else if (selectedTag) {
     graphFilter.projectTag = selectedTag;
     tagLabel.textContent = `#${selectedTag}`;
     tagLabel.style.display = '';
@@ -66,8 +72,10 @@ function renderGraphVis(graphData) {
   const nsVal = document.getElementById('ns-filter').value;
   let filtered = graphData.nodes;
   if (nsVal) filtered = filtered.filter(n => matchesNamespaceFilter(n.namespace, nsVal));
-  if (graphFilter.projectTag) {
-    filtered = filtered.filter(n => (n.tags || []).includes(graphFilter.projectTag));
+  if (graphFilter.primaryTag) {
+    filtered = filtered.filter(n => primaryTag(n) === graphFilter.primaryTag);
+  } else if (graphFilter.projectTag) {
+    filtered = filtered.filter(n => tagsList(n.tags).includes(graphFilter.projectTag));
   }
   if (graphFilter.text === 'missing') {
     filtered = filtered.filter(n => n.text_missing);
@@ -237,7 +245,7 @@ document.getElementById('detail-close').addEventListener('click', hideDetail);
 document.getElementById('save-tags').addEventListener('click', saveSelectedTags);
 
 document.getElementById('reset-graph-filters').addEventListener('click', () => {
-  graphFilter = { namespace: '', projectTag: '', text: '' };
+  graphFilter = { namespace: '', projectTag: '', primaryTag: '', text: '' };
   document.getElementById('ns-filter').value = '';
   document.getElementById('tag-filter').value = '';
   document.getElementById('text-filter').value = '';
@@ -254,6 +262,7 @@ document.getElementById('ns-filter').addEventListener('change', () => {
   graphFilter = {
     namespace: document.getElementById('ns-filter').value,
     projectTag: document.getElementById('tag-filter').value,
+    primaryTag: '',
     text: document.getElementById('text-filter').value,
   };
   loadGraph();
@@ -262,6 +271,7 @@ document.getElementById('tag-filter').addEventListener('change', () => {
   graphFilter = {
     namespace: document.getElementById('ns-filter').value,
     projectTag: document.getElementById('tag-filter').value,
+    primaryTag: '',
     text: document.getElementById('text-filter').value,
   };
   loadGraph();
@@ -270,6 +280,7 @@ document.getElementById('text-filter').addEventListener('change', () => {
   graphFilter = {
     namespace: document.getElementById('ns-filter').value,
     projectTag: document.getElementById('tag-filter').value,
+    primaryTag: '',
     text: document.getElementById('text-filter').value,
   };
   loadGraph();
