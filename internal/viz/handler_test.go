@@ -228,3 +228,21 @@ func TestPointToNode_ExposesPayloadKeysForTextlessPoints(t *testing.T) {
 		t.Fatalf("payload_keys = %#v, want [recall_count]", keys)
 	}
 }
+
+func TestPointToNode_DoesNotTreatRecoveryDiagnosticsAsFactText(t *testing.T) {
+	node := pointToNode(qdrant.ScrollPoint{
+		ID: "1",
+		Payload: map[string]interface{}{
+			"recovery_status": "lost_text",
+			"nearest_text":    "nearest neighbor is not the lost fact text",
+			"nearest_score":   0.91,
+		},
+	})
+
+	if node["text"] != "" {
+		t.Fatalf("text = %q, want empty text for recovery diagnostics", node["text"])
+	}
+	if node["text_missing"] != true {
+		t.Fatalf("text_missing = %#v, want true", node["text_missing"])
+	}
+}

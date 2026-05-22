@@ -335,6 +335,9 @@ func deepPayloadText(v interface{}, depth int, path string) (string, string) {
 		}
 		sort.Strings(keys)
 		for _, key := range keys {
+			if isDiagnosticTextKey(key) {
+				continue
+			}
 			nextPath := key
 			if path != "" {
 				nextPath = path + "." + key
@@ -363,6 +366,11 @@ func deepPayloadText(v interface{}, depth int, path string) (string, string) {
 		}
 	}
 	return "", ""
+}
+
+func isDiagnosticTextKey(key string) bool {
+	k := strings.ToLower(key)
+	return k == "nearest_text" || k == "recovered_text" || strings.HasPrefix(k, "nearest_") || strings.HasPrefix(k, "recovery_")
 }
 
 func isTextLikeKey(key string) bool {
