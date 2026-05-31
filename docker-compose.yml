@@ -42,7 +42,7 @@ services:
       - "traefik.enable=true"
       # MCP endpoints — no Traefik auth, app checks X-API-Key
       - "traefik.http.routers.memory-mcp.entrypoints=https"
-      - "traefik.http.routers.memory-mcp.rule=Host(`mcp.${MEMORY_DOMAIN}`) && (PathPrefix(`/memory`) || PathPrefix(`/todoist`) || Path(`/health`))"
+      - "traefik.http.routers.memory-mcp.rule=Host(`mcp.${MEMORY_DOMAIN}`) && (PathPrefix(`/memory`) || PathPrefix(`/todoist`) || Path(`/.well-known/oauth-protected-resource`) || Path(`/health`))"
       - "traefik.http.routers.memory-mcp.tls.certresolver=letsEncrypt"
       - "traefik.http.services.memory-mcp.loadbalancer.server.port=8000"
       # Viz dashboard — protected by Authentik ForwardAuth

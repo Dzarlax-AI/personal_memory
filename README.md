@@ -63,7 +63,9 @@ graph TD
 
 ### Auth
 
-- **MCP endpoints** (`/memory`, `/todoist`, `/health`) — protected by application-level auth. Accepted formats: `X-API-Key: <key>` or `Authorization: Bearer <key>`
+- **MCP endpoints** (`/memory`, `/todoist`) — protected by application-level auth. Existing clients can use `X-API-Key: <key>` or `Authorization: Bearer <API_KEY>`.
+- **ChatGPT Apps / connectors** — optional OAuth/OIDC mode for authenticated MCP onboarding. When `OAUTH_ENABLED=true`, unauthenticated MCP requests return a `WWW-Authenticate` challenge that points to `/.well-known/oauth-protected-resource`, and OAuth bearer JWTs are validated by issuer, audience, expiration, and scope before tools run.
+- **Health** (`/health`) — public liveness endpoint.
 - **Viz dashboard** (`/viz`) — protected by Authentik ForwardAuth (OIDC) at Traefik layer, so browsers get a proper OIDC login flow
 
 ### Visualization (`mcp.<domain>/viz`)
@@ -174,6 +176,14 @@ docker compose up -d
 | `MEMORY_USER` | Username stored as metadata on facts |
 | `ENABLE_TODOIST` | Set to `true` to enable Todoist MCP server (default: `false`) |
 | `ENABLE_VIZ` | Set to `true` to enable visualization dashboard (default: `false`) |
+| `OAUTH_ENABLED` | Set to `true` to allow ChatGPT Apps / connector OAuth bearer tokens in addition to `API_KEY`. |
+| `OAUTH_ISSUER` | OAuth/OIDC issuer URL, for example an Authentik provider URL. |
+| `OAUTH_RESOURCE` | Canonical MCP resource URL, usually `https://mcp.<domain>`. Defaults from `MEMORY_DOMAIN` when omitted. |
+| `OAUTH_AUDIENCE` | Expected JWT audience. Defaults to `OAUTH_RESOURCE`. |
+| `OAUTH_SCOPES` | Comma-separated required OAuth scopes. First-pass ChatGPT setup uses `memory:mcp`. |
+| `OAUTH_JWKS_URL` | Optional JWKS URL. If omitted, the server discovers `jwks_uri` from `OAUTH_ISSUER/.well-known/openid-configuration`. |
+| `OAUTH_AUTHORIZATION_SERVERS` | Optional comma-separated authorization server URLs for protected-resource metadata. Defaults to `OAUTH_ISSUER`. |
+| `OAUTH_RESOURCE_DOCUMENTATION` | Optional documentation URL returned in protected-resource metadata. |
 | `TODOIST_TOKEN` | Todoist API token — get it at Settings → Integrations → Developer (only needed when `ENABLE_TODOIST=true`) |
 | `KEEP_SNAPSHOTS` | Number of snapshots to retain (default: `7`) |
 | `BACKUP_INTERVAL_HOURS` | How often the backup runs (default: `24`) |
@@ -325,6 +335,18 @@ claude mcp add --transport http todoist https://mcp.yourdomain.com/todoist \
 A ready-to-edit example is also available in [`claude_desktop_config.example.json`](./claude_desktop_config.example.json).
 
 **Web-based clients (Perplexity web, etc.)** — use Streamable HTTP transport with `Authorization: Bearer <API_KEY>` header directly (no proxy needed).
+
+**ChatGPT Apps / connectors** — use the `/memory` MCP URL as the server URL:
+```text
+https://mcp.yourdomain.com/memory
+```
+
+For authenticated onboarding, configure a dedicated OAuth/OIDC application in Authentik and enable OAuth in `memory-mcp`. The server exposes protected resource metadata at:
+```text
+https://mcp.yourdomain.com/.well-known/oauth-protected-resource
+```
+
+First-pass recommended scope is `memory:mcp`, memory/RAG only, personal single-user use. Copy the ChatGPT callback URL shown in the app management page into Authentik's allowed redirect URIs.
 
 ## Building
 

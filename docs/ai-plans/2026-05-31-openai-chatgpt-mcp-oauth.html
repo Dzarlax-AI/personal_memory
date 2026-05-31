@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Implementation Plan: OpenAI ChatGPT MCP OAuth</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #172033;
+      --muted: #5b6475;
+      --line: #d9dee7;
+      --code: #eef1f5;
+      --accent: #1f6feb;
+      --warn: #b45309;
+      --risk: #b91c1c;
+      --ok: #047857;
+    }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    main { max-width: 1120px; margin: 0 auto; padding: 32px; }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 20px;
+      margin: 16px 0;
+    }
+    h1, h2, h3 { line-height: 1.2; margin-top: 0; }
+    h1 { font-size: 30px; margin-bottom: 8px; }
+    h2 { font-size: 20px; }
+    h3 { font-size: 16px; margin-top: 18px; }
+    p { margin: 8px 0; }
+    ul, ol { padding-left: 24px; }
+    li { margin: 6px 0; }
+    code {
+      background: var(--code);
+      padding: 2px 5px;
+      border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 0.95em;
+    }
+    pre {
+      background: #111827;
+      color: #f9fafb;
+      border-radius: 8px;
+      padding: 14px;
+      overflow-x: auto;
+    }
+    pre code { background: transparent; padding: 0; color: inherit; }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: #dbeafe;
+      color: #1e3a8a;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .meta { color: var(--muted); margin-top: 0; }
+    .callout { border-left: 4px solid var(--accent); }
+    .approval { border-left: 4px solid var(--warn); }
+    .risk { border-left: 4px solid var(--risk); }
+    .done { border-left: 4px solid var(--ok); }
+    table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+    th, td { border: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: top; }
+    th { background: #f3f4f6; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Implementation Plan: OpenAI ChatGPT MCP OAuth</h1>
+  <p class="badge">Approval required before implementation</p>
+  <p class="meta">Created 2026-05-31 for <code>D:\Projects\Code\Personal\personal_memory</code>.</p>
+
+  <section>
+    <h2>Task Summary</h2>
+    <p>
+      Add OAuth/OIDC-compatible authentication for the existing remote MCP endpoints so the
+      <code>personal-memory</code> server can be connected as a ChatGPT Apps/connector MCP server,
+      while preserving the current static <code>API_KEY</code> behavior for Claude, mcp-remote,
+      and direct Responses API use.
+    </p>
+    <p>
+      The OpenAI API remote MCP path can use a <code>server_url</code> plus optional authorization
+      token. ChatGPT Apps authenticated MCP onboarding is stricter: it expects MCP OAuth 2.1
+      discovery, a protected-resource metadata endpoint, an OAuth authorization server, and bearer
+      access tokens issued by that flow.
+    </p>
+  </section>
+
+  <section>
+    <h2>Current Behavior</h2>
+    <ul>
+      <li><code>cmd/server/main.go</code> creates two Streamable HTTP MCP servers: <code>/memory</code> and optional <code>/todoist</code>.</li>
+      <li><code>internal/middleware/auth.go</code> accepts either <code>X-API-Key</code> or <code>Authorization: Bearer &lt;API_KEY&gt;</code>.</li>
+      <li>Unauthenticated requests currently return plain <code>401 unauthorized</code> without <code>WWW-Authenticate</code> metadata.</li>
+      <li>There is no <code>/.well-known/oauth-protected-resource</code> route.</li>
+      <li>There is no JWT/OIDC validation, JWKS fetching, issuer validation, audience validation, or scope validation.</li>
+      <li><code>docker-compose.yml</code> exposes <code>/memory</code>, <code>/todoist</code>, and <code>/health</code> through Traefik for the repo-local compose file.</li>
+      <li>The production deploy in <code>D:\Projects\Code\Personal\personal_ai_stack\deploy\memory\docker-compose.yml</code> exposes <code>/memory</code> and <code>/health</code>, but not <code>/todoist</code>.</li>
+      <li>Authentik is already present as a Traefik ForwardAuth layer for <code>/viz</code>, but it is not used by application-level MCP auth.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Desired Behavior</h2>
+    <ul>
+      <li>Existing clients using <code>API_KEY</code> continue to work without config changes.</li>
+      <li>ChatGPT can discover protected resource metadata at <code>https://mcp.&lt;domain&gt;/.well-known/oauth-protected-resource</code>.</li>
+      <li>When ChatGPT calls an MCP endpoint without auth, the server returns <code>401</code> with a valid <code>WWW-Authenticate</code> challenge pointing to the protected-resource metadata URL.</li>
+      <li>When ChatGPT sends an OAuth bearer access token, the server validates issuer, audience/resource, expiration, and required scopes before invoking MCP handlers.</li>
+      <li>Tool metadata should include read/write/destructive hints where supported by <code>mcp-go</code>, so ChatGPT has better approval and safety signals.</li>
+      <li>Deployment documentation clearly distinguishes API-key auth from ChatGPT OAuth auth.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Assumptions and Unknowns</h2>
+    <h3>Assumptions</h3>
+    <ul>
+      <li>Use Authentik as the authorization server if it can support the required ChatGPT OAuth flow for this app.</li>
+      <li>Keep API key auth enabled by default; OAuth is additive and controlled by env vars.</li>
+      <li>Expose only the <code>/memory</code> MCP server in the first ChatGPT app. Todoist is currently out of scope.</li>
+      <li>Use one coarse MCP scope first, such as <code>memory:mcp</code>, unless ChatGPT/Auth provider setup makes fine-grained scopes cheap.</li>
+      <li>Target personal, single-user use for this implementation. Do not design a public multi-user connector in the first pass.</li>
+      <li>Do not implement a custom OAuth authorization server inside <code>personal-memory</code> unless Authentik cannot support the required flow.</li>
+    </ul>
+    <h3>Unknowns to Resolve Before Code</h3>
+    <ul>
+      <li>Whether Authentik supports ChatGPT's selected client registration mode for this app: predefined client, DCR, or CIMD.</li>
+      <li>Whether Authentik can preserve the OAuth <code>resource</code> parameter and issue tokens with the expected audience claim for <code>https://mcp.&lt;domain&gt;</code>.</li>
+      <li>The exact production ChatGPT callback URL shown in the app management page, which must be allowlisted in Authentik.</li>
+      <li>Whether one broad scope (<code>memory:mcp</code>) is sufficient for ChatGPT onboarding, or whether Authentik/OpenAI setup forces more granular scopes.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Files Likely to Change</h2>
+    <table>
+      <thead>
+        <tr><th>Path</th><th>Reason</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>internal/config/config.go</code></td><td>Add OAuth config: enable flag, issuer, resource URL, audience, required scopes, metadata URL override if needed.</td></tr>
+        <tr><td><code>internal/middleware/auth.go</code></td><td>Replace API-key-only middleware with composite auth: API key OR validated OAuth bearer token.</td></tr>
+        <tr><td><code>internal/middleware/auth_test.go</code></td><td>Preserve current API key tests and add OAuth challenge, metadata, and token-verifier tests.</td></tr>
+        <tr><td><code>internal/oauth/metadata.go</code></td><td>New small package for protected resource metadata response and challenge formatting.</td></tr>
+        <tr><td><code>internal/oauth/verifier.go</code></td><td>New small package for OIDC/JWKS token verification behind a testable interface.</td></tr>
+        <tr><td><code>cmd/server/main.go</code></td><td>Mount well-known metadata route before protected MCP routes and wire the composite middleware.</td></tr>
+        <tr><td><code>internal/memory/server.go</code></td><td>Add MCP tool annotations: read-only hints for read tools; destructive/write hints for write tools.</td></tr>
+        <tr><td><code>internal/rag/server.go</code></td><td>Add annotations for <code>search_documents</code> and <code>reindex_documents</code>.</td></tr>
+        <tr><td><code>internal/todoist/server.go</code></td><td>Add annotations if Todoist remains exposed; likely keep out of ChatGPT first pass unless explicitly approved.</td></tr>
+        <tr><td><code>.env.example</code></td><td>Document new OAuth environment variables without secrets.</td></tr>
+        <tr><td><code>README.md</code></td><td>Add ChatGPT Apps setup notes, Authentik checklist, and smoke-test commands.</td></tr>
+        <tr><td><code>docker-compose.yml</code></td><td>Expose <code>/.well-known/oauth-protected-resource</code> through Traefik in the repo-local compose file.</td></tr>
+        <tr><td><code>D:\Projects\Code\Personal\personal_ai_stack\deploy\memory\docker-compose.yml</code></td><td>Production deploy must expose the same well-known path and pass OAuth env vars. This is a separate repo and should be changed only during the approved implementation/deploy phase.</td></tr>
+        <tr><td><code>go.mod</code>, <code>go.sum</code></td><td>Add an OIDC/JWT verification dependency if standard library-only validation is not practical.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Proposed Architecture</h2>
+    <ol>
+      <li>
+        Add an <code>OAuthConfig</code> section to <code>config.Config</code>:
+        <code>OAUTH_ENABLED</code>, <code>OAUTH_ISSUER</code>, <code>OAUTH_RESOURCE</code>,
+        <code>OAUTH_AUDIENCE</code>, <code>OAUTH_SCOPES</code>, and optionally
+        <code>OAUTH_JWKS_URL</code> if provider discovery is insufficient.
+      </li>
+      <li>
+        Keep API key auth as the compatibility path. If <code>API_KEY</code> matches, allow the request.
+      </li>
+      <li>
+        If API key does not match and OAuth is enabled, validate <code>Authorization: Bearer &lt;jwt&gt;</code>
+        as an OAuth access token.
+      </li>
+      <li>
+        If neither auth path succeeds, return a challenge:
+        <pre><code>WWW-Authenticate: Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource", scope="memory:mcp"</code></pre>
+      </li>
+      <li>
+        Serve protected-resource metadata:
+        <pre><code>{
+  "resource": "https://mcp.example.com",
+  "authorization_servers": ["https://auth.example.com/application/o/personal-memory/"],
+  "scopes_supported": ["memory:mcp"],
+  "resource_documentation": "https://mcp.example.com/memory/operational"
+}</code></pre>
+      </li>
+      <li>
+        Use an interface for token verification so unit tests can cover middleware behavior without needing live Authentik or network access.
+      </li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Implementation Steps</h2>
+    <ol>
+      <li>Confirm Authentik app settings: issuer URL, supported discovery document, client registration mode, scopes, audience behavior, and ChatGPT redirect URL.</li>
+      <li>Write tests for protected-resource metadata JSON and <code>WWW-Authenticate</code> challenge formatting.</li>
+      <li>Add config fields and env parsing for OAuth settings, with tests for defaults and enabled mode.</li>
+      <li>Refactor middleware into a composite authorizer while preserving all current <code>APIKeyAuth</code> tests.</li>
+      <li>Add fake-token-verifier tests for: valid OAuth token, expired/invalid token, missing scope, wrong audience, API key fallback, and disabled OAuth.</li>
+      <li>Implement the OIDC/JWKS verifier after tests define the middleware contract.</li>
+      <li>Mount <code>/.well-known/oauth-protected-resource</code> and wire middleware in <code>cmd/server/main.go</code>.</li>
+      <li>Add MCP annotations for read/write/destructive tools using <code>mcp-go</code> annotation options.</li>
+      <li>Update README and <code>.env.example</code> with ChatGPT/Auth setup.</li>
+      <li>Update repo-local Traefik labels for the well-known endpoint.</li>
+      <li>After local tests pass, update the production deploy config in <code>personal_ai_stack</code> during the deploy phase.</li>
+      <li>Deploy, verify health, verify metadata, verify 401 challenge, verify API-key clients, then connect from ChatGPT and inspect server logs.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Auth and Permission Model</h2>
+    <ul>
+      <li><strong>Compatibility:</strong> API key remains valid for existing MCP clients.</li>
+      <li><strong>OAuth bearer:</strong> Valid JWT from the configured issuer is accepted only when audience/resource and scope checks pass.</li>
+      <li><strong>Scopes:</strong> First pass should use <code>memory:mcp</code> for the whole memory endpoint. Optional later split: <code>memory:read</code> and <code>memory:write</code>.</li>
+      <li><strong>Tool exposure:</strong> First ChatGPT app should expose memory/RAG only. Todoist tools remain out of scope.</li>
+      <li><strong>Audience/resource:</strong> Exact Authentik behavior is unknown. Verify whether Authentik can issue access tokens with a stable audience/resource claim before implementing token validation.</li>
+      <li><strong>Users:</strong> This is for personal use. Multi-user account mapping, tenant isolation, and per-user memory stores are explicitly out of scope.</li>
+      <li><strong>Approvals:</strong> ChatGPT-side approvals are useful but not a substitute for server-side scope validation.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Deployment Impact</h2>
+    <ul>
+      <li>The public route must include <code>/.well-known/oauth-protected-resource</code>; otherwise ChatGPT cannot discover auth metadata.</li>
+      <li>Production compose currently exposes only <code>/memory</code> and <code>/health</code> for MCP. It must be updated for the well-known path.</li>
+      <li>New env vars must be added to production <code>.env</code> or compose environment without committing secrets.</li>
+      <li>Authentik must allow the ChatGPT callback URL from the app management page.</li>
+      <li>If Authentik cannot issue a resource/audience-compatible token, pause and decide between an Authentik customization and a small dedicated OAuth authorization server.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Test Plan</h2>
+    <h3>Local Automated Tests</h3>
+    <ul>
+      <li><code>go test ./internal/middleware ./internal/config ./internal/oauth</code></li>
+      <li><code>go test ./...</code></li>
+    </ul>
+    <h3>Local HTTP Checks</h3>
+    <ul>
+      <li><code>curl http://localhost:8000/health</code> returns <code>ok</code>.</li>
+      <li><code>curl -i http://localhost:8000/memory</code> returns <code>401</code> and a <code>WWW-Authenticate</code> challenge when auth is configured.</li>
+      <li><code>curl http://localhost:8000/.well-known/oauth-protected-resource</code> returns metadata with expected resource, auth server, and scopes.</li>
+      <li><code>curl -H "X-API-Key: $API_KEY" http://localhost:8000/memory</code> still reaches the MCP handler path.</li>
+    </ul>
+    <h3>Production Smoke Tests</h3>
+    <ul>
+      <li><code>curl https://mcp.&lt;domain&gt;/health</code> returns <code>ok</code>.</li>
+      <li><code>curl https://mcp.&lt;domain&gt;/.well-known/oauth-protected-resource</code> returns the production metadata.</li>
+      <li><code>curl -i https://mcp.&lt;domain&gt;/memory</code> returns the OAuth challenge when no credentials are provided.</li>
+      <li>Existing Claude/mcp-remote configuration still lists and calls memory tools with <code>API_KEY</code>.</li>
+      <li>ChatGPT app connection completes OAuth, then lists only memory/RAG MCP tools and can call <code>recall_facts</code>.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Manual QA Checklist</h2>
+    <ul>
+      <li>ChatGPT connector setup no longer rejects the endpoint for missing OAuth metadata.</li>
+      <li>OAuth consent screen shows expected app name and scopes.</li>
+      <li>ChatGPT can list tools after auth completes.</li>
+      <li>A read-only query such as <code>recall_facts</code> works from ChatGPT.</li>
+      <li>Write tools either require explicit ChatGPT approval or are not exposed in the first app configuration.</li>
+      <li>Existing local and remote clients using <code>X-API-Key</code> still work.</li>
+      <li>Server logs do not print access tokens, authorization codes, or secrets.</li>
+    </ul>
+  </section>
+
+  <section class="risk">
+    <h2>Risks and Edge Cases</h2>
+    <ul>
+      <li>Authentik may not support the exact MCP OAuth profile ChatGPT expects without extra configuration.</li>
+      <li>Audience/resource mismatch is the most likely integration failure: ChatGPT sends <code>resource</code>, but the provider may issue tokens with only client-id audience.</li>
+      <li>OIDC ID tokens are not the same as OAuth access tokens. The server should validate the token type and claims expected for API access.</li>
+      <li>Accepting any valid Authentik token without audience/scope checks would over-authorize unrelated clients.</li>
+      <li>Adding OAuth must not accidentally disable API key auth for existing clients.</li>
+      <li>Tool annotations improve model behavior but do not enforce permissions by themselves.</li>
+      <li>Production deploy changes live in a sibling repository; code and deploy changes need coordinated review.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Rollback Plan</h2>
+    <ul>
+      <li>Set <code>OAUTH_ENABLED=false</code> or remove OAuth env vars to return to API-key-only behavior.</li>
+      <li>Revert the production Traefik route for the well-known path if it causes routing issues.</li>
+      <li>Redeploy the previous GHCR image tag if the new binary breaks existing clients.</li>
+      <li>Keep Authentik app changes isolated so the OAuth client can be disabled without affecting <code>/viz</code> ForwardAuth.</li>
+    </ul>
+  </section>
+
+  <section class="done">
+    <h2>Implementation Status</h2>
+    <p>Updated after the approved first implementation pass on 2026-05-31.</p>
+    <ul>
+      <li>Added additive OAuth config fields and env parsing while preserving existing <code>API_KEY</code> auth.</li>
+      <li>Added <code>/.well-known/oauth-protected-resource</code> metadata support and <code>WWW-Authenticate</code> challenge generation.</li>
+      <li>Added a JWKS-backed RS256 JWT verifier that checks issuer, audience, expiration, and required scopes.</li>
+      <li>Wired OAuth bearer validation into the MCP route middleware as an alternative to the existing API key path.</li>
+      <li>Added MCP tool annotations for memory, RAG, and optional Todoist tools.</li>
+      <li>Updated repo-local Traefik labels, README, and <code>.env.example</code>.</li>
+      <li>Left production deploy config in <code>D:\Projects\Code\Personal\personal_ai_stack</code> unchanged for a separate deploy step.</li>
+    </ul>
+    <p>Verification run: <code>go test ./...</code> passed after updating <code>go.sum</code>. The first non-escalated <code>go mod tidy</code> attempt failed because the sandbox could not access the Windows Go build cache; rerunning with approved cache access succeeded.</p>
+    <p>Known limitation: live Authentik claims are still unverified. The next integration step is to create/configure the Authentik OAuth provider, copy the ChatGPT callback URL, and inspect the resulting access token claims before enabling production OAuth.</p>
+  </section>
+
+  <section>
+    <h2>Open Questions</h2>
+    <ol>
+      <li>Do we want one broad scope (<code>memory:mcp</code>) for the first pass, or separate read/write scopes immediately? Current plan recommends one broad scope first.</li>
+      <li>Can Authentik issue access tokens with <code>aud=https://mcp.&lt;domain&gt;</code> or another stable resource claim that the MCP server can verify?</li>
+      <li>What exact ChatGPT OAuth callback URL is shown in the app management page and must be allowlisted in Authentik?</li>
+    </ol>
+  </section>
+
+  <section class="approval">
+    <h2>Approval Gate</h2>
+    <p>
+      Implementation must not start until this plan is explicitly approved or revised. No production
+      code, deployment config, Authentik configuration, or ChatGPT app configuration should be changed
+      before approval.
+    </p>
+  </section>
+</main>
+</body>
+</html>

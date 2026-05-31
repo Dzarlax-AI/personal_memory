@@ -50,6 +50,10 @@ func (s *Server) InitCollection(ctx context.Context) error {
 func (s *Server) RegisterTools(srv *server.MCPServer) {
 	srv.AddTool(mcp.NewTool("store_fact",
 		mcp.WithDescription("Store a fact in semantic memory. Deduplicates (cosine >= threshold) and warns on contradictions."),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("fact", mcp.Description("The fact to store"), mcp.Required()),
 		mcp.WithString("tags", mcp.Description("Comma-separated semantic tags")),
 		mcp.WithString("primary_tag", mcp.Description("Single primary tag for overview grouping; must also be present in tags")),
@@ -60,6 +64,10 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 
 	srv.AddTool(mcp.NewTool("recall_facts",
 		mcp.WithDescription("Semantic search for facts. Returns facts with relevance scores."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("query", mcp.Description("Natural language search query"), mcp.Required()),
 		mcp.WithString("namespace", mcp.Description("Filter by namespace")),
 		mcp.WithNumber("limit", mcp.Description("Max results (default 5)")),
@@ -67,6 +75,10 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 
 	srv.AddTool(mcp.NewTool("update_fact",
 		mcp.WithDescription("Find a fact by similarity to old_query and replace it with new_fact."),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("old_query", mcp.Description("Query to find the fact to update"), mcp.Required()),
 		mcp.WithString("new_fact", mcp.Description("New fact text"), mcp.Required()),
 		mcp.WithString("tags", mcp.Description("Comma-separated semantic tags")),
@@ -77,12 +89,20 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 
 	srv.AddTool(mcp.NewTool("delete_fact",
 		mcp.WithDescription("Find a fact by similarity and delete it."),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("query", mcp.Description("Query to find the fact to delete"), mcp.Required()),
 		mcp.WithString("namespace", mcp.Description("Filter by namespace")),
 	), s.deleteFact)
 
 	srv.AddTool(mcp.NewTool("forget_old",
 		mcp.WithDescription("Delete facts older than N days. Skips permanent facts. Defaults to dry run."),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithNumber("days", mcp.Description("Age threshold in days (default 90)")),
 		mcp.WithString("namespace", mcp.Description("Filter by namespace")),
 		mcp.WithBoolean("dry_run", mcp.Description("If true, only report what would be deleted (default true)")),
@@ -90,11 +110,19 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 
 	srv.AddTool(mcp.NewTool("import_facts",
 		mcp.WithDescription("Bulk import facts from JSON array."),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("facts", mcp.Description("JSON array of fact objects"), mcp.Required()),
 	), s.importFacts)
 
 	srv.AddTool(mcp.NewTool("find_related",
 		mcp.WithDescription("Find related but non-duplicate facts (score 0.60-0.97)."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("query", mcp.Description("Search query"), mcp.Required()),
 		mcp.WithString("namespace", mcp.Description("Filter by namespace")),
 		mcp.WithNumber("limit", mcp.Description("Max results (default 5)")),
@@ -102,25 +130,45 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 
 	srv.AddTool(mcp.NewTool("list_facts",
 		mcp.WithDescription("List all facts with metadata."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("namespace", mcp.Description("Filter by namespace")),
 	), s.listFacts)
 
 	srv.AddTool(mcp.NewTool("get_stats",
 		mcp.WithDescription("Get memory statistics: counts, namespaces, tags, most recalled."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
 	), s.getStats)
 
 	srv.AddTool(mcp.NewTool("list_tags",
 		mcp.WithDescription("List all tags with counts."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("namespace", mcp.Description("Filter by namespace")),
 	), s.listTags)
 
 	srv.AddTool(mcp.NewTool("export_facts",
 		mcp.WithDescription("Export all facts as JSON."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("namespace", mcp.Description("Filter by namespace")),
 	), s.exportFacts)
 
 	srv.AddTool(mcp.NewTool("get_operational_context",
 		mcp.WithDescription("Return operational context: all permanent facts plus top facts by recall count. Call at session start for automatic context loading."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("namespace", mcp.Description("Filter by namespace")),
 		mcp.WithNumber("top_recalled", mcp.Description("Number of top recalled non-permanent facts to include (default 10)")),
 	), s.getOperationalContext)

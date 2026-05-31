@@ -14,6 +14,7 @@ import (
 	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
 	"github.com/Dzarlax-AI/personal-memory/internal/memory"
 	"github.com/Dzarlax-AI/personal-memory/internal/middleware"
+	oauthauth "github.com/Dzarlax-AI/personal-memory/internal/oauth"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 	"github.com/Dzarlax-AI/personal-memory/internal/rag"
 	"github.com/Dzarlax-AI/personal-memory/internal/todoist"
@@ -67,9 +68,47 @@ func main() {
 		w.Write([]byte("ok"))
 	})
 
+	var verifier oauthauth.TokenVerifier
+	if cfg.OAuth.Enabled {
+		jwksURL := cfg.OAuth.JWKSURL
+		if jwksURL == "" {
+			discovered, err := oauthauth.DiscoverJWKSURL(ctx, cfg.OAuth.Issuer)
+			if err != nil {
+				slog.Error("failed to discover OAuth JWKS URL", "error", err)
+				os.Exit(1)
+			}
+			jwksURL = discovered
+		}
+		var err error
+		verifier, err = oauthauth.NewJWTVerifier(oauthauth.JWTVerifierConfig{
+			Issuer:   cfg.OAuth.Issuer,
+			Audience: cfg.OAuth.Audience,
+			JWKSURL:  jwksURL,
+			Scopes:   cfg.OAuth.Scopes,
+		})
+		if err != nil {
+			slog.Error("failed to configure OAuth verifier", "error", err)
+			os.Exit(1)
+		}
+		metadata := oauthauth.NewProtectedResourceMetadata(oauthauth.MetadataConfig{
+			Resource:              cfg.OAuth.Resource,
+			AuthorizationServers:  cfg.OAuth.AuthorizationServers,
+			Scopes:                cfg.OAuth.Scopes,
+			ResourceDocumentation: cfg.OAuth.ResourceDocumentation,
+		})
+		r.Get("/.well-known/oauth-protected-resource", oauthauth.MetadataHandler(metadata))
+		slog.Info("OAuth MCP auth enabled", "issuer", cfg.OAuth.Issuer, "resource", cfg.OAuth.Resource)
+	}
+
 	// MCP endpoints — protected by X-API-Key.
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.APIKeyAuth(cfg.APIKey))
+		r.Use(middleware.Auth(middleware.AuthConfig{
+			APIKey:        cfg.APIKey,
+			OAuthEnabled:  cfg.OAuth.Enabled,
+			OAuthResource: cfg.OAuth.Resource,
+			OAuthScopes:   cfg.OAuth.Scopes,
+			Verifier:      verifier,
+		}))
 
 		memoryHTTP := server.NewStreamableHTTPServer(mcpMemory)
 		r.Handle("/memory", memoryHTTP)
