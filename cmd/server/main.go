@@ -14,6 +14,7 @@ import (
 	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
 	"github.com/Dzarlax-AI/personal-memory/internal/memory"
 	"github.com/Dzarlax-AI/personal-memory/internal/middleware"
+	oauthauth "github.com/Dzarlax-AI/personal-memory/internal/oauth"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 	"github.com/Dzarlax-AI/personal-memory/internal/rag"
 	"github.com/Dzarlax-AI/personal-memory/internal/todoist"
@@ -67,47 +68,88 @@ func main() {
 		w.Write([]byte("ok"))
 	})
 
-	// MCP endpoints — protected by X-API-Key.
+	var verifier oauthauth.TokenVerifier
+	if cfg.OAuth.Enabled {
+		jwksURL := cfg.OAuth.JWKSURL
+		if jwksURL == "" {
+			discovered, err := oauthauth.DiscoverJWKSURL(ctx, cfg.OAuth.Issuer)
+			if err != nil {
+				slog.Error("failed to discover OAuth JWKS URL", "error", err)
+				os.Exit(1)
+			}
+			jwksURL = discovered
+		}
+		var err error
+		verifier, err = oauthauth.NewJWTVerifier(oauthauth.JWTVerifierConfig{
+			Issuer:   cfg.OAuth.Issuer,
+			Audience: cfg.OAuth.Audience,
+			JWKSURL:  jwksURL,
+			Scopes:   cfg.OAuth.Scopes,
+		})
+		if err != nil {
+			slog.Error("failed to configure OAuth verifier", "error", err)
+			os.Exit(1)
+		}
+		metadata := oauthauth.NewProtectedResourceMetadata(oauthauth.MetadataConfig{
+			Resource:              cfg.OAuth.Resource,
+			AuthorizationServers:  cfg.OAuth.AuthorizationServers,
+			Scopes:                cfg.OAuth.Scopes,
+			ResourceDocumentation: cfg.OAuth.ResourceDocumentation,
+		})
+		r.Get("/.well-known/oauth-protected-resource", oauthauth.MetadataHandler(metadata))
+		slog.Info("OAuth MCP auth enabled", "issuer", cfg.OAuth.Issuer, "resource", cfg.OAuth.Resource)
+	}
+
+	// RAG MCP (optional).
+	if cfg.EnableRAG {
+		qcChunks := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionChunks)
+		qcFolders := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionFolders)
+		ragSrv := rag.NewServer(ctx, qcChunks, qcFolders, ec, cfg)
+		if err := ragSrv.EnsureCollections(ctx); err != nil {
+			slog.Error("failed to init RAG collections", "error", err)
+			os.Exit(1)
+		}
+		ragSrv.RegisterTools(mcpMemory)
+		ragSrv.StartAutoReindex(ctx)
+		slog.Info("RAG enabled",
+			"dir", cfg.RAGDocumentsDir,
+			"reindex_interval", cfg.RAGReindexInterval)
+	}
+
+	// Memory MCP endpoint accepts API key auth and optional OAuth bearer tokens.
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.APIKeyAuth(cfg.APIKey))
+		r.Use(middleware.Auth(middleware.AuthConfig{
+			APIKey:        cfg.APIKey,
+			OAuthEnabled:  cfg.OAuth.Enabled,
+			OAuthResource: cfg.OAuth.Resource,
+			OAuthScopes:   cfg.OAuth.Scopes,
+			Verifier:      verifier,
+		}))
 
 		memoryHTTP := server.NewStreamableHTTPServer(mcpMemory)
 		r.Handle("/memory", memoryHTTP)
 		r.Handle("/memory/", memoryHTTP)
 		r.Get("/memory/operational", memSrv.OperationalContextHandler())
+	})
 
-		// RAG MCP (optional).
-		if cfg.EnableRAG {
-			qcChunks := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionChunks)
-			qcFolders := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionFolders)
-			ragSrv := rag.NewServer(ctx, qcChunks, qcFolders, ec, cfg)
-			if err := ragSrv.EnsureCollections(ctx); err != nil {
-				slog.Error("failed to init RAG collections", "error", err)
-				os.Exit(1)
-			}
-			ragSrv.RegisterTools(mcpMemory)
-			ragSrv.StartAutoReindex(ctx)
-			slog.Info("RAG enabled",
-				"dir", cfg.RAGDocumentsDir,
-				"reindex_interval", cfg.RAGReindexInterval)
-		}
+	// Todoist MCP (optional) remains API-key-only for now.
+	if cfg.EnableTodoist && cfg.TodoistToken != "" {
+		tc := todoist.NewClient(cfg.TodoistToken)
+		todoistSrv := todoist.NewServer(tc)
+		mcpTodoist := server.NewMCPServer("personal-todoist", "1.0.0",
+			server.WithToolCapabilities(true),
+		)
+		todoistSrv.RegisterTools(mcpTodoist)
 
-		// Todoist MCP (optional).
-		if cfg.EnableTodoist && cfg.TodoistToken != "" {
-			tc := todoist.NewClient(cfg.TodoistToken)
-			todoistSrv := todoist.NewServer(tc)
-			mcpTodoist := server.NewMCPServer("personal-todoist", "1.0.0",
-				server.WithToolCapabilities(true),
-			)
-			todoistSrv.RegisterTools(mcpTodoist)
-
-			todoistHTTP := server.NewStreamableHTTPServer(mcpTodoist)
+		todoistHTTP := server.NewStreamableHTTPServer(mcpTodoist)
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.APIKeyAuth(cfg.APIKey))
 			r.Handle("/todoist", todoistHTTP)
 			r.Handle("/todoist/", todoistHTTP)
+		})
 
-			slog.Info("todoist MCP enabled")
-		}
-	})
+		slog.Info("todoist MCP enabled")
+	}
 
 	// Viz dashboard (optional) — no API key, protected by Traefik + Authentik ForwardAuth.
 	if cfg.EnableViz {

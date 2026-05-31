@@ -83,6 +83,10 @@ func (s *Server) EnsureCollections(ctx context.Context) error {
 func (s *Server) RegisterTools(mcpSrv *server.MCPServer) {
 	mcpSrv.AddTool(mcp.NewTool("search_documents",
 		mcp.WithDescription("Search personal documents using semantic similarity. Uses hierarchical search: finds relevant folders first, then searches chunks within those folders. Falls back to flat search if no folder exceeds the threshold."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("query", mcp.Required(), mcp.Description("Search query")),
 		mcp.WithNumber("limit", mcp.Description("Max results to return (default 5)")),
 		mcp.WithString("mode", mcp.Description("Search mode: 'hierarchical' (default) or 'flat'")),
@@ -90,6 +94,10 @@ func (s *Server) RegisterTools(mcpSrv *server.MCPServer) {
 
 	mcpSrv.AddTool(mcp.NewTool("reindex_documents",
 		mcp.WithDescription("Trigger a re-index of the personal documents directory in the background. Skips unchanged files (hash check). Returns immediately; only one reindex may run at a time."),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(false),
 	), s.handleReindexDocuments)
 }
 

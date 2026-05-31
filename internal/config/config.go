@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -10,6 +11,8 @@ type Config struct {
 	// Server
 	Port   string
 	APIKey string
+
+	OAuth OAuthConfig
 
 	// Qdrant
 	QdrantURL string
@@ -32,7 +35,7 @@ type Config struct {
 	TodoistToken  string
 
 	// Viz
-	EnableViz            bool
+	EnableViz              bool
 	VizSimilarityThreshold float64
 
 	// Domain (for Traefik labels in docker-compose)
@@ -49,8 +52,19 @@ type Config struct {
 	RAGReindexInterval   time.Duration // 0 disables the in-server auto-rescan
 }
 
+type OAuthConfig struct {
+	Enabled               bool
+	Issuer                string
+	Resource              string
+	Audience              string
+	JWKSURL               string
+	AuthorizationServers  []string
+	Scopes                []string
+	ResourceDocumentation string
+}
+
 func Load() *Config {
-	return &Config{
+	cfg := &Config{
 		Port:   envOrDefault("MCP_PORT", "8000"),
 		APIKey: os.Getenv("API_KEY"),
 
@@ -82,6 +96,42 @@ func Load() *Config {
 		RAGCollectionFolders: envOrDefault("RAG_COLLECTION_FOLDERS", "doc_folders"),
 		RAGReindexInterval:   envDuration("RAG_REINDEX_INTERVAL_MINUTES", 0),
 	}
+	cfg.OAuth = loadOAuthConfig(cfg.MemoryDomain)
+	return cfg
+}
+
+func loadOAuthConfig(memoryDomain string) OAuthConfig {
+	resource := os.Getenv("OAUTH_RESOURCE")
+	if resource == "" && memoryDomain != "" {
+		resource = "https://mcp." + memoryDomain
+	}
+
+	issuer := os.Getenv("OAUTH_ISSUER")
+	authServers := envCSV("OAUTH_AUTHORIZATION_SERVERS")
+	if len(authServers) == 0 && issuer != "" {
+		authServers = []string{issuer}
+	}
+
+	scopes := envCSV("OAUTH_SCOPES")
+	if len(scopes) == 0 {
+		scopes = []string{"memory:mcp"}
+	}
+
+	audience := os.Getenv("OAUTH_AUDIENCE")
+	if audience == "" {
+		audience = resource
+	}
+
+	return OAuthConfig{
+		Enabled:               envBool("OAUTH_ENABLED"),
+		Issuer:                issuer,
+		Resource:              resource,
+		Audience:              audience,
+		JWKSURL:               os.Getenv("OAUTH_JWKS_URL"),
+		AuthorizationServers:  authServers,
+		Scopes:                scopes,
+		ResourceDocumentation: os.Getenv("OAUTH_RESOURCE_DOCUMENTATION"),
+	}
 }
 
 func envOrDefault(key, def string) string {
@@ -93,6 +143,22 @@ func envOrDefault(key, def string) string {
 
 func envBool(key string) bool {
 	return os.Getenv(key) == "true"
+}
+
+func envCSV(key string) []string {
+	v := os.Getenv(key)
+	if v == "" {
+		return nil
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func envFloat(key string, def float64) float64 {

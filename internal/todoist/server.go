@@ -20,14 +20,26 @@ func NewServer(client *Client) *Server {
 func (s *Server) RegisterTools(srv *server.MCPServer) {
 	srv.AddTool(mcp.NewTool("get_projects",
 		mcp.WithDescription("List all Todoist projects."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(true),
 	), s.getProjects)
 
 	srv.AddTool(mcp.NewTool("get_labels",
 		mcp.WithDescription("List all Todoist labels."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(true),
 	), s.getLabels)
 
 	srv.AddTool(mcp.NewTool("get_tasks",
 		mcp.WithDescription("Get tasks, optionally filtered by project or Todoist filter query."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(true),
 		mcp.WithString("project_id", mcp.Description("Filter by project ID")),
 		mcp.WithString("filter", mcp.Description("Todoist filter query (e.g. 'today', 'overdue', '#Work')")),
 		mcp.WithNumber("limit", mcp.Description("Max results (default 20)")),
@@ -35,6 +47,10 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 
 	srv.AddTool(mcp.NewTool("create_task",
 		mcp.WithDescription("Create a new Todoist task."),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(true),
 		mcp.WithString("content", mcp.Description("Task title/description"), mcp.Required()),
 		mcp.WithString("project_id", mcp.Description("Project to add task to")),
 		mcp.WithString("due_string", mcp.Description("Natural language due date")),
@@ -43,6 +59,10 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 
 	srv.AddTool(mcp.NewTool("update_task",
 		mcp.WithDescription("Update an existing Todoist task."),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(true),
 		mcp.WithString("task_id", mcp.Description("Task ID"), mcp.Required()),
 		mcp.WithString("content", mcp.Description("New title")),
 		mcp.WithString("due_string", mcp.Description("New due date")),
@@ -51,11 +71,19 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 
 	srv.AddTool(mcp.NewTool("delete_task",
 		mcp.WithDescription("Delete a Todoist task."),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(true),
 		mcp.WithString("task_id", mcp.Description("Task ID"), mcp.Required()),
 	), s.deleteTask)
 
 	srv.AddTool(mcp.NewTool("complete_task",
 		mcp.WithDescription("Complete a Todoist task."),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(true),
 		mcp.WithString("task_id", mcp.Description("Task ID"), mcp.Required()),
 	), s.completeTask)
 }
