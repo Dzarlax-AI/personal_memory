@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
+
+var discoveryHTTPClient = &http.Client{Timeout: 5 * time.Second}
 
 func DiscoverJWKSURL(ctx context.Context, issuer string) (string, error) {
 	metadataURL := strings.TrimRight(issuer, "/") + "/.well-known/openid-configuration"
@@ -14,7 +17,7 @@ func DiscoverJWKSURL(ctx context.Context, issuer string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := discoveryHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}

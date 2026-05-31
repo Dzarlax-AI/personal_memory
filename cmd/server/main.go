@@ -100,7 +100,23 @@ func main() {
 		slog.Info("OAuth MCP auth enabled", "issuer", cfg.OAuth.Issuer, "resource", cfg.OAuth.Resource)
 	}
 
-	// MCP endpoints — protected by X-API-Key.
+	// RAG MCP (optional).
+	if cfg.EnableRAG {
+		qcChunks := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionChunks)
+		qcFolders := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionFolders)
+		ragSrv := rag.NewServer(ctx, qcChunks, qcFolders, ec, cfg)
+		if err := ragSrv.EnsureCollections(ctx); err != nil {
+			slog.Error("failed to init RAG collections", "error", err)
+			os.Exit(1)
+		}
+		ragSrv.RegisterTools(mcpMemory)
+		ragSrv.StartAutoReindex(ctx)
+		slog.Info("RAG enabled",
+			"dir", cfg.RAGDocumentsDir,
+			"reindex_interval", cfg.RAGReindexInterval)
+	}
+
+	// Memory MCP endpoint accepts API key auth and optional OAuth bearer tokens.
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Auth(middleware.AuthConfig{
 			APIKey:        cfg.APIKey,
@@ -114,39 +130,26 @@ func main() {
 		r.Handle("/memory", memoryHTTP)
 		r.Handle("/memory/", memoryHTTP)
 		r.Get("/memory/operational", memSrv.OperationalContextHandler())
+	})
 
-		// RAG MCP (optional).
-		if cfg.EnableRAG {
-			qcChunks := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionChunks)
-			qcFolders := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionFolders)
-			ragSrv := rag.NewServer(ctx, qcChunks, qcFolders, ec, cfg)
-			if err := ragSrv.EnsureCollections(ctx); err != nil {
-				slog.Error("failed to init RAG collections", "error", err)
-				os.Exit(1)
-			}
-			ragSrv.RegisterTools(mcpMemory)
-			ragSrv.StartAutoReindex(ctx)
-			slog.Info("RAG enabled",
-				"dir", cfg.RAGDocumentsDir,
-				"reindex_interval", cfg.RAGReindexInterval)
-		}
+	// Todoist MCP (optional) remains API-key-only for now.
+	if cfg.EnableTodoist && cfg.TodoistToken != "" {
+		tc := todoist.NewClient(cfg.TodoistToken)
+		todoistSrv := todoist.NewServer(tc)
+		mcpTodoist := server.NewMCPServer("personal-todoist", "1.0.0",
+			server.WithToolCapabilities(true),
+		)
+		todoistSrv.RegisterTools(mcpTodoist)
 
-		// Todoist MCP (optional).
-		if cfg.EnableTodoist && cfg.TodoistToken != "" {
-			tc := todoist.NewClient(cfg.TodoistToken)
-			todoistSrv := todoist.NewServer(tc)
-			mcpTodoist := server.NewMCPServer("personal-todoist", "1.0.0",
-				server.WithToolCapabilities(true),
-			)
-			todoistSrv.RegisterTools(mcpTodoist)
-
-			todoistHTTP := server.NewStreamableHTTPServer(mcpTodoist)
+		todoistHTTP := server.NewStreamableHTTPServer(mcpTodoist)
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.APIKeyAuth(cfg.APIKey))
 			r.Handle("/todoist", todoistHTTP)
 			r.Handle("/todoist/", todoistHTTP)
+		})
 
-			slog.Info("todoist MCP enabled")
-		}
-	})
+		slog.Info("todoist MCP enabled")
+	}
 
 	// Viz dashboard (optional) — no API key, protected by Traefik + Authentik ForwardAuth.
 	if cfg.EnableViz {

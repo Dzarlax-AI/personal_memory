@@ -64,9 +64,9 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 
 	srv.AddTool(mcp.NewTool("recall_facts",
 		mcp.WithDescription("Semantic search for facts. Returns facts with relevance scores."),
-		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
-		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("query", mcp.Description("Natural language search query"), mcp.Required()),
 		mcp.WithString("namespace", mcp.Description("Filter by namespace")),

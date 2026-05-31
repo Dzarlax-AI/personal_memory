@@ -62,11 +62,11 @@ func NewJWTVerifier(cfg JWTVerifierConfig) (*JWTVerifier, error) {
 		return nil, errors.New("oauth jwks url is required")
 	}
 	return &JWTVerifier{
-		issuer:   strings.TrimRight(cfg.Issuer, "/"),
+		issuer:   cfg.Issuer,
 		audience: cfg.Audience,
 		jwksURL:  cfg.JWKSURL,
 		scopes:   cfg.Scopes,
-		client:   http.DefaultClient,
+		client:   &http.Client{Timeout: 5 * time.Second},
 		cacheTTL: 10 * time.Minute,
 	}, nil
 }
@@ -82,7 +82,7 @@ func (v *JWTVerifier) Verify(ctx context.Context, token string) (*Claims, error)
 			return nil, errors.New("missing jwt kid")
 		}
 		return v.key(ctx, kid)
-	}, jwt.WithIssuer(v.issuer), jwt.WithAudience(v.audience))
+	}, jwt.WithIssuer(v.issuer), jwt.WithAudience(v.audience), jwt.WithExpirationRequired())
 	if err != nil {
 		return nil, err
 	}
