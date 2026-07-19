@@ -86,8 +86,24 @@ func TestAllPointMutationsUseWaitTrue(t *testing.T) {
 
 func TestQdrantPointID_NumericString(t *testing.T) {
 	got := qdrantPointID("12345")
-	if got != int64(12345) {
-		t.Fatalf("qdrantPointID numeric = %#v, want int64(12345)", got)
+	if got != uint64(12345) {
+		t.Fatalf("qdrantPointID numeric = %#v, want uint64(12345)", got)
+	}
+}
+
+func TestQdrantPointID_MaxUint64(t *testing.T) {
+	const id = "18446744073709551615"
+	got := qdrantPointID(id)
+	if got != uint64(18446744073709551615) {
+		t.Fatalf("qdrantPointID numeric = %#v, want max uint64", got)
+	}
+
+	encoded, err := json.Marshal(map[string]interface{}{"id": got})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `{"id":18446744073709551615}` {
+		t.Fatalf("encoded ID = %s", encoded)
 	}
 }
 
@@ -142,6 +158,9 @@ func TestGetRetrievesExactPoint(t *testing.T) {
 		if r.Method != http.MethodGet || r.URL.Path != "/collections/memory/points/exact-id" {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
+		if got := r.URL.Query().Get("with_vector"); got != "true" {
+			t.Fatalf("with_vector = %q, want true", got)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"result":{"id":"exact-id","vector":[0.1],"payload":{"text":"target"}}}`))
 	}))
@@ -153,6 +172,60 @@ func TestGetRetrievesExactPoint(t *testing.T) {
 	}
 	if !found || point.ID != "exact-id" || point.Payload["text"] != "target" {
 		t.Fatalf("unexpected point: found=%v point=%#v", found, point)
+	}
+}
+
+func TestGetPreservesLargeNumericPointID(t *testing.T) {
+	const id = "9007199254740993"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"result":{"id":9007199254740993,"vector":[0.1],"payload":{"recall_count":2}}}`))
+	}))
+	defer server.Close()
+
+	point, found, err := NewClient(server.URL, "memory").Get(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || point.ID != id {
+		t.Fatalf("found=%v ID=%q, want %q", found, point.ID, id)
+	}
+	if got, ok := point.Payload["recall_count"].(float64); !ok || got != 2 {
+		t.Fatalf("payload number = %#v, want established float64 type", point.Payload["recall_count"])
+	}
+}
+
+func TestScrollPreservesLargeNumericIDsAndOffsets(t *testing.T) {
+	const id = "18446744073709551615"
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var body map[string]interface{}
+		decoder := json.NewDecoder(r.Body)
+		decoder.UseNumber()
+		if err := decoder.Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if requests == 1 {
+			_, _ = w.Write([]byte(`{"result":{"points":[{"id":18446744073709551615,"payload":{"chunk_index":1}}],"next_page_offset":18446744073709551615}}`))
+			return
+		}
+		if got, ok := body["offset"].(json.Number); !ok || got.String() != id {
+			t.Fatalf("offset = %#v, want exact %s", body["offset"], id)
+		}
+		_, _ = w.Write([]byte(`{"result":{"points":[],"next_page_offset":null}}`))
+	}))
+	defer server.Close()
+
+	points, err := NewClient(server.URL, "memory").ScrollAll(context.Background(), nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(points) != 1 || points[0].ID != id {
+		t.Fatalf("points = %#v, want exact ID %s", points, id)
+	}
+	if got, ok := points[0].Payload["chunk_index"].(float64); !ok || got != 1 {
+		t.Fatalf("payload number = %#v, want established float64 type", points[0].Payload["chunk_index"])
 	}
 }
 

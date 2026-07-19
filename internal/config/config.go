@@ -176,6 +176,50 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// LoadIndexer loads only the configuration used by the standalone document
+// indexer. Server authentication and optional HTTP features are deliberately
+// outside this contract, so a deployment can run the indexer without setting
+// API_KEY, OAuth, Todoist, or visualization variables.
+func LoadIndexer() (*Config, error) {
+	enableRAG, err := envBool("ENABLE_RAG")
+	if err != nil {
+		return nil, err
+	}
+	ragChunkMaxBytes, err := envInt("RAG_CHUNK_MAX_BYTES", 1500)
+	if err != nil {
+		return nil, err
+	}
+	ragFolderTopK, err := envInt("RAG_FOLDER_TOP_K", 3)
+	if err != nil {
+		return nil, err
+	}
+	ragFolderThreshold, err := envFloat("RAG_FOLDER_THRESHOLD", 0.50)
+	if err != nil {
+		return nil, err
+	}
+	ragReindexInterval, err := envDuration("RAG_REINDEX_INTERVAL_MINUTES", 0)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg := &Config{
+		QdrantURL:            envOrDefault("QDRANT_URL", "http://memory-qdrant:6333"),
+		EmbedURL:             envOrDefault("EMBED_URL", "http://memory-embeddings:80"),
+		EnableRAG:            enableRAG,
+		RAGDocumentsDir:      envOrDefault("RAG_DOCUMENTS_DIR", "/root/documents/personal"),
+		RAGChunkMaxBytes:     ragChunkMaxBytes,
+		RAGFolderTopK:        ragFolderTopK,
+		RAGFolderThreshold:   ragFolderThreshold,
+		RAGCollectionChunks:  envOrDefault("RAG_COLLECTION_CHUNKS", "doc_chunks"),
+		RAGCollectionFolders: envOrDefault("RAG_COLLECTION_FOLDERS", "doc_folders"),
+		RAGReindexInterval:   ragReindexInterval,
+	}
+	if err := cfg.ValidateIndexer(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
 func loadOAuthConfig(memoryDomain string) (OAuthConfig, error) {
 	resource := os.Getenv("OAUTH_RESOURCE")
 	if resource == "" && memoryDomain != "" {
@@ -219,11 +263,8 @@ func (c *Config) Validate() error {
 	if err != nil || port == 0 {
 		return fmt.Errorf("MCP_PORT must be an integer between 1 and 65535")
 	}
-	for name, raw := range map[string]string{"QDRANT_URL": c.QdrantURL, "EMBED_URL": c.EmbedURL} {
-		u, err := url.ParseRequestURI(raw)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return fmt.Errorf("%s must be a valid HTTP(S) URL", name)
-		}
+	if err := c.validateIndexerSettings(false); err != nil {
+		return err
 	}
 	if c.CacheTTL <= 0 {
 		return fmt.Errorf("CACHE_TTL must be greater than zero")
@@ -243,23 +284,11 @@ func (c *Config) Validate() error {
 	if err := validateThreshold("VIZ_SIMILARITY_THRESHOLD", c.VizSimilarityThreshold); err != nil {
 		return err
 	}
-	if err := validateThreshold("RAG_FOLDER_THRESHOLD", c.RAGFolderThreshold); err != nil {
-		return err
-	}
 	if c.BackupInterval <= 0 {
 		return fmt.Errorf("BACKUP_INTERVAL_HOURS must be greater than zero")
 	}
 	if c.KeepSnapshots < 1 {
 		return fmt.Errorf("KEEP_SNAPSHOTS must be at least 1")
-	}
-	if c.RAGChunkMaxBytes < 1 || c.RAGChunkMaxBytes > 1024*1024 {
-		return fmt.Errorf("RAG_CHUNK_MAX_BYTES must be between 1 and 1048576")
-	}
-	if c.RAGFolderTopK < 1 {
-		return fmt.Errorf("RAG_FOLDER_TOP_K must be at least 1")
-	}
-	if c.RAGReindexInterval < 0 {
-		return fmt.Errorf("RAG_REINDEX_INTERVAL_MINUTES cannot be negative")
 	}
 	if c.APIKey == "" && !c.OAuth.Enabled && !c.AllowInsecureAuth {
 		return fmt.Errorf("API_KEY is required when OAUTH_ENABLED=false (set ALLOW_INSECURE_AUTH=true only for isolated development)")
@@ -298,6 +327,44 @@ func (c *Config) Validate() error {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+// ValidateIndexer validates the complete standalone indexer contract.
+func (c *Config) ValidateIndexer() error {
+	return c.validateIndexerSettings(true)
+}
+
+func (c *Config) validateIndexerSettings(requireEnabled bool) error {
+	for name, raw := range map[string]string{"QDRANT_URL": c.QdrantURL, "EMBED_URL": c.EmbedURL} {
+		if err := validateHTTPURL(name, raw); err != nil {
+			return err
+		}
+	}
+	if requireEnabled && !c.EnableRAG {
+		return fmt.Errorf("ENABLE_RAG must be true for the standalone indexer")
+	}
+	if strings.TrimSpace(c.RAGDocumentsDir) == "" {
+		return fmt.Errorf("RAG_DOCUMENTS_DIR cannot be empty")
+	}
+	if strings.TrimSpace(c.RAGCollectionChunks) == "" {
+		return fmt.Errorf("RAG_COLLECTION_CHUNKS cannot be empty")
+	}
+	if strings.TrimSpace(c.RAGCollectionFolders) == "" {
+		return fmt.Errorf("RAG_COLLECTION_FOLDERS cannot be empty")
+	}
+	if c.RAGChunkMaxBytes < 1 || c.RAGChunkMaxBytes > 1024*1024 {
+		return fmt.Errorf("RAG_CHUNK_MAX_BYTES must be between 1 and 1048576")
+	}
+	if c.RAGFolderTopK < 1 {
+		return fmt.Errorf("RAG_FOLDER_TOP_K must be at least 1")
+	}
+	if err := validateThreshold("RAG_FOLDER_THRESHOLD", c.RAGFolderThreshold); err != nil {
+		return err
+	}
+	if c.RAGReindexInterval < 0 {
+		return fmt.Errorf("RAG_REINDEX_INTERVAL_MINUTES cannot be negative")
 	}
 	return nil
 }

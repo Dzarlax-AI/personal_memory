@@ -2,6 +2,7 @@ package viz
 
 import (
 	"container/heap"
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 	"github.com/go-chi/chi/v5"
@@ -25,10 +27,16 @@ const (
 	hardGraphMaxEdges    = 5000
 	defaultMaxPairs      = 500
 	hardMaxPairs         = 5000
+	graphScrollPageSize  = 100
+	hardGraphScanPoints  = 50000
 	maxTagsBodyBytes     = 64 << 10
 	maxFactTags          = 50
 	maxFactTagLength     = 100
 )
+
+const vizComputationTimeout = 20 * time.Second
+
+var errGraphScanLimit = errors.New("graph scan point limit exceeded")
 
 type graphEdge struct {
 	From       string  `json:"from"`
@@ -212,14 +220,15 @@ func (h *Handler) apiGraph(w http.ResponseWriter, r *http.Request) {
 	primaryTag := r.URL.Query().Get("primary_tag")
 	textState := r.URL.Query().Get("text")
 
-	points, err := h.qdrant.ScrollAll(r.Context(), nil, true)
+	ctx, cancel := context.WithTimeout(r.Context(), vizComputationTimeout)
+	defer cancel()
+	points, tooMany, err := h.scrollGraphPoints(ctx, maxNodes, namespace, tag, primaryTag, textState)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeGraphComputationError(w, err)
 		return
 	}
-	points = filterGraphPoints(points, namespace, tag, primaryTag, textState)
-	if len(points) > maxNodes {
-		http.Error(w, fmt.Sprintf("filtered dataset has %d nodes; narrow the filters or raise max_nodes up to %d", len(points), hardGraphMaxNodes), http.StatusUnprocessableEntity)
+	if tooMany {
+		http.Error(w, fmt.Sprintf("filtered dataset has more than %d nodes; narrow the filters or raise max_nodes up to %d", maxNodes, hardGraphMaxNodes), http.StatusUnprocessableEntity)
 		return
 	}
 
@@ -228,28 +237,100 @@ func (h *Handler) apiGraph(w http.ResponseWriter, r *http.Request) {
 		nodes = append(nodes, pointToNode(p))
 	}
 
-	edges := &edgeHeap{}
-	heap.Init(edges)
-	for i := 0; i < len(points); i++ {
-		for j := i + 1; j < len(points); j++ {
-			sim := cosineSimilarity(points[i].Vector, points[j].Vector)
-			if sim >= threshold {
-				candidate := graphEdge{
-					From:       points[i].ID,
-					To:         points[j].ID,
-					Similarity: sim,
-				}
-				keepStrongestEdge(edges, candidate, maxEdges)
-			}
-		}
+	edgeResults, err := strongestGraphEdges(ctx, points, threshold, maxEdges)
+	if err != nil {
+		writeGraphComputationError(w, err)
+		return
 	}
-	edgeResults := append([]graphEdge(nil), (*edges)...)
-	sort.Slice(edgeResults, func(i, j int) bool { return strongerEdge(edgeResults[i], edgeResults[j]) })
 
 	writeJSON(w, map[string]interface{}{
 		"nodes": nodes,
 		"edges": edgeResults,
 	})
+}
+
+// scrollGraphPoints pages through Qdrant and retains at most maxNodes+1 local
+// filter matches. The extra point is only used to report that the requested
+// computation would exceed its explicit bound.
+func (h *Handler) scrollGraphPoints(ctx context.Context, maxNodes int, namespace, tag, primaryTag, textState string) ([]qdrant.ScrollPoint, bool, error) {
+	return h.scrollGraphPointsWithLimit(ctx, maxNodes, hardGraphScanPoints, namespace, tag, primaryTag, textState)
+}
+
+func (h *Handler) scrollGraphPointsWithLimit(ctx context.Context, maxNodes, maxScanned int, namespace, tag, primaryTag, textState string) ([]qdrant.ScrollPoint, bool, error) {
+	points := make([]qdrant.ScrollPoint, 0, maxNodes+1)
+	filters := qdrantGraphFilters(namespace, tag, primaryTag)
+	scanned := 0
+	var offset interface{}
+	for {
+		page, err := h.qdrant.Scroll(ctx, graphScrollPageSize, offset, filters, true)
+		if err != nil {
+			return nil, false, err
+		}
+		scanned += len(page.Points)
+		if scanned > maxScanned {
+			return nil, false, fmt.Errorf("%w: scanned more than %d points; narrow the filters", errGraphScanLimit, maxScanned)
+		}
+		for _, point := range page.Points {
+			if !graphPointMatches(point, namespace, tag, primaryTag, textState) {
+				continue
+			}
+			points = append(points, point)
+			if len(points) > maxNodes {
+				return points[:maxNodes], true, nil
+			}
+		}
+		if page.RawOffset == nil {
+			return points, false, nil
+		}
+		offset = page.RawOffset
+	}
+}
+
+func qdrantGraphFilters(namespace, tag, primaryTag string) map[string]interface{} {
+	must := make([]map[string]interface{}, 0, 3)
+	if namespace != "" && namespace != "__missing__" {
+		must = append(must, map[string]interface{}{"key": "namespace", "match": map[string]interface{}{"value": namespace}})
+	}
+	if tag != "" {
+		must = append(must, map[string]interface{}{"key": "tags", "match": map[string]interface{}{"value": tag}})
+	}
+	if primaryTag != "" {
+		must = append(must, map[string]interface{}{"key": "primary_tag", "match": map[string]interface{}{"value": primaryTag}})
+	}
+	if len(must) == 0 {
+		return nil
+	}
+	return map[string]interface{}{"must": must}
+}
+
+func writeGraphComputationError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errGraphScanLimit):
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		http.Error(w, "graph computation timed out or was canceled", http.StatusRequestTimeout)
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func strongestGraphEdges(ctx context.Context, points []qdrant.ScrollPoint, threshold float64, maxEdges int) ([]graphEdge, error) {
+	edges := &edgeHeap{}
+	heap.Init(edges)
+	for i := 0; i < len(points); i++ {
+		for j := i + 1; j < len(points); j++ {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			sim := cosineSimilarity(points[i].Vector, points[j].Vector)
+			if sim >= threshold {
+				keepStrongestEdge(edges, graphEdge{From: points[i].ID, To: points[j].ID, Similarity: sim}, maxEdges)
+			}
+		}
+	}
+	results := append([]graphEdge(nil), (*edges)...)
+	sort.Slice(results, func(i, j int) bool { return strongerEdge(results[i], results[j]) })
+	return results, nil
 }
 
 func filterGraphPoints(points []qdrant.ScrollPoint, namespace, tag, primaryTag, textState string) []qdrant.ScrollPoint {
@@ -259,33 +340,39 @@ func filterGraphPoints(points []qdrant.ScrollPoint, namespace, tag, primaryTag, 
 
 	filtered := make([]qdrant.ScrollPoint, 0, len(points))
 	for _, p := range points {
-		if namespace != "" {
-			if namespace == "__missing__" {
-				if !payloadNamespaceMissing(p.Payload["namespace"]) {
-					continue
-				}
-			} else if ns, _ := p.Payload["namespace"].(string); ns != namespace {
-				continue
-			}
+		if graphPointMatches(p, namespace, tag, primaryTag, textState) {
+			filtered = append(filtered, p)
 		}
-		if tag != "" && !payloadHasTag(p.Payload["tags"], tag) {
-			continue
-		}
-		if primaryTag != "" {
-			if primary, _ := p.Payload["primary_tag"].(string); primary != primaryTag {
-				continue
-			}
-		}
-		text, _ := payloadText(p.Payload)
-		if textState == "missing" && text != "" {
-			continue
-		}
-		if textState == "present" && text == "" {
-			continue
-		}
-		filtered = append(filtered, p)
 	}
 	return filtered
+}
+
+func graphPointMatches(p qdrant.ScrollPoint, namespace, tag, primaryTag, textState string) bool {
+	if namespace != "" {
+		if namespace == "__missing__" {
+			if !payloadNamespaceMissing(p.Payload["namespace"]) {
+				return false
+			}
+		} else if ns, _ := p.Payload["namespace"].(string); ns != namespace {
+			return false
+		}
+	}
+	if tag != "" && !payloadHasTag(p.Payload["tags"], tag) {
+		return false
+	}
+	if primaryTag != "" {
+		if primary, _ := p.Payload["primary_tag"].(string); primary != primaryTag {
+			return false
+		}
+	}
+	text, _ := payloadText(p.Payload)
+	if textState == "missing" && text != "" {
+		return false
+	}
+	if textState == "present" && text == "" {
+		return false
+	}
+	return true
 }
 
 func payloadNamespaceMissing(raw interface{}) bool {
@@ -328,13 +415,15 @@ func (h *Handler) apiDuplicates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	points, err := h.qdrant.ScrollAll(r.Context(), nil, true)
+	ctx, cancel := context.WithTimeout(r.Context(), vizComputationTimeout)
+	defer cancel()
+	points, tooMany, err := h.scrollGraphPoints(ctx, maxNodes, "", "", "", "")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeGraphComputationError(w, err)
 		return
 	}
-	if len(points) > maxNodes {
-		http.Error(w, fmt.Sprintf("dataset has %d nodes; reduce the dataset or raise max_nodes up to %d", len(points), hardGraphMaxNodes), http.StatusUnprocessableEntity)
+	if tooMany {
+		http.Error(w, fmt.Sprintf("dataset has more than %d nodes; raise max_nodes up to %d to run a larger bounded scan", maxNodes, hardGraphMaxNodes), http.StatusUnprocessableEntity)
 		return
 	}
 
@@ -344,25 +433,36 @@ func (h *Handler) apiDuplicates(w http.ResponseWriter, r *http.Request) {
 		Similarity float64                `json:"similarity"`
 	}
 
+	candidates, err := strongestDuplicates(ctx, points, threshold, maxPairs)
+	if err != nil {
+		writeGraphComputationError(w, err)
+		return
+	}
+	pairs := make([]dupPair, len(candidates))
+	for i, candidate := range candidates {
+		pairs[i] = dupPair{A: pointToNode(points[candidate.i]), B: pointToNode(points[candidate.j]), Similarity: candidate.similarity}
+	}
+
+	writeJSON(w, map[string]interface{}{"pairs": pairs})
+}
+
+func strongestDuplicates(ctx context.Context, points []qdrant.ScrollPoint, threshold float64, maxPairs int) ([]duplicateCandidate, error) {
 	candidates := &duplicateHeap{}
 	heap.Init(candidates)
 	for i := 0; i < len(points); i++ {
 		for j := i + 1; j < len(points); j++ {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			sim := cosineSimilarity(points[i].Vector, points[j].Vector)
 			if sim >= threshold {
 				keepStrongestDuplicate(candidates, duplicateCandidate{i: i, j: j, similarity: sim}, maxPairs)
 			}
 		}
 	}
-	sort.Slice(*candidates, func(i, j int) bool {
-		return strongerDuplicate((*candidates)[i], (*candidates)[j])
-	})
-	pairs := make([]dupPair, len(*candidates))
-	for i, candidate := range *candidates {
-		pairs[i] = dupPair{A: pointToNode(points[candidate.i]), B: pointToNode(points[candidate.j]), Similarity: candidate.similarity}
-	}
-
-	writeJSON(w, map[string]interface{}{"pairs": pairs})
+	results := append([]duplicateCandidate(nil), (*candidates)...)
+	sort.Slice(results, func(i, j int) bool { return strongerDuplicate(results[i], results[j]) })
+	return results, nil
 }
 
 func pointToNode(p qdrant.ScrollPoint) map[string]interface{} {

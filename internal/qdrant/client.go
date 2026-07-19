@@ -42,8 +42,10 @@ func parsePointID(v interface{}) string {
 	switch id := v.(type) {
 	case string:
 		return id
+	case exactPointID:
+		return string(id)
 	case float64:
-		return strconv.FormatInt(int64(id), 10)
+		return strconv.FormatFloat(id, 'f', -1, 64)
 	case json.Number:
 		return id.String()
 	default:
@@ -51,9 +53,33 @@ func parsePointID(v interface{}) string {
 	}
 }
 
+// exactPointID decodes Qdrant's string or unsigned integer IDs without routing
+// JSON numbers through float64. It is intentionally used only for ID fields so
+// numeric values in point payloads retain their established float64 types.
+type exactPointID string
+
+func (id *exactPointID) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 {
+		return fmt.Errorf("empty point ID")
+	}
+	if data[0] == '"' {
+		var decoded string
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			return err
+		}
+		*id = exactPointID(decoded)
+		return nil
+	}
+	if _, err := strconv.ParseUint(string(data), 10, 64); err != nil {
+		return fmt.Errorf("invalid numeric point ID %q: %w", data, err)
+	}
+	*id = exactPointID(data)
+	return nil
+}
+
 func qdrantPointID(id string) interface{} {
 	if parsed, err := strconv.ParseUint(id, 10, 64); err == nil {
-		return int64(parsed)
+		return parsed
 	}
 	return id
 }
@@ -61,7 +87,7 @@ func qdrantPointID(id string) interface{} {
 // Get retrieves one point by its exact ID. The bool is false when Qdrant
 // reports that the point does not exist.
 func (c *Client) Get(ctx context.Context, id string) (Point, bool, error) {
-	requestURL := fmt.Sprintf("%s/collections/%s/points/%s", c.url, c.collection, url.PathEscape(id))
+	requestURL := fmt.Sprintf("%s/collections/%s/points/%s?with_vector=true", c.url, c.collection, url.PathEscape(id))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return Point{}, false, err
@@ -83,7 +109,7 @@ func (c *Client) Get(ctx context.Context, id string) (Point, bool, error) {
 	}
 	var result struct {
 		Result struct {
-			ID      interface{}            `json:"id"`
+			ID      exactPointID           `json:"id"`
 			Vector  []float32              `json:"vector"`
 			Payload map[string]interface{} `json:"payload"`
 		} `json:"result"`
@@ -166,7 +192,7 @@ func (c *Client) Search(ctx context.Context, vector []float32, limit int, filter
 
 	var result struct {
 		Result []struct {
-			ID      interface{}            `json:"id"`
+			ID      exactPointID           `json:"id"`
 			Score   float64                `json:"score"`
 			Payload map[string]interface{} `json:"payload"`
 		} `json:"result"`
@@ -189,13 +215,42 @@ func (c *Client) Search(ctx context.Context, vector []float32, limit int, filter
 // ScrollResult holds a page of scroll results.
 type ScrollResult struct {
 	Points    []ScrollPoint `json:"points"`
-	RawOffset interface{}   `json:"next_page_offset"`
+	RawOffset interface{}   `json:"-"`
+}
+
+func (r *ScrollResult) UnmarshalJSON(data []byte) error {
+	var decoded struct {
+		Points    []ScrollPoint   `json:"points"`
+		RawOffset json.RawMessage `json:"next_page_offset"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	r.Points = decoded.Points
+	r.RawOffset = nil
+	raw := bytes.TrimSpace(decoded.RawOffset)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return nil
+	}
+	if raw[0] == '"' {
+		var offset string
+		if err := json.Unmarshal(raw, &offset); err != nil {
+			return err
+		}
+		r.RawOffset = offset
+		return nil
+	}
+	if _, err := strconv.ParseUint(string(raw), 10, 64); err != nil {
+		return fmt.Errorf("invalid numeric scroll offset %q: %w", raw, err)
+	}
+	r.RawOffset = json.Number(string(raw))
+	return nil
 }
 
 // ScrollPoint is a point returned by scroll (may include vector).
 type ScrollPoint struct {
 	ID      string                 `json:"-"`
-	RawID   interface{}            `json:"id"`
+	RawID   exactPointID           `json:"id"`
 	Vector  []float32              `json:"vector,omitempty"`
 	Payload map[string]interface{} `json:"payload,omitempty"`
 }
@@ -325,7 +380,7 @@ func (c *Client) CreateSnapshot(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("create snapshot: %w", err)
 	}
 	if result.Result.Name == "" {
-		return "", fmt.Errorf("create snapshot: Qdrant response did not include a snapshot name")
+		return "", fmt.Errorf("create snapshot: qdrant response did not include a snapshot name")
 	}
 	return result.Result.Name, nil
 }
@@ -422,21 +477,21 @@ func (c *Client) mutate(ctx context.Context, method, requestURL string, body int
 
 func validateMutationResponse(body []byte, requireCompleted bool) error {
 	if len(bytes.TrimSpace(body)) == 0 {
-		return fmt.Errorf("empty Qdrant mutation response")
+		return fmt.Errorf("empty qdrant mutation response")
 	}
 	var response struct {
 		Status interface{} `json:"status"`
 		Result interface{} `json:"result"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
-		return fmt.Errorf("decode Qdrant mutation response: %w", err)
+		return fmt.Errorf("decode qdrant mutation response: %w", err)
 	}
 
 	validated := false
 	if response.Status != nil {
 		status, ok := response.Status.(string)
 		if !ok || status != "ok" {
-			return fmt.Errorf("Qdrant mutation status is %v, want ok", response.Status)
+			return fmt.Errorf("qdrant mutation status is %v, want ok", response.Status)
 		}
 		validated = true
 	}
@@ -445,17 +500,17 @@ func validateMutationResponse(body []byte, requireCompleted bool) error {
 		if rawStatus, exists := result["status"]; exists {
 			status, ok := rawStatus.(string)
 			if !ok || status != "completed" {
-				return fmt.Errorf("Qdrant operation status is %v, want completed", rawStatus)
+				return fmt.Errorf("qdrant operation status is %v, want completed", rawStatus)
 			}
 			completed = true
 			validated = true
 		}
 	}
 	if requireCompleted && !completed {
-		return fmt.Errorf("Qdrant mutation response does not confirm a completed operation")
+		return fmt.Errorf("qdrant mutation response does not confirm a completed operation")
 	}
 	if !validated {
-		return fmt.Errorf("Qdrant mutation response contains no verifiable status")
+		return fmt.Errorf("qdrant mutation response contains no verifiable status")
 	}
 	return nil
 }

@@ -14,14 +14,9 @@ import (
 )
 
 func main() {
-	cfg, err := config.Load()
+	cfg, err := config.LoadIndexer()
 	if err != nil {
 		slog.Error("invalid configuration", "error", err)
-		os.Exit(1)
-	}
-
-	if !cfg.EnableRAG {
-		slog.Error("ENABLE_RAG is not set to true")
 		os.Exit(1)
 	}
 

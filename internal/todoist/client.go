@@ -31,6 +31,10 @@ func NewClientWithHTTPClient(token, baseURL string, httpClient *http.Client) *Cl
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 10 * time.Second}
 	}
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		baseURL = defaultBaseURL
+	}
 	return &Client{
 		token:      token,
 		baseURL:    strings.TrimRight(baseURL, "/"),

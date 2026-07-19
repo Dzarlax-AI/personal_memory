@@ -182,6 +182,51 @@ func TestLoadRejectsMalformedBoolean(t *testing.T) {
 	}
 }
 
+func TestLoadIndexerDoesNotRequireOrParseServerFeatures(t *testing.T) {
+	t.Setenv("ENABLE_RAG", "true")
+	t.Setenv("API_KEY", "")
+	t.Setenv("ALLOW_INSECURE_AUTH", "not-a-boolean")
+	t.Setenv("ENABLE_TODOIST", "not-a-boolean")
+	t.Setenv("TODOIST_TOKEN", "")
+	t.Setenv("ENABLE_VIZ", "not-a-boolean")
+	t.Setenv("VIZ_PROXY_SECRET", "")
+	t.Setenv("OAUTH_ENABLED", "not-a-boolean")
+
+	cfg, err := LoadIndexer()
+	if err != nil {
+		t.Fatalf("standalone indexer must ignore server-only configuration: %v", err)
+	}
+	if !cfg.EnableRAG || cfg.QdrantURL == "" || cfg.EmbedURL == "" {
+		t.Fatalf("unexpected indexer config: %#v", cfg)
+	}
+}
+
+func TestLoadIndexerStrictlyValidatesIndexerSettings(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value string
+		want  string
+	}{
+		{name: "RAG disabled", key: "ENABLE_RAG", value: "false", want: "ENABLE_RAG"},
+		{name: "invalid Qdrant URL", key: "QDRANT_URL", value: "not-a-url", want: "QDRANT_URL"},
+		{name: "invalid embeddings URL", key: "EMBED_URL", value: "ftp://example.com", want: "EMBED_URL"},
+		{name: "invalid chunk size", key: "RAG_CHUNK_MAX_BYTES", value: "0", want: "RAG_CHUNK_MAX_BYTES"},
+		{name: "invalid folder threshold", key: "RAG_FOLDER_THRESHOLD", value: "1.1", want: "RAG_FOLDER_THRESHOLD"},
+		{name: "malformed interval", key: "RAG_REINDEX_INTERVAL_MINUTES", value: "soon", want: "RAG_REINDEX_INTERVAL_MINUTES"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ENABLE_RAG", "true")
+			t.Setenv(tt.key, tt.value)
+			_, err := LoadIndexer()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("LoadIndexer error = %v, want error containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestEnvCSVEmpty(t *testing.T) {
 	key := "TEST_EMPTY_CSV"
 	_ = os.Unsetenv(key)

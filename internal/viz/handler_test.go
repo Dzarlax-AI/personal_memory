@@ -1,6 +1,9 @@
 package viz
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -36,14 +39,14 @@ func TestGraphAndDuplicatesRejectInvalidBoundsBeforeLoadingPoints(t *testing.T) 
 func TestGraphAndDuplicatesRejectDatasetsOverMaxNodes(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"result":{"points":[`)
+		mustWriteTestResponse(t, w, `{"result":{"points":[`)
 		for i := 0; i < 3; i++ {
 			if i > 0 {
-				fmt.Fprint(w, ",")
+				mustWriteTestResponse(t, w, ",")
 			}
-			fmt.Fprintf(w, `{"id":"%d","vector":[1,0],"payload":{"text":"fact %d"}}`, i, i)
+			mustWriteTestResponse(t, w, `{"id":"%d","vector":[1,0],"payload":{"text":"fact %d"}}`, i, i)
 		}
-		fmt.Fprint(w, `],"next_page_offset":null}}`)
+		mustWriteTestResponse(t, w, `],"next_page_offset":null}}`)
 	}))
 	defer backend.Close()
 
@@ -54,6 +57,154 @@ func TestGraphAndDuplicatesRejectDatasetsOverMaxNodes(t *testing.T) {
 		h.Router().ServeHTTP(rr, req)
 		if rr.Code != http.StatusUnprocessableEntity {
 			t.Errorf("GET %s: got %d (%s), want 422", target, rr.Code, rr.Body.String())
+		}
+	}
+}
+
+func mustWriteTestResponse(t *testing.T, w http.ResponseWriter, format string, args ...interface{}) {
+	t.Helper()
+	if _, err := fmt.Fprintf(w, format, args...); err != nil {
+		t.Fatalf("write test response: %v", err)
+	}
+}
+
+func TestScrollGraphPointsPagesFiltersAndStopsAtBound(t *testing.T) {
+	calls := 0
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		switch calls {
+		case 1:
+			mustWriteTestResponse(t, w, `{"result":{"points":[{"id":"ignored","vector":[1,0],"payload":{"namespace":"work"}},{"id":"1","vector":[1,0],"payload":{"namespace":"projects"}}],"next_page_offset":"page-2"}}`)
+		case 2:
+			mustWriteTestResponse(t, w, `{"result":{"points":[{"id":"2","vector":[1,0],"payload":{"namespace":"projects"}},{"id":"3","vector":[1,0],"payload":{"namespace":"projects"}}],"next_page_offset":"page-3"}}`)
+		default:
+			t.Fatal("scroll continued after finding max_nodes+1 matching points")
+		}
+	}))
+	defer backend.Close()
+
+	h := NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65)
+	points, tooMany, err := h.scrollGraphPoints(context.Background(), 2, "projects", "", "", "")
+	if err != nil {
+		t.Fatalf("scrollGraphPoints: %v", err)
+	}
+	if !tooMany {
+		t.Fatal("tooMany = false, want true")
+	}
+	if calls != 2 || len(points) != 2 || points[0].ID != "1" || points[1].ID != "2" {
+		t.Fatalf("calls=%d points=%#v, want two pages and matching points 1,2", calls, points)
+	}
+}
+
+func TestScrollGraphPointsStopsSparseScanAtHardBound(t *testing.T) {
+	calls := 0
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		mustWriteTestResponse(t, w, `{"result":{"points":[{"id":"%d-a","vector":[1,0],"payload":{"text":"present"}},{"id":"%d-b","vector":[1,0],"payload":{"text":"present"}}],"next_page_offset":"page-%d"}}`, calls, calls, calls+1)
+	}))
+	defer backend.Close()
+
+	h := NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65)
+	_, _, err := h.scrollGraphPointsWithLimit(context.Background(), 2, 3, "", "", "", "missing")
+	if !errors.Is(err, errGraphScanLimit) {
+		t.Fatalf("scrollGraphPointsWithLimit error = %v, want errGraphScanLimit", err)
+	}
+	if calls != 2 {
+		t.Fatalf("scroll calls = %d, want early stop after 2 bounded pages", calls)
+	}
+}
+
+func TestScrollGraphPointsPushesRepresentableFiltersToQdrant(t *testing.T) {
+	var requestBody map[string]interface{}
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		mustWriteTestResponse(t, w, `{"result":{"points":[],"next_page_offset":null}}`)
+	}))
+	defer backend.Close()
+
+	h := NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65)
+	if _, _, err := h.scrollGraphPoints(context.Background(), 10, "projects", "memory", "personal-memory", "missing"); err != nil {
+		t.Fatalf("scrollGraphPoints: %v", err)
+	}
+	filter, ok := requestBody["filter"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("request filter = %#v, want object", requestBody["filter"])
+	}
+	must, ok := filter["must"].([]interface{})
+	if !ok || len(must) != 3 {
+		t.Fatalf("filter.must = %#v, want namespace/tag/primary_tag conditions", filter["must"])
+	}
+	encoded, err := json.Marshal(filter)
+	if err != nil {
+		t.Fatalf("marshal filter: %v", err)
+	}
+	for _, want := range []string{`"namespace"`, `"tags"`, `"primary_tag"`} {
+		if !strings.Contains(string(encoded), want) {
+			t.Errorf("Qdrant filter %s does not contain %s", encoded, want)
+		}
+	}
+	if strings.Contains(string(encoded), `"text"`) {
+		t.Fatalf("local text-state filter leaked into Qdrant filter: %s", encoded)
+	}
+}
+
+func TestQdrantGraphFiltersKeepsMissingNamespaceLocal(t *testing.T) {
+	filter := qdrantGraphFilters("__missing__", "memory", "")
+	encoded, err := json.Marshal(filter)
+	if err != nil {
+		t.Fatalf("marshal filter: %v", err)
+	}
+	if strings.Contains(string(encoded), `"namespace"`) {
+		t.Fatalf("missing-namespace sentinel must stay a local filter: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"tags"`) {
+		t.Fatalf("representable tag filter was not pushed to Qdrant: %s", encoded)
+	}
+}
+
+func TestGraphComputationErrorsHaveBoundedStatuses(t *testing.T) {
+	for _, tt := range []struct {
+		err  error
+		want int
+	}{
+		{err: errGraphScanLimit, want: http.StatusUnprocessableEntity},
+		{err: context.DeadlineExceeded, want: http.StatusRequestTimeout},
+	} {
+		rr := httptest.NewRecorder()
+		writeGraphComputationError(rr, tt.err)
+		if rr.Code != tt.want {
+			t.Errorf("error %v: status = %d, want %d", tt.err, rr.Code, tt.want)
+		}
+	}
+}
+
+func TestSimilarityScansHonorCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	points := []qdrant.ScrollPoint{{ID: "1", Vector: []float32{1, 0}}, {ID: "2", Vector: []float32{1, 0}}}
+	if _, err := strongestGraphEdges(ctx, points, 0.5, 10); !errors.Is(err, context.Canceled) {
+		t.Fatalf("strongestGraphEdges error = %v, want context.Canceled", err)
+	}
+	if _, err := strongestDuplicates(ctx, points, 0.5, 10); !errors.Is(err, context.Canceled) {
+		t.Fatalf("strongestDuplicates error = %v, want context.Canceled", err)
+	}
+}
+
+func TestDuplicatesUIHandlesErrorsAndOffersBoundedRetry(t *testing.T) {
+	js, err := staticFS.ReadFile("static/assets/js/duplicates.js")
+	if err != nil {
+		t.Fatalf("read duplicates.js: %v", err)
+	}
+	source := string(js)
+	for _, want := range []string{"if (!res.ok)", "await res.text()", "loadDuplicates(5000)", "Retry"} {
+		if !strings.Contains(source, want) {
+			t.Errorf("duplicates.js does not contain %q", want)
 		}
 	}
 }

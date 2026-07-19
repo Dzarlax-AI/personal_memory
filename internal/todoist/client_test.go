@@ -63,3 +63,13 @@ func TestTaskIDsArePathEscaped(t *testing.T) {
 		t.Fatalf("RequestURI = %q, want escaped task id", requestURI)
 	}
 }
+
+func TestNewClientWithHTTPClientDefaultsBlankBaseURL(t *testing.T) {
+	client := NewClientWithHTTPClient("token", " \t ", nil)
+	if client.baseURL != defaultBaseURL {
+		t.Fatalf("baseURL = %q, want %q", client.baseURL, defaultBaseURL)
+	}
+	if client.httpClient == nil {
+		t.Fatal("httpClient is nil")
+	}
+}
