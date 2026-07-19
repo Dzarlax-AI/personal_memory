@@ -7,20 +7,34 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 )
 
-const baseURL = "https://api.todoist.com/api/v1"
+const defaultBaseURL = "https://api.todoist.com/api/v1"
 
 type Client struct {
 	token      string
+	baseURL    string
 	httpClient *http.Client
 }
 
 func NewClient(token string) *Client {
+	return NewClientWithHTTPClient(token, defaultBaseURL, &http.Client{Timeout: 10 * time.Second})
+}
+
+// NewClientWithHTTPClient creates a client with injectable transport settings.
+// It is primarily useful for tests and deployments that proxy Todoist.
+func NewClientWithHTTPClient(token, baseURL string, httpClient *http.Client) *Client {
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 10 * time.Second}
+	}
 	return &Client{
 		token:      token,
-		httpClient: &http.Client{Timeout: 10 * time.Second},
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		httpClient: httpClient,
 	}
 }
 
@@ -34,7 +48,7 @@ func (c *Client) do(ctx context.Context, method, path string, body interface{}) 
 		reqBody = bytes.NewReader(b)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, reqBody)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reqBody)
 	if err != nil {
 		return nil, err
 	}
@@ -68,16 +82,19 @@ func (c *Client) GetLabels(ctx context.Context) ([]byte, error) {
 }
 
 func (c *Client) GetTasks(ctx context.Context, projectID string, limit int) ([]byte, error) {
-	path := fmt.Sprintf("/tasks?limit=%d", limit)
+	query := url.Values{}
+	query.Set("limit", strconv.Itoa(limit))
 	if projectID != "" {
-		path += "&project_id=" + projectID
+		query.Set("project_id", projectID)
 	}
-	return c.do(ctx, http.MethodGet, path, nil)
+	return c.do(ctx, http.MethodGet, "/tasks?"+query.Encode(), nil)
 }
 
 func (c *Client) GetTasksFiltered(ctx context.Context, filter string, limit int) ([]byte, error) {
-	path := fmt.Sprintf("/tasks/filter?query=%s&limit=%d", filter, limit)
-	return c.do(ctx, http.MethodGet, path, nil)
+	query := url.Values{}
+	query.Set("query", filter)
+	query.Set("limit", strconv.Itoa(limit))
+	return c.do(ctx, http.MethodGet, "/tasks/filter?"+query.Encode(), nil)
 }
 
 func (c *Client) CreateTask(ctx context.Context, task map[string]interface{}) ([]byte, error) {
@@ -85,15 +102,15 @@ func (c *Client) CreateTask(ctx context.Context, task map[string]interface{}) ([
 }
 
 func (c *Client) UpdateTask(ctx context.Context, taskID string, update map[string]interface{}) ([]byte, error) {
-	return c.do(ctx, http.MethodPost, "/tasks/"+taskID, update)
+	return c.do(ctx, http.MethodPost, "/tasks/"+url.PathEscape(taskID), update)
 }
 
 func (c *Client) DeleteTask(ctx context.Context, taskID string) error {
-	_, err := c.do(ctx, http.MethodDelete, "/tasks/"+taskID, nil)
+	_, err := c.do(ctx, http.MethodDelete, "/tasks/"+url.PathEscape(taskID), nil)
 	return err
 }
 
 func (c *Client) CompleteTask(ctx context.Context, taskID string) error {
-	_, err := c.do(ctx, http.MethodPost, "/tasks/"+taskID+"/close", nil)
+	_, err := c.do(ctx, http.MethodPost, "/tasks/"+url.PathEscape(taskID)+"/close", nil)
 	return err
 }

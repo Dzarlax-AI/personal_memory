@@ -2,6 +2,8 @@ package backup
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"time"
@@ -35,38 +37,43 @@ func (l *Loop) Run(ctx context.Context) {
 			slog.Info("backup loop stopped")
 			return
 		case <-ticker.C:
-			l.doBackup(ctx)
+			if err := l.DoBackup(ctx); err != nil {
+				slog.Error("backup failed", "error", err)
+			}
 		}
 	}
 }
 
-func (l *Loop) doBackup(ctx context.Context) {
+// DoBackup creates one snapshot and prunes snapshots beyond the retention
+// limit. It returns all prune failures so callers and tests can observe them.
+func (l *Loop) DoBackup(ctx context.Context) error {
 	name, err := l.qdrant.CreateSnapshot(ctx)
 	if err != nil {
-		slog.Error("backup: create snapshot failed", "error", err)
-		return
+		return fmt.Errorf("create snapshot: %w", err)
 	}
 	slog.Info("backup: snapshot created", "name", name)
 
 	// Prune old snapshots.
 	snapshots, err := l.qdrant.ListSnapshots(ctx)
 	if err != nil {
-		slog.Error("backup: list snapshots failed", "error", err)
-		return
+		return fmt.Errorf("list snapshots: %w", err)
 	}
 
 	if len(snapshots) <= l.keepSnapshots {
-		return
+		return nil
 	}
 
 	// Sort alphabetically (snapshot names include timestamps).
 	sort.Strings(snapshots)
 	toDelete := snapshots[:len(snapshots)-l.keepSnapshots]
+	var pruneErrors []error
 	for _, s := range toDelete {
 		if err := l.qdrant.DeleteSnapshot(ctx, s); err != nil {
 			slog.Error("backup: delete snapshot failed", "name", s, "error", err)
+			pruneErrors = append(pruneErrors, fmt.Errorf("delete snapshot %q: %w", s, err))
 		} else {
 			slog.Info("backup: pruned snapshot", "name", s)
 		}
 	}
+	return errors.Join(pruneErrors...)
 }

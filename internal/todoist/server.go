@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -12,6 +14,11 @@ import (
 type Server struct {
 	client *Client
 }
+
+const (
+	maxLabels      = 100
+	maxLabelLength = 255
+)
 
 func NewServer(client *Client) *Server {
 	return &Server{client: client}
@@ -42,7 +49,7 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 		mcp.WithOpenWorldHintAnnotation(true),
 		mcp.WithString("project_id", mcp.Description("Filter by project ID")),
 		mcp.WithString("filter", mcp.Description("Todoist filter query (e.g. 'today', 'overdue', '#Work')")),
-		mcp.WithNumber("limit", mcp.Description("Max results (default 20)")),
+		mcp.WithNumber("limit", mcp.Description("Max results (default 20)"), mcp.Min(1), mcp.Max(100)),
 	), s.getTasks)
 
 	srv.AddTool(mcp.NewTool("create_task",
@@ -54,7 +61,8 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 		mcp.WithString("content", mcp.Description("Task title/description"), mcp.Required()),
 		mcp.WithString("project_id", mcp.Description("Project to add task to")),
 		mcp.WithString("due_string", mcp.Description("Natural language due date")),
-		mcp.WithNumber("priority", mcp.Description("1 (normal) to 4 (urgent)")),
+		mcp.WithNumber("priority", mcp.Description("1 (normal) to 4 (urgent)"), mcp.Min(1), mcp.Max(4), mcp.MultipleOf(1)),
+		mcp.WithArray("labels", mcp.Description("Todoist label names"), mcp.WithStringItems(mcp.MinLength(1), mcp.MaxLength(maxLabelLength)), mcp.MaxItems(maxLabels), mcp.UniqueItems(true)),
 	), s.createTask)
 
 	srv.AddTool(mcp.NewTool("update_task",
@@ -66,7 +74,8 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 		mcp.WithString("task_id", mcp.Description("Task ID"), mcp.Required()),
 		mcp.WithString("content", mcp.Description("New title")),
 		mcp.WithString("due_string", mcp.Description("New due date")),
-		mcp.WithNumber("priority", mcp.Description("New priority (1-4)")),
+		mcp.WithNumber("priority", mcp.Description("New priority (1-4)"), mcp.Min(1), mcp.Max(4), mcp.MultipleOf(1)),
+		mcp.WithArray("labels", mcp.Description("Replacement Todoist label names"), mcp.WithStringItems(mcp.MinLength(1), mcp.MaxLength(maxLabelLength)), mcp.MaxItems(maxLabels), mcp.UniqueItems(true)),
 	), s.updateTask)
 
 	srv.AddTool(mcp.NewTool("delete_task",
@@ -109,6 +118,9 @@ func (s *Server) getTasks(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	projectID := strParam(args, "project_id")
 	filter := strParam(args, "filter")
 	limit := intParam(args, "limit", 20)
+	if limit < 1 || limit > 100 {
+		return mcp.NewToolResultError("limit must be an integer between 1 and 100"), nil
+	}
 
 	var data []byte
 	var err error
@@ -125,8 +137,12 @@ func (s *Server) getTasks(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 
 func (s *Server) createTask(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
+	content := strParam(args, "content")
+	if strings.TrimSpace(content) == "" {
+		return mcp.NewToolResultError("content is required and must not be blank"), nil
+	}
 	task := make(map[string]interface{})
-	task["content"] = strParam(args, "content")
+	task["content"] = content
 	if v := strParam(args, "project_id"); v != "" {
 		task["project_id"] = v
 	}
@@ -134,10 +150,18 @@ func (s *Server) createTask(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		task["due_string"] = v
 	}
 	if v, ok := args["priority"]; ok && v != nil {
-		task["priority"] = v
+		priority, err := validatePriority(v)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		task["priority"] = priority
 	}
 	if v, ok := args["labels"]; ok && v != nil {
-		task["labels"] = v
+		labels, err := validateLabels(v)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		task["labels"] = labels
 	}
 
 	data, err := s.client.CreateTask(ctx, task)
@@ -150,22 +174,37 @@ func (s *Server) createTask(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 func (s *Server) updateTask(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	taskID := strParam(args, "task_id")
-	if taskID == "" {
-		return mcp.NewToolResultError("task_id is required"), nil
+	if strings.TrimSpace(taskID) == "" {
+		return mcp.NewToolResultError("task_id is required and must not be blank"), nil
 	}
 
 	update := make(map[string]interface{})
-	if v := strParam(args, "content"); v != "" {
-		update["content"] = v
+	if v, ok := args["content"]; ok && v != nil {
+		content, ok := v.(string)
+		if !ok || strings.TrimSpace(content) == "" {
+			return mcp.NewToolResultError("content must not be blank"), nil
+		}
+		update["content"] = content
 	}
 	if v := strParam(args, "due_string"); v != "" {
 		update["due_string"] = v
 	}
 	if v, ok := args["priority"]; ok && v != nil {
-		update["priority"] = v
+		priority, err := validatePriority(v)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		update["priority"] = priority
 	}
 	if v, ok := args["labels"]; ok && v != nil {
-		update["labels"] = v
+		labels, err := validateLabels(v)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		update["labels"] = labels
+	}
+	if len(update) == 0 {
+		return mcp.NewToolResultError("at least one update field is required"), nil
 	}
 
 	data, err := s.client.UpdateTask(ctx, taskID, update)
@@ -178,8 +217,8 @@ func (s *Server) updateTask(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 func (s *Server) deleteTask(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	taskID := strParam(args, "task_id")
-	if taskID == "" {
-		return mcp.NewToolResultError("task_id is required"), nil
+	if strings.TrimSpace(taskID) == "" {
+		return mcp.NewToolResultError("task_id is required and must not be blank"), nil
 	}
 	if err := s.client.DeleteTask(ctx, taskID); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -190,8 +229,8 @@ func (s *Server) deleteTask(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 func (s *Server) completeTask(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	taskID := strParam(args, "task_id")
-	if taskID == "" {
-		return mcp.NewToolResultError("task_id is required"), nil
+	if strings.TrimSpace(taskID) == "" {
+		return mcp.NewToolResultError("task_id is required and must not be blank"), nil
 	}
 	if err := s.client.CompleteTask(ctx, taskID); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -217,11 +256,67 @@ func intParam(args map[string]interface{}, key string, def int) int {
 	}
 	switch n := v.(type) {
 	case float64:
+		if math.Trunc(n) != n {
+			return 0
+		}
 		return int(n)
 	case int:
 		return n
 	}
 	return def
+}
+
+func validatePriority(raw interface{}) (int, error) {
+	var priority int
+	switch n := raw.(type) {
+	case float64:
+		if math.Trunc(n) != n {
+			return 0, fmt.Errorf("priority must be an integer between 1 and 4")
+		}
+		priority = int(n)
+	case int:
+		priority = n
+	default:
+		return 0, fmt.Errorf("priority must be an integer between 1 and 4")
+	}
+	if priority < 1 || priority > 4 {
+		return 0, fmt.Errorf("priority must be an integer between 1 and 4")
+	}
+	return priority, nil
+}
+
+func validateLabels(raw interface{}) ([]string, error) {
+	values, ok := raw.([]interface{})
+	if !ok {
+		if stringsValue, ok := raw.([]string); ok {
+			values = make([]interface{}, len(stringsValue))
+			for i, label := range stringsValue {
+				values[i] = label
+			}
+		} else {
+			return nil, fmt.Errorf("labels must be an array of strings")
+		}
+	}
+	if len(values) > maxLabels {
+		return nil, fmt.Errorf("labels must contain at most %d entries", maxLabels)
+	}
+	labels := make([]string, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for i, rawLabel := range values {
+		label, ok := rawLabel.(string)
+		if !ok || strings.TrimSpace(label) == "" {
+			return nil, fmt.Errorf("labels[%d] must be a nonblank string", i)
+		}
+		if len([]rune(label)) > maxLabelLength {
+			return nil, fmt.Errorf("labels[%d] must be at most %d characters", i, maxLabelLength)
+		}
+		if _, exists := seen[label]; exists {
+			return nil, fmt.Errorf("labels must not contain duplicates")
+		}
+		seen[label] = struct{}{}
+		labels[i] = label
+	}
+	return labels, nil
 }
 
 func formatJSON(data []byte) string {

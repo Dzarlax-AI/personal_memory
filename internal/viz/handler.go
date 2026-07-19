@@ -1,10 +1,14 @@
 package viz
 
 import (
+	"container/heap"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"math"
 	"net/http"
 	"path/filepath"
 	"sort"
@@ -14,6 +18,72 @@ import (
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 	"github.com/go-chi/chi/v5"
 )
+
+const (
+	defaultGraphMaxNodes = 1000
+	hardGraphMaxNodes    = 5000
+	hardGraphMaxEdges    = 5000
+	defaultMaxPairs      = 500
+	hardMaxPairs         = 5000
+	maxTagsBodyBytes     = 64 << 10
+	maxFactTags          = 50
+	maxFactTagLength     = 100
+)
+
+type graphEdge struct {
+	From       string  `json:"from"`
+	To         string  `json:"to"`
+	Similarity float64 `json:"similarity"`
+}
+
+type edgeHeap []graphEdge
+
+func (h edgeHeap) Len() int { return len(h) }
+func (h edgeHeap) Less(i, j int) bool {
+	if h[i].Similarity != h[j].Similarity {
+		return h[i].Similarity < h[j].Similarity
+	}
+	if h[i].From != h[j].From {
+		return h[i].From > h[j].From
+	}
+	return h[i].To > h[j].To
+}
+func (h edgeHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
+func (h *edgeHeap) Push(x interface{}) { *h = append(*h, x.(graphEdge)) }
+func (h *edgeHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
+
+type duplicateCandidate struct {
+	i, j       int
+	similarity float64
+}
+
+type duplicateHeap []duplicateCandidate
+
+func (h duplicateHeap) Len() int { return len(h) }
+func (h duplicateHeap) Less(i, j int) bool {
+	if h[i].similarity != h[j].similarity {
+		return h[i].similarity < h[j].similarity
+	}
+	if h[i].i != h[j].i {
+		return h[i].i > h[j].i
+	}
+	return h[i].j > h[j].j
+}
+func (h duplicateHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
+func (h *duplicateHeap) Push(x interface{}) { *h = append(*h, x.(duplicateCandidate)) }
+func (h *duplicateHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
 
 //go:embed all:static
 var staticFS embed.FS
@@ -122,17 +192,20 @@ func (h *Handler) apiFacts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) apiGraph(w http.ResponseWriter, r *http.Request) {
-	threshold := h.defaultThreshold
-	if v := r.URL.Query().Get("threshold"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			threshold = f
-		}
+	threshold, err := boundedFloatParam(r, "threshold", h.defaultThreshold, 0, 1)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
-	maxEdges := h.defaultMaxEdges
-	if v := r.URL.Query().Get("max_edges"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			maxEdges = n
-		}
+	maxEdges, err := boundedIntParam(r, "max_edges", h.defaultMaxEdges, 1, hardGraphMaxEdges)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	maxNodes, err := boundedIntParam(r, "max_nodes", defaultGraphMaxNodes, 1, hardGraphMaxNodes)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	namespace := r.URL.Query().Get("namespace")
 	tag := r.URL.Query().Get("tag")
@@ -145,42 +218,37 @@ func (h *Handler) apiGraph(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	points = filterGraphPoints(points, namespace, tag, primaryTag, textState)
+	if len(points) > maxNodes {
+		http.Error(w, fmt.Sprintf("filtered dataset has %d nodes; narrow the filters or raise max_nodes up to %d", len(points), hardGraphMaxNodes), http.StatusUnprocessableEntity)
+		return
+	}
 
 	nodes := make([]map[string]interface{}, 0, len(points))
 	for _, p := range points {
 		nodes = append(nodes, pointToNode(p))
 	}
 
-	type edge struct {
-		From       string  `json:"from"`
-		To         string  `json:"to"`
-		Similarity float64 `json:"similarity"`
-	}
-
-	var edges []edge
+	edges := &edgeHeap{}
+	heap.Init(edges)
 	for i := 0; i < len(points); i++ {
 		for j := i + 1; j < len(points); j++ {
 			sim := cosineSimilarity(points[i].Vector, points[j].Vector)
 			if sim >= threshold {
-				edges = append(edges, edge{
+				candidate := graphEdge{
 					From:       points[i].ID,
 					To:         points[j].ID,
 					Similarity: sim,
-				})
+				}
+				keepStrongestEdge(edges, candidate, maxEdges)
 			}
 		}
 	}
-
-	if len(edges) > maxEdges {
-		sort.Slice(edges, func(i, j int) bool {
-			return edges[i].Similarity > edges[j].Similarity
-		})
-		edges = edges[:maxEdges]
-	}
+	edgeResults := append([]graphEdge(nil), (*edges)...)
+	sort.Slice(edgeResults, func(i, j int) bool { return strongerEdge(edgeResults[i], edgeResults[j]) })
 
 	writeJSON(w, map[string]interface{}{
 		"nodes": nodes,
-		"edges": edges,
+		"edges": edgeResults,
 	})
 }
 
@@ -244,16 +312,29 @@ func payloadHasTag(raw interface{}, tag string) bool {
 }
 
 func (h *Handler) apiDuplicates(w http.ResponseWriter, r *http.Request) {
-	threshold := 0.90
-	if v := r.URL.Query().Get("threshold"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			threshold = f
-		}
+	threshold, err := boundedFloatParam(r, "threshold", 0.90, 0, 1)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	maxNodes, err := boundedIntParam(r, "max_nodes", defaultGraphMaxNodes, 1, hardGraphMaxNodes)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	maxPairs, err := boundedIntParam(r, "max_pairs", defaultMaxPairs, 1, hardMaxPairs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	points, err := h.qdrant.ScrollAll(r.Context(), nil, true)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if len(points) > maxNodes {
+		http.Error(w, fmt.Sprintf("dataset has %d nodes; reduce the dataset or raise max_nodes up to %d", len(points), hardGraphMaxNodes), http.StatusUnprocessableEntity)
 		return
 	}
 
@@ -263,23 +344,23 @@ func (h *Handler) apiDuplicates(w http.ResponseWriter, r *http.Request) {
 		Similarity float64                `json:"similarity"`
 	}
 
-	var pairs []dupPair
+	candidates := &duplicateHeap{}
+	heap.Init(candidates)
 	for i := 0; i < len(points); i++ {
 		for j := i + 1; j < len(points); j++ {
 			sim := cosineSimilarity(points[i].Vector, points[j].Vector)
 			if sim >= threshold {
-				pairs = append(pairs, dupPair{
-					A:          pointToNode(points[i]),
-					B:          pointToNode(points[j]),
-					Similarity: sim,
-				})
+				keepStrongestDuplicate(candidates, duplicateCandidate{i: i, j: j, similarity: sim}, maxPairs)
 			}
 		}
 	}
-
-	sort.Slice(pairs, func(i, j int) bool {
-		return pairs[i].Similarity > pairs[j].Similarity
+	sort.Slice(*candidates, func(i, j int) bool {
+		return strongerDuplicate((*candidates)[i], (*candidates)[j])
 	})
+	pairs := make([]dupPair, len(*candidates))
+	for i, candidate := range *candidates {
+		pairs[i] = dupPair{A: pointToNode(points[candidate.i]), B: pointToNode(points[candidate.j]), Similarity: candidate.similarity}
+	}
 
 	writeJSON(w, map[string]interface{}{"pairs": pairs})
 }
@@ -414,15 +495,34 @@ func (h *Handler) apiUpdateFactTags(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing point id", http.StatusBadRequest)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxTagsBodyBytes)
 	var req struct {
 		Tags       []string `json:"tags"`
 		PrimaryTag string   `json:"primary_tag"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "request body is too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	tags, primaryTag := normalizeFactTags(req.Tags, req.PrimaryTag)
+	if err := decoder.Decode(&struct{}{}); err == nil {
+		http.Error(w, "request body must contain a single JSON object", http.StatusBadRequest)
+		return
+	} else if !errors.Is(err, io.EOF) {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	tags, primaryTag, err := normalizeFactTags(req.Tags, req.PrimaryTag)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := h.qdrant.SetPayload(r.Context(), id, map[string]interface{}{"tags": tags, "primary_tag": primaryTag}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -430,13 +530,19 @@ func (h *Handler) apiUpdateFactTags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"id": id, "tags": tags, "primary_tag": primaryTag})
 }
 
-func normalizeFactTags(tags []string, primary string) ([]string, string) {
+func normalizeFactTags(tags []string, primary string) ([]string, string, error) {
+	if len(tags) > maxFactTags {
+		return nil, "", fmt.Errorf("tags must contain at most %d entries", maxFactTags)
+	}
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(tags)+1)
 	for _, tag := range tags {
 		t := strings.TrimSpace(tag)
 		if t == "" {
-			continue
+			return nil, "", fmt.Errorf("tags must not contain blank values")
+		}
+		if len([]rune(t)) > maxFactTagLength {
+			return nil, "", fmt.Errorf("tags must be at most %d characters", maxFactTagLength)
 		}
 		if _, ok := seen[t]; ok {
 			continue
@@ -447,16 +553,91 @@ func normalizeFactTags(tags []string, primary string) ([]string, string) {
 	sort.Strings(out)
 	primary = strings.TrimSpace(primary)
 	if primary != "" {
+		if len([]rune(primary)) > maxFactTagLength {
+			return nil, "", fmt.Errorf("primary_tag must be at most %d characters", maxFactTagLength)
+		}
 		if _, ok := seen[primary]; !ok {
+			if len(out) >= maxFactTags {
+				return nil, "", fmt.Errorf("adding primary_tag would exceed the %d tag limit", maxFactTags)
+			}
 			out = append(out, primary)
 			sort.Strings(out)
 		}
-		return out, primary
+		return out, primary, nil
 	}
 	if len(out) == 1 {
-		return out, out[0]
+		return out, out[0], nil
 	}
-	return out, ""
+	return out, "", nil
+}
+
+func boundedFloatParam(r *http.Request, name string, def, min, max float64) (float64, error) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		if def < min || def > max {
+			return 0, fmt.Errorf("default %s must be between %g and %g", name, min, max)
+		}
+		return def, nil
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < min || value > max {
+		return 0, fmt.Errorf("%s must be a number between %g and %g", name, min, max)
+	}
+	return value, nil
+}
+
+func boundedIntParam(r *http.Request, name string, def, min, max int) (int, error) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return def, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < min || value > max {
+		return 0, fmt.Errorf("%s must be an integer between %d and %d", name, min, max)
+	}
+	return value, nil
+}
+
+func keepStrongestEdge(edges *edgeHeap, candidate graphEdge, limit int) {
+	if edges.Len() < limit {
+		heap.Push(edges, candidate)
+		return
+	}
+	if strongerEdge(candidate, (*edges)[0]) {
+		heap.Pop(edges)
+		heap.Push(edges, candidate)
+	}
+}
+
+func strongerEdge(a, b graphEdge) bool {
+	if a.Similarity != b.Similarity {
+		return a.Similarity > b.Similarity
+	}
+	if a.From != b.From {
+		return a.From < b.From
+	}
+	return a.To < b.To
+}
+
+func keepStrongestDuplicate(pairs *duplicateHeap, candidate duplicateCandidate, limit int) {
+	if pairs.Len() < limit {
+		heap.Push(pairs, candidate)
+		return
+	}
+	if strongerDuplicate(candidate, (*pairs)[0]) {
+		heap.Pop(pairs)
+		heap.Push(pairs, candidate)
+	}
+}
+
+func strongerDuplicate(a, b duplicateCandidate) bool {
+	if a.similarity != b.similarity {
+		return a.similarity > b.similarity
+	}
+	if a.i != b.i {
+		return a.i < b.i
+	}
+	return a.j < b.j
 }
 
 // --- Documents (RAG) ---

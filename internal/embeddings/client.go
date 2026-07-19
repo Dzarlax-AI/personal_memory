@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 // Default TEI batch size. TEI accepts arrays; this caps memory and keeps
 // requests below most reverse-proxy body limits.
 const defaultBatchSize = 32
+
+const defaultHTTPTimeout = 30 * time.Second
+const maxResponseBodyBytes int64 = 8 << 20
 
 type Client struct {
 	url        string
@@ -21,7 +25,7 @@ type Client struct {
 func NewClient(url string) *Client {
 	return &Client{
 		url:        url,
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: defaultHTTPTimeout},
 	}
 }
 
@@ -78,15 +82,29 @@ func (c *Client) embed(ctx context.Context, inputs []string) ([][]float32, error
 		return nil, fmt.Errorf("embed request: %w", err)
 	}
 	defer resp.Body.Close()
+	responseBody, err := readLimitedBody(resp.Body, maxResponseBodyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("read embed response: %w", err)
+	}
 
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("embed failed (status %d): %s", resp.StatusCode, string(b))
+		return nil, fmt.Errorf("embed failed (status %d): %s", resp.StatusCode, string(responseBody))
 	}
 
 	var result [][]float32
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(responseBody, &result); err != nil {
 		return nil, fmt.Errorf("decode embed response: %w", err)
 	}
 	return result, nil
+}
+
+func readLimitedBody(reader io.Reader, limit int64) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("response body exceeds %d bytes", limit)
+	}
+	return body, nil
 }

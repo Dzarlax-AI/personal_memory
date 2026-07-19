@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +23,8 @@ import (
 // (the first reindex can hit many files at once).
 const autoReindexInitialDelay = 10 * time.Second
 
+const maxSearchDocumentsLimit = 100
+
 // Server exposes RAG as MCP tools registered on the shared memory MCP server.
 type Server struct {
 	chunks    *qdrant.Client
@@ -30,6 +34,7 @@ type Server struct {
 	indexer   *Indexer
 	lifeCtx   context.Context // cancelled on graceful shutdown
 	reindexMu sync.Mutex      // held while a background reindex is running
+	workWG    sync.WaitGroup  // all background loops and on-demand reindexes
 }
 
 // NewServer builds the RAG MCP server. lifeCtx should be the long-lived
@@ -103,19 +108,9 @@ func (s *Server) RegisterTools(mcpSrv *server.MCPServer) {
 
 func (s *Server) handleSearchDocuments(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
-	query, _ := args["query"].(string)
-	if query == "" {
-		return mcp.NewToolResultError("query is required"), nil
-	}
-
-	limit := 5
-	if v, ok := args["limit"].(float64); ok && v > 0 {
-		limit = int(v)
-	}
-
-	mode := "hierarchical"
-	if m, ok := args["mode"].(string); ok && m != "" {
-		mode = m
+	query, limit, mode, validationErr := parseSearchDocumentsArgs(args)
+	if validationErr != "" {
+		return mcp.NewToolResultError(validationErr), nil
 	}
 
 	vec, err := s.embed.Embed(ctx, query)
@@ -148,6 +143,33 @@ func (s *Server) handleSearchDocuments(ctx context.Context, req mcp.CallToolRequ
 
 	b, _ := json.MarshalIndent(results, "", "  ")
 	return mcp.NewToolResultText(string(b)), nil
+}
+
+func parseSearchDocumentsArgs(args map[string]any) (query string, limit int, mode, validationErr string) {
+	query, _ = args["query"].(string)
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "", 0, "", "query is required"
+	}
+
+	limit = 5
+	if raw, exists := args["limit"]; exists {
+		v, ok := raw.(float64)
+		if !ok || math.IsNaN(v) || math.IsInf(v, 0) || v < 1 || v > maxSearchDocumentsLimit || math.Trunc(v) != v {
+			return "", 0, "", fmt.Sprintf("limit must be an integer between 1 and %d", maxSearchDocumentsLimit)
+		}
+		limit = int(v)
+	}
+
+	mode = "hierarchical"
+	if raw, exists := args["mode"]; exists {
+		m, ok := raw.(string)
+		if !ok || (m != "hierarchical" && m != "flat") {
+			return "", 0, "", "mode must be 'hierarchical' or 'flat'"
+		}
+		mode = m
+	}
+	return query, limit, mode, ""
 }
 
 // relPath returns path relative to base; falls back to the absolute path if
@@ -207,7 +229,9 @@ func (s *Server) handleReindexDocuments(_ context.Context, _ mcp.CallToolRequest
 	if !s.reindexMu.TryLock() {
 		return mcp.NewToolResultError("reindex already in progress"), nil
 	}
+	s.workWG.Add(1)
 	go func() {
+		defer s.workWG.Done()
 		defer s.reindexMu.Unlock()
 		if err := s.indexer.Run(s.lifeCtx); err != nil {
 			slog.Error("background reindex failed", "error", err)
@@ -226,7 +250,26 @@ func (s *Server) StartAutoReindex(ctx context.Context) {
 		slog.Info("RAG auto-rescan disabled (set RAG_REINDEX_INTERVAL_MINUTES to enable)")
 		return
 	}
-	go s.autoReindexLoop(ctx)
+	s.workWG.Add(1)
+	go func() {
+		defer s.workWG.Done()
+		s.autoReindexLoop(ctx)
+	}()
+}
+
+// Wait blocks until every background RAG loop and in-flight reindex exits.
+func (s *Server) Wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		s.workWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("wait for RAG background work: %w", ctx.Err())
+	}
 }
 
 func (s *Server) autoReindexLoop(ctx context.Context) {

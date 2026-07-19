@@ -1,470 +1,583 @@
-# Personal Memory Stack
+# Personal Memory
 
-Self-hosted semantic memory + Todoist + hierarchical document RAG for any MCP-compatible AI client. Stores and retrieves facts using vector embeddings, searches your personal markdown documents with a folder-first retrieval strategy, and exposes Todoist as a server-side MCP tool — no third-party cloud auth needed, all credentials stay on your VPS.
+**A self-hosted memory layer that gives MCP-compatible AI clients durable, user-controlled context across sessions.**
 
-Written in Go as a single static binary (plus a standalone indexer binary for cron-based re-indexing).
+Personal Memory stores facts as semantic memory, retrieves the context relevant to the current conversation, and can optionally search a personal document library, expose Todoist tools, and visualize what has been remembered. The service runs on infrastructure you control and presents its capabilities through Streamable HTTP MCP endpoints.
 
-## Stack
+> Persistent facts are the core product. Document RAG, Todoist, OAuth onboarding, and the visualization dashboard are optional features that can be enabled independently.
 
-| Component | Role |
-|---|---|
-| [Qdrant](https://qdrant.tech/) | Vector database |
-| [Text Embeddings Inference](https://github.com/huggingface/text-embeddings-inference) | Local embedding model server |
-| [intfloat/multilingual-e5-small](https://huggingface.co/intfloat/multilingual-e5-small) | Embedding model (multilingual, ~470MB) |
-| [mcp-go](https://github.com/mark3labs/mcp-go) | MCP server implementation |
-| [Chi](https://github.com/go-chi/chi) | HTTP router |
-| [vis.js](https://visjs.org/) | Interactive graph and timeline visualization |
-| Traefik v3 | Reverse proxy, SSL, Authentik ForwardAuth (OIDC) for viz |
+## Contents
 
-## Architecture
+- [Why Personal Memory](#why-personal-memory)
+- [What It Can Do](#what-it-can-do)
+- [How It Works](#how-it-works)
+- [Quick Start](#quick-start)
+- [Connect an MCP Client](#connect-an-mcp-client)
+- [Using Personal Memory](#using-personal-memory)
+- [Core Concepts](#core-concepts)
+- [Tool Reference](#tool-reference)
+- [Developer and Operator Guide](#developer-and-operator-guide)
+- [Configuration Reference](#configuration-reference)
+- [Security](#security)
+- [Operations](#operations)
 
-Two Docker services in this repo: `memory-embeddings` (TEI), `memory-mcp` (Go server). Qdrant is provided by the infra stack (`infra-qdrant`) and reached on the `infra` Docker network. TEI and Qdrant are internal — not exposed outside Docker networks.
+## Why Personal Memory
 
-```mermaid
-graph TD
-    Client["Claude Code / HTTP MCP client"]
-    Browser["Browser"]
-    TodoistAPI["api.todoist.com"]
-    Docs["personal docs .md/.txt"]
+AI conversations are usually stateless. A client may know your preferences, project decisions, or working conventions during one session and lose them in the next. Repeating that context in every prompt is slow, inconsistent, and difficult to maintain.
 
-    subgraph VPS["VPS"]
-        Traefik["Traefik SSL"]
-        TEI["memory-embeddings TEI"]
-        Qdrant["infra-qdrant"]
+Personal Memory provides a durable context layer between you and your AI clients:
 
-        subgraph MCP["memory-mcp container :8000"]
-            App["main.go Chi router"]
-            Auth["X-API-Key middleware"]
-            Memory["/memory MCP (facts + RAG tools)"]
-            Todoist["/todoist MCP optional"]
-            Viz["/viz dashboard optional"]
-            Backup["backup goroutine"]
-            App --> Auth
-            Auth --> Memory
-            Auth --> Todoist
-            App --> Viz
-        end
+- save explicit facts, preferences, constraints, and decisions once;
+- retrieve them by meaning rather than exact wording;
+- organize them without coupling memory to a single client or model;
+- keep temporary information from living forever;
+- inspect, export, update, or delete what has been stored;
+- optionally search your own Markdown and text files through the same MCP endpoint.
 
-        Indexer["memory-mcp-indexer cron-scheduled"]
-    end
+The result is continuity without embedding a growing personal profile into every prompt or tying it to one AI provider.
 
-    Client -->|HTTPS + X-API-Key| Traefik
-    Browser -->|HTTPS + OIDC| Traefik
-    Traefik --> App
-    Memory -->|POST /embed batch| TEI
-    Memory -->|memory + doc_chunks + doc_folders| Qdrant
-    Backup -->|snapshots| Qdrant
-    Viz -->|scroll + vectors| Qdrant
-    Todoist -->|REST API| TodoistAPI
-    Indexer -->|walk + hash + embed| Docs
-    Indexer -->|upsert chunks + folder summaries| Qdrant
-    Indexer -->|POST /embed batch| TEI
-```
+## What It Can Do
 
-### Auth
+| Capability | What it provides | Availability |
+|---|---|---|
+| Semantic memory | Store, recall, update, export, and safely prune durable facts | Core |
+| Document search | Hierarchical semantic search across Markdown and text files | Optional: `ENABLE_RAG=true` |
+| Todoist tools | Read projects and labels; read and manage tasks without exposing the token to clients | Optional: `ENABLE_TODOIST=true` |
+| Visualization | Browse facts by topic, timeline, similarity graph, duplicates, and document tree | Optional: `ENABLE_VIZ=true` |
+| OAuth onboarding | Authenticate compatible clients with an external or self-hosted OIDC issuer | Optional: `OAUTH_ENABLED=true` |
+| Snapshots | Create and retain Qdrant snapshots on a schedule | Built in |
 
-- **MCP endpoints** (`/memory`, `/todoist`) — protected by application-level auth. Existing clients can use `X-API-Key: <key>` or `Authorization: Bearer <API_KEY>`.
-- **ChatGPT Apps / connectors** — optional OAuth/OIDC mode for authenticated MCP onboarding. When `OAUTH_ENABLED=true`, unauthenticated MCP requests return a `WWW-Authenticate` challenge that points to `/.well-known/oauth-protected-resource`, and OAuth bearer JWTs are validated by issuer, audience, expiration, and scope before tools run.
-- **Health** (`/health`) — public liveness endpoint.
-- **Viz dashboard** (`/viz`) — protected by Authentik ForwardAuth (OIDC) at Traefik layer, so browsers get a proper OIDC login flow
+Facts and documents are embedded by the TEI service inside the deployment. Optional Todoist integration calls the Todoist API, and OAuth mode depends on the issuer you configure.
 
-### Visualization (`mcp.<domain>/viz`)
-
-- **Overview** — treemap of facts by namespace + `primary_tag`, plus an activity heatmap.
-- **Duplicates** — near-duplicate pairs (cosine ≥ 0.90) for cleanup.
-- **Forgotten** — facts with `recall_count = 0`.
-- **Timeline** — facts plotted by creation date, grouped by namespace (vis-timeline).
-- **Graph** — interactive force-directed network (vis-network). Nodes = facts, edges = cosine similarity above threshold.
-- **Documents** *(shown only when `ENABLE_RAG=true`)* — collapsible folder tree of everything the RAG indexer has stored, with per-folder and per-file chunk counts and last-indexed timestamps.
-
-## Data Model
-
-Each stored fact is a Qdrant point with the following payload:
+## How It Works
 
 ```mermaid
-classDiagram
-    class Fact {
-        +string text
-        +string user
-        +string namespace
-        +List~string~ tags
-        +string primary_tag
-        +bool permanent
-        +string created_at
-        +string updated_at
-        +string valid_until
-        +int recall_count
-        +string last_recalled_at
-    }
+flowchart LR
+    Client["MCP client"] -->|"HTTPS + API key or OAuth"| App["Personal Memory"]
+    App -->|"embed text"| TEI["Text Embeddings Inference"]
+    App -->|"facts and document vectors"| Qdrant["Qdrant"]
+    Docs["Markdown and text files"] --> Indexer["RAG indexer"]
+    Indexer --> TEI
+    Indexer --> Qdrant
+    App -. optional .-> Todoist["Todoist API"]
+    Browser["Browser"] -. optional .-> Viz["Visualization dashboard"]
+    Viz --> Qdrant
 ```
 
-- **namespace** — logical group (`work`, `personal`, `projects`, …)
-- **tags** — semantic labels used for filtering and retrieval
-- **primary_tag** — one tag selected as the fact's primary overview group. It is either empty or also present in `tags`. If exactly one tag is supplied and `primary_tag` is omitted, the server uses that tag as `primary_tag`; with multiple tags, clients should set it explicitly.
-- **permanent** — if `true`, never deleted by `forget_old()`
-- **valid_until** — ISO date; expired facts are excluded from search results
-- **recall_count** — incremented each time the fact is returned by `recall_facts`
+The Go server exposes two independent MCP endpoints:
 
-Point IDs: new points use deterministic UUID-v5-like hex IDs (SHA1 of text). Legacy points created by the old Python implementation use integer IDs — the Go client handles both transparently.
+- `/memory` contains semantic memory and, when enabled, document-search tools;
+- `/todoist` exists only when Todoist integration is enabled.
 
-## MCP Tools
+TEI converts text into vectors. Qdrant stores those vectors and their metadata. The application performs retrieval, validation, deduplication, mutation safety checks, caching, backup scheduling, and graceful shutdown.
 
-### memory — Writing
+## Quick Start
 
-| Tool | Description |
-|---|---|
-| `store_fact(fact, tags?, primary_tag?, namespace?, permanent?, valid_until?)` | Embed and save a fact. Skips near-duplicates (cosine ≥ 0.97). Warns about potentially contradicting facts (cosine 0.60–0.97). |
-| `update_fact(old_query, new_fact, tags?, primary_tag?, namespace?, permanent?)` | Semantically find a fact and replace it. Preserves metadata unless overridden. |
-| `delete_fact(query, namespace?)` | Semantically find and delete the closest matching fact. |
-| `forget_old(days?, namespace?, dry_run?)` | Delete facts older than N days. Skips `permanent=true`. Default: `dry_run=true`. |
-| `import_facts(facts)` | Bulk import from a JSON array (e.g. from `export_facts`). Deduplicates on import. |
+### What the included Compose stack expects
 
-### memory — Reading
+The repository Compose file starts three services: Personal Memory, TEI, and Qdrant. It is a deployment baseline rather than a standalone local sandbox. Before starting it, provide:
 
-| Tool | Description |
-|---|---|
-| `recall_facts(query, namespace?, limit?)` | Semantic search. Returns facts with scores. Filters expired facts. Increments `recall_count`. |
-| `list_facts(namespace?)` | List all facts with metadata. |
-| `find_related(query, namespace?, limit?)` | Find semantically related facts that are not direct duplicates (score 0.60–0.97). |
-| `get_stats()` | Total counts, namespace breakdown, tag distribution, most recalled facts. |
-| `list_tags(namespace?)` | All unique tags with usage counts. |
-| `export_facts(namespace?)` | Export all facts as JSON for backup or migration. |
+- Docker Engine and Docker Compose;
+- a DNS record for `mcp.<your-domain>`;
+- an existing external Docker network named `traefik`;
+- Traefik v3 on that network with an `https` entrypoint and `letsEncrypt` certificate resolver;
+- writable host directories for Qdrant data and snapshots.
 
-### todoist
+Authentik ForwardAuth is required only when the visualization dashboard is enabled. The default memory-only deployment does not require Authentik.
 
-| Tool | Description |
-|---|---|
-| `get_projects()` | List all Todoist projects with IDs. |
-| `get_labels()` | List all personal labels with IDs. |
-| `get_tasks(project_id?, filter?, limit?)` | List active tasks. `filter` uses Todoist filter syntax (e.g. `today`, `overdue`, `#Work`, `@label`). |
-| `create_task(content, project_id?, due_string?, priority?, labels?)` | Create a task. Priority 1–4. |
-| `complete_task(task_id)` | Mark a task as complete. |
-| `update_task(task_id, content?, due_string?, priority?, labels?)` | Update an existing task. |
-| `delete_task(task_id)` | Delete a task permanently. |
-
-### rag (registered on `/memory` when `ENABLE_RAG=true`)
-
-| Tool | Description |
-|---|---|
-| `search_documents(query, limit?, mode?)` | Semantic search over personal documents. Default `mode="hierarchical"`: finds top folders first, then searches chunks within them (with flat fallback if no folder scores above threshold). `mode="flat"` forces a plain vector search across all chunks. File paths are returned relative to `RAG_DOCUMENTS_DIR`. |
-| `reindex_documents()` | Launches incremental re-indexing in the background. Returns immediately. Skips unchanged files (SHA256 hash); detects and rebuilds half-indexed files; mutex-guarded so only one run at a time. Stale-file cleanup is aborted if the walk was incomplete or would remove more than half the index. |
-
-## Prerequisites (VPS)
-
-- Docker + Docker Compose
-- Traefik v3 with:
-  - External network named `traefik`
-  - `letsEncrypt` certresolver configured
-  - `authentik-auth` ForwardAuth middleware configured (only needed if `ENABLE_VIZ=true`)
-
-## Server Setup (VPS)
+### 1. Prepare the host
 
 ```bash
-mkdir -p /root/memory
+git clone https://github.com/Dzarlax-AI/personal_memory.git
+cd personal_memory
+
+sudo mkdir -p /root/memory/qdrant_storage /root/memory/qdrant_snapshots
+docker network inspect traefik >/dev/null
+```
+
+If the final command fails, create or configure the external network before continuing. The included Compose file does not start Traefik itself.
+
+### 2. Configure the service
+
+```bash
 cp .env.example .env
-nano .env
+openssl rand -hex 32
+```
+
+Put the generated secret in `API_KEY`, set `MEMORY_DOMAIN`, and review the optional feature flags in `.env`. Keep `ALLOW_INSECURE_AUTH=false` on every reachable deployment.
+
+Minimal configuration:
+
+```dotenv
+MEMORY_DOMAIN=example.com
+API_KEY=replace_with_the_generated_secret
+ALLOW_INSECURE_AUTH=false
+MEMORY_USER=your_name
+
+ENABLE_RAG=false
+ENABLE_TODOIST=false
+ENABLE_VIZ=false
+OAUTH_ENABLED=false
+```
+
+### 3. Start and verify
+
+```bash
 docker compose up -d
+docker compose ps
+docker compose logs -f memory-embeddings
 ```
 
-### `.env` variables
+The first TEI start downloads the pinned embedding model and may take longer than subsequent starts. Once the services are ready:
 
-| Variable | Description |
+```bash
+curl -fsS https://mcp.example.com/health
+# ok
+
+curl -fsS http://127.0.0.1:6333/healthz
+```
+
+The first endpoint verifies public routing to the Go service. The second verifies the host-local Qdrant port.
+
+### Enabling document search
+
+The checked-in Compose file does not mount a document directory. When enabling RAG, add a read-only bind mount to `memory-mcp` that matches `RAG_DOCUMENTS_DIR`:
+
+```yaml
+services:
+  memory-mcp:
+    volumes:
+      - /srv/personal-documents:/root/documents/personal:ro
+```
+
+Then set:
+
+```dotenv
+ENABLE_RAG=true
+RAG_DOCUMENTS_DIR=/root/documents/personal
+RAG_REINDEX_INTERVAL_MINUTES=30
+```
+
+Any filesystem synchronization mechanism can populate the host directory. The indexer only reads `.md`, `.markdown`, and `.txt` files.
+
+## Connect an MCP Client
+
+Personal Memory uses the Streamable HTTP transport.
+
+| Endpoint | URL | Authentication |
+|---|---|---|
+| Memory and RAG | `https://mcp.example.com/memory` | `X-API-Key` or Bearer API key; OAuth bearer tokens when enabled |
+| Todoist | `https://mcp.example.com/todoist` | API key only; route absent when disabled |
+
+### Generic client settings
+
+Use one of these headers with the memory endpoint:
+
+```text
+X-API-Key: <API_KEY>
+```
+
+or:
+
+```text
+Authorization: Bearer <API_KEY>
+```
+
+### Claude Code example
+
+Client command syntax can change; verify it against the version of your client. A current Streamable HTTP configuration looks like:
+
+```bash
+export MEMORY_API_KEY='<your API key>'
+
+claude mcp add --transport http personal-memory \
+  https://mcp.example.com/memory \
+  --header "X-API-Key: $MEMORY_API_KEY" \
+  --scope user
+```
+
+Add Todoist as a separate server only after `ENABLE_TODOIST=true`:
+
+```bash
+claude mcp add --transport http personal-todoist \
+  https://mcp.example.com/todoist \
+  --header "X-API-Key: $MEMORY_API_KEY" \
+  --scope user
+```
+
+### Clients that require a local process
+
+Use an HTTP-to-stdio bridge such as `mcp-remote`. A ready-to-edit example is provided in [`claude_desktop_config.example.json`](./claude_desktop_config.example.json).
+
+### OAuth-capable clients
+
+When `OAUTH_ENABLED=true`, use the memory endpoint as the MCP server URL. Protected-resource metadata is available at:
+
+```text
+https://mcp.example.com/.well-known/oauth-protected-resource
+```
+
+OAuth applies to `/memory`; the optional Todoist endpoint remains API-key-only.
+
+## Using Personal Memory
+
+Normal usage happens through an MCP client. The exact phrasing is up to the client, but the following prompts demonstrate the intended workflows.
+
+### Remember a durable preference
+
+> Remember that I prefer PostgreSQL migrations to be reversible. Store it in the `tech` namespace with the tags `postgres`, `migrations`, and `preference`.
+
+The client should call `store_fact`. Personal Memory embeds the fact, checks for near-duplicates, warns about related facts that may contradict it, and stores the metadata.
+
+### Recall context before starting work
+
+> Before changing the database layer, recall my relevant PostgreSQL and migration preferences.
+
+The client should call `recall_facts` with a natural-language query. Retrieval is semantic, so the stored wording does not need to match the query.
+
+### Store a project decision
+
+> Remember that the analytics service uses ClickHouse for event storage. Put it in the `projects` namespace, tag it `analytics`, `clickhouse`, and `architecture`, with `analytics` as the primary tag.
+
+Namespaces are broad context boundaries. Tags improve filtering and discovery. `primary_tag` selects the main grouping used by the visualization dashboard.
+
+### Search personal documents
+
+> Search my documents for the reasoning behind the authentication architecture.
+
+With RAG enabled, the client calls `search_documents`. Hierarchical mode first identifies relevant folders and then searches chunks within them; flat mode searches all chunks directly.
+
+### Maintain stored context safely
+
+> Show me facts older than 180 days that would be removed, but do not delete anything.
+
+`forget_old` defaults to `dry_run=true` and never removes facts marked `permanent=true`. Use exact `point_id` values for deterministic updates or deletions when multiple semantic matches are close.
+
+### Load operational context at session start
+
+`get_operational_context` returns permanent facts plus the most frequently recalled non-permanent facts. Automation that needs plain text can call the authenticated endpoint:
+
+```text
+GET /memory/operational?namespace=projects
+```
+
+## Core Concepts
+
+### Facts
+
+A fact is a short piece of durable context with an embedding and metadata. Good facts are explicit preferences, decisions, constraints, identity details, or non-obvious project context. Long-form source material belongs in the document index instead.
+
+### Namespaces
+
+Namespaces are broad isolation and filtering boundaries such as `personal`, `projects`, `work`, or `tech`. The default namespace is `default`, but clients should choose meaningful stable namespaces for long-lived data.
+
+Point IDs include both namespace and exact text, so identical text can exist safely in different namespaces.
+
+### Tags and primary tags
+
+Tags are semantic labels. `primary_tag` is an optional single grouping label and must also be present in `tags`. When a fact has exactly one tag and no primary tag, that tag is promoted automatically.
+
+The MCP schema accepts tags as one comma-separated string, for example `tags="postgres,migrations,preference"`.
+
+### Lifetime
+
+- `permanent=true` prevents `forget_old` from deleting a fact.
+- `valid_until=YYYY-MM-DD` excludes an expired fact from semantic recall.
+- `recall_count` and `last_recalled_at` record how often stored context is used.
+
+### Similarity and mutations
+
+New facts at or above the deduplication threshold are not stored twice. Related facts below that threshold may be returned as contradiction warnings.
+
+Semantic updates and deletions require a sufficiently strong, unambiguous match. The default mutation threshold is `0.90`; candidates within `0.01` of each other are treated as ambiguous. Supplying a validated `point_id` bypasses similarity selection while still enforcing namespace checks.
+
+### Documents
+
+The RAG index is separate from the fact collection. Documents are split along Markdown structure, embedded in batches, and stored as versioned chunks. For a changed file, the previous complete generation remains searchable until every new chunk has been embedded and written successfully.
+
+## Tool Reference
+
+### Memory: write and maintenance
+
+| Tool | Purpose |
 |---|---|
-| `MEMORY_DOMAIN` | Your domain, e.g. `example.com` — MCP available at `mcp.<domain>` |
-| `API_KEY` | Shared secret for `X-API-Key` header on MCP endpoints. Generate with `openssl rand -hex 32`. |
-| `EMBED_MODEL` | HuggingFace model ID, default `intfloat/multilingual-e5-small` |
-| `MEMORY_USER` | Username stored as metadata on facts |
-| `ENABLE_TODOIST` | Set to `true` to enable Todoist MCP server (default: `false`) |
-| `ENABLE_VIZ` | Set to `true` to enable visualization dashboard (default: `false`) |
-| `OAUTH_ENABLED` | Set to `true` to allow ChatGPT Apps / connector OAuth bearer tokens in addition to `API_KEY`. |
-| `OAUTH_ISSUER` | OAuth/OIDC issuer URL, for example an Authentik provider URL. |
-| `OAUTH_RESOURCE` | Canonical MCP resource URL, usually `https://mcp.<domain>`. Defaults from `MEMORY_DOMAIN` when omitted. |
-| `OAUTH_AUDIENCE` | Expected JWT audience. Defaults to `OAUTH_RESOURCE`. |
-| `OAUTH_SCOPES` | Comma-separated required OAuth scopes. First-pass ChatGPT setup uses `memory:mcp`. |
-| `OAUTH_JWKS_URL` | Optional JWKS URL. If omitted, the server discovers `jwks_uri` from `OAUTH_ISSUER/.well-known/openid-configuration`. |
-| `OAUTH_AUTHORIZATION_SERVERS` | Optional comma-separated authorization server URLs for protected-resource metadata. Defaults to `OAUTH_ISSUER`. |
-| `OAUTH_RESOURCE_DOCUMENTATION` | Optional documentation URL returned in protected-resource metadata. |
-| `TODOIST_TOKEN` | Todoist API token — get it at Settings → Integrations → Developer (only needed when `ENABLE_TODOIST=true`) |
-| `KEEP_SNAPSHOTS` | Number of snapshots to retain (default: `7`) |
-| `BACKUP_INTERVAL_HOURS` | How often the backup runs (default: `24`) |
-| `VIZ_SIMILARITY_THRESHOLD` | Default similarity threshold for graph edges (default: `0.65`) |
-| `DEDUP_THRESHOLD` | Cosine similarity above which a new fact is treated as a duplicate (default: `0.97`) |
-| `CONTRADICTION_LOW` | Lower bound for contradiction warnings (default: `0.60`) |
-| `CACHE_TTL` | In-memory cache TTL for `recall_facts`, in seconds (default: `60`) |
-| `ENABLE_RAG` | Set to `true` to enable the document-RAG tools (`search_documents`, `reindex_documents`) on the `/memory` endpoint. Default: `false` |
-| `RAG_DOCUMENTS_DIR` | Root directory to index. Hidden dirs (`.git`, `.sync`, …) are skipped. Default: `/root/documents/personal` |
-| `RAG_CHUNK_MAX_BYTES` | Max chunk size (bytes). Markdown is split heading → paragraph → sentence → hard split. Default: `1500` |
-| `RAG_FOLDER_TOP_K` | Number of top folders to consider in hierarchical search. Default: `3` |
-| `RAG_FOLDER_THRESHOLD` | Min folder similarity score; below this we fall back to flat chunk search. Default: `0.50` |
-| `RAG_COLLECTION_CHUNKS` | Qdrant collection name for chunks. Default: `doc_chunks` |
-| `RAG_COLLECTION_FOLDERS` | Qdrant collection name for folder summaries. Default: `doc_folders` |
-| `RAG_REINDEX_INTERVAL_MINUTES` | Auto-rescan cadence in minutes for the in-server goroutine. `0` disables it — trigger manually or via cron. Default: `0` |
+| `store_fact(fact, tags?, primary_tag?, namespace?, permanent?, valid_until?)` | Store a fact after deduplication and contradiction checks. |
+| `update_fact(new_fact, old_query?, point_id?, tags?, primary_tag?, namespace?, permanent?)` | Replace a fact selected by a safe semantic match or exact ID. |
+| `delete_fact(query?, point_id?, namespace?)` | Delete a fact selected by a safe semantic match or exact ID. |
+| `forget_old(days=90, namespace?, dry_run=true)` | Preview or remove old non-permanent facts. |
+| `import_facts(facts)` | Import a JSON-array string with at most 1,000 entries and 4 MiB. |
 
-Track TEI model download on first start:
+### Memory: read
+
+| Tool | Purpose |
+|---|---|
+| `recall_facts(query, namespace?, limit=5)` | Return semantically relevant, non-expired facts and increment recall counts. |
+| `find_related(query, namespace?, limit=5)` | Return related facts below the duplicate threshold. |
+| `list_facts(namespace?)` | List facts and metadata. |
+| `get_stats()` | Summarize namespaces, tags, counts, and most-recalled facts. |
+| `list_tags(namespace?)` | List tags and their usage counts. |
+| `export_facts(namespace?)` | Export facts as JSON. |
+| `get_operational_context(namespace?, top_recalled=10)` | Return permanent and frequently recalled context. |
+
+### Document RAG
+
+These tools are registered on `/memory` only when `ENABLE_RAG=true`.
+
+| Tool | Purpose |
+|---|---|
+| `search_documents(query, limit=5, mode="hierarchical")` | Search indexed chunks using `hierarchical` or `flat` mode. |
+| `reindex_documents()` | Start one incremental background reindex; concurrent runs are rejected. |
+
+### Todoist
+
+These tools and the `/todoist` route exist only when `ENABLE_TODOIST=true`.
+
+| Tool | Purpose |
+|---|---|
+| `get_projects()` | List Todoist projects. |
+| `get_labels()` | List personal labels. |
+| `get_tasks(project_id?, filter?, limit=20)` | List active tasks, optionally using Todoist filter syntax. |
+| `create_task(content, project_id?, due_string?, priority?, labels?)` | Create a task. Priority is an integer from 1 to 4. |
+| `update_task(task_id, content?, due_string?, priority?, labels?)` | Update at least one task field. |
+| `complete_task(task_id)` | Complete a task. |
+| `delete_task(task_id)` | Permanently delete a task. |
+
+### Input limits
+
+| Input | Limit |
+|---|---|
+| MCP request body | 4 MiB |
+| Fact or replacement text | 64 KiB |
+| Search or mutation query | 16 KiB |
+| Namespace | 255 bytes |
+| Tags | 100 tags, 255 bytes each |
+| Search limits and `top_recalled` | Integer from 1 to 100 |
+| Todoist labels | 100 labels, 255 characters each |
+
+## Developer and Operator Guide
+
+### Deployment architecture
+
+The included Compose file defines three services on an external `traefik` network:
+
+| Service | Responsibility | Exposure |
+|---|---|---|
+| `memory-mcp` | Go HTTP server, MCP tools, visualization, backup scheduler | Routed by Traefik |
+| `memory-embeddings` | Pinned TEI image and embedding model revision | Docker network only |
+| `memory-qdrant` | Vector storage for facts and RAG collections | Docker network plus `127.0.0.1:6333` |
+
+The Go process serves `/memory`, optional `/todoist`, optional `/viz`, OAuth metadata, and public `/health` on one port. Qdrant and TEI do not need public internet exposure.
+
+### Local development
+
+Requirements:
+
+- Go 1.24 or newer;
+- Docker for image and Compose checks;
+- `curl` plus `sha256sum` or `shasum` for pinned browser assets.
+
+Canonical verification:
+
 ```bash
-docker logs -f memory-embeddings
-# Ready when you see: Ready
+make test
 ```
 
-Verify Qdrant (on VPS):
-```bash
-curl http://localhost:6333/healthz
-# → {"title":"qdrant - Ready"}
-```
+This downloads and checksum-verifies pinned visualization assets, runs `go vet ./...`, runs all Go tests, and builds all three commands.
 
-## Backups
-
-Backup runs as a goroutine inside `memory-mcp` — no separate service or cron needed.
-
-- Creates a Qdrant snapshot every `BACKUP_INTERVAL_HOURS` hours (default: 24)
-- Snapshots are stored at `/root/memory/qdrant_snapshots/` on the host
-- Keeps the last `KEEP_SNAPSHOTS` snapshots (default: 7), deletes older ones
-
-Backup logs appear in `docker logs memory-mcp`.
-
-Snapshots are stored locally on the VPS only. Point rsync, rclone, or Resilio Sync at `/root/memory/qdrant_snapshots/` — snapshots are self-contained `.snapshot` files, safe to copy at any time.
-
-To restore from a snapshot:
-```bash
-curl -X POST "http://localhost:6333/collections/memory/snapshots/recover" \
-  -H "Content-Type: application/json" \
-  -d '{"location": "file:///qdrant/snapshots/memory/<snapshot-name>.snapshot"}'
-```
-
-## Document RAG (optional)
-
-When `ENABLE_RAG=true`, two extra MCP tools are registered on `/memory` and the `memory-mcp` image ships with a second binary (`/personal-memory-indexer`) for offline indexing.
-
-### How it works
-
-1. **Walk** `RAG_DOCUMENTS_DIR` for `.md` / `.markdown` / `.txt` files. Hidden directories (`.git`, `.sync`, `.trash`, …) are skipped.
-2. **Chunk** each markdown file along headings (H1–H3), then paragraphs, then sentences, falling back to a rune-aware hard split when a sentence still exceeds `RAG_CHUNK_MAX_BYTES`.
-3. **Embed** all chunks for a file in a batch, using the same TEI instance the memory layer uses (batch size 32 per HTTP call).
-4. **Upsert** into the `doc_chunks` collection with payload `{text, file_path, folder_path, chunk_index, total_chunks, heading, file_hash, indexed_at}`.
-5. **Summarize each folder** (no LLM — folder summary is just the filename list + each file's first H1/H2/H3 + a snippet from up to 5 files) and upsert into `doc_folders`.
-
-Re-indexing is incremental — unchanged files are detected via SHA256 `file_hash` stored in Qdrant payload, and skipped. A single `ScrollAll` at the start of each run loads all existing hashes in one request, so even with thousands of files there's no per-file round-trip. Half-indexed files from prior partial failures (where `actualCount != total_chunks`) are detected and rebuilt on the next run.
-
-### Querying
+Individual commands:
 
 ```bash
-curl -X POST https://mcp.<domain>/memory \
-  -H "Authorization: Bearer $API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"method":"tools/call","params":{"name":"search_documents","arguments":{"query":"architecture decisions"}}}'
+make dev-deps
+go test ./...
+go test -race ./...
+go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids
+docker build -t personal-memory .
 ```
 
-Response is a JSON array of matching chunks with `score`, `text`, `file_path` (relative to `RAG_DOCUMENTS_DIR`), `heading`, and `chunk_index`.
+The final image contains:
 
-### Getting documents onto the VPS
+- `/personal-memory` — server entrypoint;
+- `/personal-memory-indexer` — one-shot RAG indexer;
+- `/personal-memory-migrate-ids` — memory ID migration utility.
 
-The intended flow is Resilio Sync (or any file sync tool) from your laptop → `RAG_DOCUMENTS_DIR` on the VPS. The indexer is FS-agnostic; it only reads files and hashes content.
+### Project layout
 
-### Re-indexing
+```text
+cmd/
+  server/                 HTTP and MCP server entrypoint
+  indexer/                standalone RAG indexer
+  migrate-memory-ids/     namespace-aware ID migration
+internal/
+  backup/                 Qdrant snapshot loop
+  config/                 environment loading and validation
+  embeddings/             bounded TEI HTTP client
+  memory/                 memory tools, cache, IDs, recall counter
+  memorymigration/        dry-run/apply migration logic
+  middleware/             authentication and request limits
+  oauth/                  OIDC discovery and JWT verification
+  qdrant/                 bounded Qdrant REST client
+  rag/                    chunking, indexing, and document tools
+  todoist/                Todoist REST client and MCP tools
+  viz/                    embedded visualization dashboard
+```
 
-Three ways to trigger it:
+## Configuration Reference
 
-**A. From an MCP client** — call `reindex_documents()`. Returns immediately; the indexer runs in a background goroutine on the server's lifetime context (cancelled cleanly on shutdown). A second call while one is in progress returns `"reindex already in progress"` — no queue, no duplication.
+Configuration is read from environment variables and validated at startup. Invalid booleans, numbers, URLs, thresholds, or conditional feature settings fail fast.
 
-**B. Built-in auto-rescan (recommended)** — set `RAG_REINDEX_INTERVAL_MINUTES=30` (or any positive value) in the server env. A goroutine running alongside the HTTP server re-indexes the docs dir on that cadence, sharing the same mutex as the MCP tool so a scheduled run and a manual one can't collide. Zero (the default) keeps the server purely on-demand.
+### Server and authentication
 
-**C. Via the standalone binary on the VPS** — useful for host-level cron scheduling or one-shot first passes:
+| Variable | Default | Description |
+|---|---:|---|
+| `MCP_PORT` | `8000` | Internal HTTP port. |
+| `MEMORY_DOMAIN` | — | Domain suffix used by Compose routing and as an OAuth resource default. |
+| `API_KEY` | — | Shared MCP secret. Required unless OAuth is enabled or insecure development mode is explicit. |
+| `ALLOW_INSECURE_AUTH` | `false` | Allows startup and routes without configured credentials for isolated development. Configured API-key/OAuth checks remain active. Never enable on a reachable deployment. |
+| `MEMORY_USER` | `claude` | User label stored in fact metadata. |
+| `QDRANT_URL` | `http://memory-qdrant:6333` | Qdrant base URL. |
+| `EMBED_URL` | `http://memory-embeddings:80` | TEI base URL. |
+
+### Memory behavior
+
+| Variable | Default | Description |
+|---|---:|---|
+| `CACHE_TTL` | `60` | Recall cache TTL in seconds. |
+| `DEDUP_THRESHOLD` | `0.97` | Similarity at which a new fact is considered a duplicate. |
+| `CONTRADICTION_LOW` | `0.60` | Lower bound for related-fact contradiction warnings. |
+| `MUTATION_MATCH_THRESHOLD` | `0.90` | Minimum score for semantic update/delete selection. |
+
+### OAuth
+
+| Variable | Default | Description |
+|---|---:|---|
+| `OAUTH_ENABLED` | `false` | Allow OAuth bearer tokens on `/memory`. |
+| `OAUTH_ISSUER` | — | Required HTTP(S) issuer URL when OAuth is enabled. |
+| `OAUTH_RESOURCE` | `https://mcp.<MEMORY_DOMAIN>` | Canonical MCP resource URL. |
+| `OAUTH_AUDIENCE` | `OAUTH_RESOURCE` | Required JWT audience. |
+| `OAUTH_SCOPES` | `memory:mcp` | Comma-separated required scopes. |
+| `OAUTH_JWKS_URL` | discovered | Optional explicit JWKS URL. |
+| `OAUTH_AUTHORIZATION_SERVERS` | `OAUTH_ISSUER` | Comma-separated authorization-server URLs. |
+| `OAUTH_RESOURCE_DOCUMENTATION` | — | Optional documentation URL in protected-resource metadata. |
+
+### Optional capabilities
+
+| Variable | Default | Description |
+|---|---:|---|
+| `ENABLE_TODOIST` | `false` | Register the Todoist client, tools, and route. |
+| `TODOIST_TOKEN` | — | Required only when Todoist is enabled. `API_KEY` is also required because the endpoint is API-key-only. |
+| `ENABLE_VIZ` | `false` | Mount the visualization dashboard. |
+| `VIZ_PROXY_SECRET` | — | Required with visualization unless insecure development mode is explicit. Shared only by Traefik and the application. |
+| `VIZ_SIMILARITY_THRESHOLD` | `0.65` | Default graph-edge similarity threshold. |
+
+### Document RAG
+
+| Variable | Default | Description |
+|---|---:|---|
+| `ENABLE_RAG` | `false` | Register document tools and indexing lifecycle. |
+| `RAG_DOCUMENTS_DIR` | `/root/documents/personal` | Root directory for `.md`, `.markdown`, and `.txt` files. |
+| `RAG_CHUNK_MAX_BYTES` | `1500` | Chunk target, validated from 1 byte to 1 MiB. |
+| `RAG_FOLDER_TOP_K` | `3` | Number of folders considered by hierarchical retrieval. |
+| `RAG_FOLDER_THRESHOLD` | `0.50` | Minimum folder score before falling back to flat search. |
+| `RAG_COLLECTION_CHUNKS` | `doc_chunks` | Qdrant chunk collection. |
+| `RAG_COLLECTION_FOLDERS` | `doc_folders` | Qdrant folder-summary collection. |
+| `RAG_REINDEX_INTERVAL_MINUTES` | `0` | Automatic reindex interval; zero disables scheduling. |
+
+### Backups and Compose-only embedding settings
+
+| Variable | Default | Description |
+|---|---:|---|
+| `BACKUP_INTERVAL_HOURS` | `24` | Snapshot interval. Must be positive. |
+| `KEEP_SNAPSHOTS` | `7` | Number of snapshots retained. Must be at least one. |
+| `EMBED_MODEL` | `intfloat/multilingual-e5-small` | TEI model selected by Compose. |
+| `EMBED_MODEL_REVISION` | pinned commit | Immutable model revision selected by Compose. |
+
+## Security
+
+### Fail-closed authentication
+
+Startup fails when neither API-key nor OAuth authentication is configured. `ALLOW_INSECURE_AUTH=true` is an explicit development escape hatch, not a production setting. Secret comparison uses constant-time checks.
+
+`/health` is intentionally public. Memory and its operational endpoint are authenticated. Todoist is registered only when enabled. Request bodies and tool inputs are bounded before expensive embedding or database work.
+
+### Visualization trust boundary
+
+The dashboard is intended to sit behind Authentik ForwardAuth. After authentication, Traefik overwrites `X-Personal-Memory-Proxy-Secret`; the application verifies the independently generated `VIZ_PROXY_SECRET`. Do not expose the container port directly when visualization is enabled.
+
+### Secrets
+
+- keep `.env` out of version control;
+- use independent values for `API_KEY` and `VIZ_PROXY_SECRET`;
+- do not send `TODOIST_TOKEN` to MCP clients;
+- expose Qdrant and TEI only on trusted networks;
+- use immutable application image tags or digests for production deployments.
+
+## Operations
+
+### Document indexing
+
+Trigger an incremental reindex through MCP with `reindex_documents`, schedule it with `RAG_REINDEX_INTERVAL_MINUTES`, or run the standalone binary:
 
 ```bash
 docker compose exec memory-mcp /personal-memory-indexer
 ```
 
-A typical crontab entry:
+The indexer skips unchanged files by SHA-256 hash and detects incomplete generations. Hidden directories are skipped. Stale cleanup is aborted when the filesystem walk is incomplete or would unexpectedly remove more than half the indexed files.
 
-```cron
-*/30 * * * * docker compose -f /root/memory/docker-compose.yml exec -T memory-mcp /personal-memory-indexer
-```
+### Backups and restore
 
-The binary respects the same `RAG_*` and `QDRANT_URL` / `EMBED_URL` env vars as the server and exits 0 on success.
+The server creates Qdrant snapshots every `BACKUP_INTERVAL_HOURS` and retains the newest `KEEP_SNAPSHOTS`. In the included Compose topology, snapshot files are bind-mounted under:
 
-### Safety
-
-- If the directory walk errors on any path (transient permission issue, Resilio mid-sync, NFS glitch), stale-file cleanup for that run is skipped — the index is never wiped because of a read hiccup.
-- If the number of walked files is less than half of what Qdrant currently has indexed, cleanup is also skipped and logged.
-- Old chunks for a changed file are only deleted after all new chunks have been successfully embedded — an embedding failure leaves the previous version intact.
-
-## Client Setup
-
-Two separate MCP servers:
-
-| Field | Memory | Todoist |
-|---|---|---|
-| Type | Streamable HTTP | Streamable HTTP |
-| URL | `https://mcp.yourdomain.com/memory` | `https://mcp.yourdomain.com/todoist` |
-| Auth header | `X-API-Key: <key>` or `Authorization: Bearer <key>` | same |
-
-**Claude Code** — add both with one command each (add `--scope user` to make them available across all projects):
-```bash
-export API_KEY='<your API_KEY>'
-
-claude mcp add --transport http personal-memory https://mcp.yourdomain.com/memory \
-  --header "X-API-Key: $API_KEY" \
-  --scope user
-
-claude mcp add --transport http todoist https://mcp.yourdomain.com/todoist \
-  --header "X-API-Key: $API_KEY" \
-  --scope user
-```
-
-**Claude Desktop / Perplexity Desktop** — Claude Desktop and Perplexity Desktop don't support remote HTTP MCP servers directly. Use [mcp-remote](https://github.com/geelen/mcp-remote) as a local proxy. Add to `claude_desktop_config.json` (Claude: `~/Library/Application Support/Claude/claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "personal-memory": {
-      "command": "npx",
-      "args": [
-        "mcp-remote",
-        "https://mcp.yourdomain.com/memory",
-        "--header",
-        "Authorization:Bearer ${MEMORY_API_KEY}"
-      ],
-      "env": {
-        "MEMORY_API_KEY": "<your API_KEY>"
-      }
-    }
-  }
-}
-```
-
-A ready-to-edit example is also available in [`claude_desktop_config.example.json`](./claude_desktop_config.example.json).
-
-**Web-based clients (Perplexity web, etc.)** — use Streamable HTTP transport with `Authorization: Bearer <API_KEY>` header directly (no proxy needed).
-
-**ChatGPT Apps / connectors** — use the `/memory` MCP URL as the server URL:
 ```text
-https://mcp.yourdomain.com/memory
+/root/memory/qdrant_snapshots
 ```
 
-For authenticated onboarding, configure a dedicated OAuth/OIDC application in Authentik and enable OAuth in `memory-mcp`. The server exposes protected resource metadata at:
-```text
-https://mcp.yourdomain.com/.well-known/oauth-protected-resource
-```
+Copy snapshots to independent storage; local retention is not an off-site backup.
 
-First-pass recommended scope is `memory:mcp`, memory/RAG only, personal single-user use. Copy the ChatGPT callback URL shown in the app management page into Authentik's allowed redirect URIs.
+Restore is an operator-controlled Qdrant action. Stop application writes first, select a verified snapshot, and follow the Qdrant recovery procedure appropriate to the deployed version. Verify collection counts and application health before re-enabling writes.
 
-## Building
+### Memory point ID migration
+
+New facts use IDs derived from namespace and exact text. Legacy IDs remain readable. The migration command is dry-run by default:
 
 ```bash
-go build ./cmd/server ./cmd/indexer
-go test ./...
+docker compose exec memory-mcp /personal-memory-migrate-ids
 ```
 
-Or via Docker (multi-stage build, both binaries in the final image):
+Review `collisions` and `invalid` before apply mode. Apply is an exclusive maintenance operation:
+
+1. create and verify a recent Qdrant snapshot;
+2. stop `memory-mcp` and every other writer to the `memory` collection;
+3. keep writers stopped until migration completes;
+4. run the exact deployed image on the same Docker network.
+
 ```bash
-docker build -t personal-memory .
+APP_IMAGE='ghcr.io/dzarlax-ai/personal-memory:sha-REPLACE_WITH_DEPLOYED_COMMIT'
+docker stop memory-mcp
+docker run --rm --network traefik \
+  --entrypoint /personal-memory-migrate-ids \
+  "$APP_IMAGE" \
+  -qdrant-url http://memory-qdrant:6333 \
+  -apply -confirm-writes-stopped
 ```
 
-The resulting image ships `/personal-memory` (the MCP server, set as ENTRYPOINT) and `/personal-memory-indexer` (standalone RAG indexer for cron / one-shot use).
+The command refuses unconfirmed apply mode. It compares complete normalized payloads and vectors, writes the target before deleting legacy sources, leaves conflicts untouched, and is safe to resume while writers remain stopped.
 
-### Image tags (GHCR)
+### Images and deployment
 
-`.github/workflows/docker.yml` runs `go vet` + `go test`, builds, and pushes to `ghcr.io/dzarlax-ai/personal-memory` on every push to `main` or any `feature/**` branch.
+The repository pins TEI, Qdrant, Docker base images, the embedding model revision, and browser-asset checksums. CI publishes application tags including immutable `sha-<short>` tags.
 
-| Tag | Source | Use case |
-|---|---|---|
-| `latest` | `main` only | Stable production deploy |
-| `main` | `main` | Pinned alias for `latest` |
-| `beta` | any `feature/**` push (moves) | Testing the newest feature-branch build |
-| `feature-<name>` | the matching branch | Pinning to a specific feature (e.g. `feature-rag`) |
-| `sha-<short>` | every push | Reproducible pin by commit |
+The checked-in Compose file uses the moving application tag `latest` as a convenient baseline. Production deployment should replace it with a tested `sha-<short>` tag or image digest through a separately reviewed deployment change.
 
-To test a feature branch before merging: point your deploy's `image:` at `:beta` or `:feature-<name>`, run, verify, then merge to `main` and switch back to `:latest`.
+After every deployment, verify:
 
-## Project Layout
-
-```
-cmd/
-  server/            entrypoint for the MCP server
-  indexer/           standalone RAG indexer binary (cron-friendly)
-internal/
-  config/            env vars → struct
-  middleware/        X-API-Key + Bearer auth
-  qdrant/            Qdrant REST client (upsert, search, scroll, delete, snapshots, field index)
-  embeddings/        TEI REST client (Embed + EmbedBatch)
-  memory/            memory MCP server (11 tools) + in-memory cache
-  todoist/           todoist MCP server (7 tools) + REST client
-  rag/               document RAG (chunker, folder summariser, indexer, MCP tools)
-  viz/               viz dashboard handler + cosine similarity + embedded index.html
-  backup/            Qdrant snapshot loop
+```bash
+docker compose ps
+curl -fsS https://mcp.example.com/health
+docker compose logs --tail=200 memory-mcp
 ```
 
-## Best Practices
+Also verify authenticated memory access, optional routes, snapshot status, and indexing behavior relevant to the enabled features.
 
-To get the most out of persistent memory, instruct your AI client to use it proactively. For Claude Code, add the following to your global CLAUDE.md:
+## License and Contributions
 
-| OS | Path |
-|---|---|
-| macOS / Linux | `~/.claude/CLAUDE.md` |
-| Windows | `%USERPROFILE%\.claude\CLAUDE.md` |
-
-````markdown
-## Personal Memory (MCP: personal-memory)
-
-The `personal-memory` MCP server is always available. Use it proactively — don't wait to be asked. Two distinct knowledge stores live behind it:
-
-- **`recall_facts` / `store_fact`** — short, explicit facts you deliberately saved (preferences, decisions, profile, project stack choices). Use these for things the user told you or you agreed on.
-- **`search_documents`** — semantic search over the user's personal markdown library (articles, notes, course materials, playbooks, meeting notes). Use this when the user asks "how to…", "what do I know about…", or references an article/note they think they have.
-
-### When to recall facts
-- At the start of any session involving a known project — run `recall_facts` to load context
-- Before making architectural decisions — check if relevant preferences or past decisions are stored
-- When the user references established context ("as usual", "like before", "you know I prefer…")
-
-### When to search documents
-- The user asks a broad knowledge question likely covered by their saved articles/notes
-- The user says "I saved something on…", "there was that piece about…"
-- Before giving a generic answer on a topic they may have curated content about
-
-Default mode is `hierarchical` (folders first, then chunks). Switch to `mode="flat"` for very specific queries that span topics across folders. File paths returned are relative to the docs root (e.g. `PM enforcement/Articles/…`).
-
-`reindex_documents` — almost never needed manually. The server auto-rescans every 30 minutes; call it only when the user says "I just added docs, pick them up now".
-
-### When to store
-- User states a preference or decision that should persist ("always use X", "never do Y")
-- A non-obvious fact about a project is established (tech stack, naming convention, key dependency)
-- Something important was learned that would be useful in future sessions
-
-When calling `store_fact`, include:
-- `namespace` — broad context bucket
-- `tags` — semantic labels for retrieval
-- `primary_tag` — the single main topic for visualization and routing
-
-Do NOT `store_fact` for content that lives in the user's markdown docs — that's already indexed and searchable via `search_documents`.
-
-### Namespace convention
-Always specify a namespace. Never store everything in `default`. Keep namespaces broad and portable; do not create a namespace for every project or topic.
-
-| Context | Namespace |
-|---|---|
-| Personal preferences, habits | `personal` |
-| Personal projects | `projects` |
-| Cross-project technical preferences | `tech` |
-| Work / professional context | `work` |
-| Job search, CVs, interviews | `job-search` |
-
-### Permanent facts
-Use `permanent=True` for facts that should never expire:
-fundamental preferences, identity facts, long-term architectural decisions.
-
-### Tags
-Use tags for both topic labels and semantic labels. Prefer stable, lowercase kebab-case tags.
-
-Examples:
-- Topic tags: `personal-memory`, `health`, `finance`, `design-system`
-- Semantic tags: `decision`, `preference`, `constraint`, `architecture`, `deployment`
-
-### Primary tags
-Always set `primary_tag` when storing a fact with multiple tags. It controls high-level grouping in the visualization and must name the main topic a future model should use to route the fact. Keep `primary_tag` as one of the regular `tags`; if you pass only `primary_tag`, the server will also add it to `tags`.
-
-Good:
-`store_fact(fact="...", namespace="projects", tags=["personal-memory", "architecture", "decision"], primary_tag="personal-memory")`
-
-Avoid:
-`store_fact(fact="...", namespace="personal-memory", tags=["architecture", "decision"])`
-````
+This repository does not currently include a license or a contribution policy. Source visibility alone does not define permission to copy, modify, or redistribute the project. Add and review those files before presenting the project as licensed open source or accepting external contributions.

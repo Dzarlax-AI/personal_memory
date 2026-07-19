@@ -1,6 +1,7 @@
 package viz
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,97 @@ import (
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 	"github.com/go-chi/chi/v5"
 )
+
+func TestGraphAndDuplicatesRejectInvalidBoundsBeforeLoadingPoints(t *testing.T) {
+	h := NewHandler(nil, 0.65)
+	tests := []string{
+		"/api/graph?threshold=NaN",
+		"/api/graph?threshold=-0.1",
+		"/api/graph?max_edges=0",
+		"/api/graph?max_edges=5001",
+		"/api/graph?max_nodes=0",
+		"/api/duplicates?threshold=Infinity",
+		"/api/duplicates?max_nodes=5001",
+		"/api/duplicates?max_pairs=-1",
+	}
+	for _, target := range tests {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		rr := httptest.NewRecorder()
+		h.Router().ServeHTTP(rr, req)
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("GET %s: got %d (%s), want 400", target, rr.Code, rr.Body.String())
+		}
+	}
+}
+
+func TestGraphAndDuplicatesRejectDatasetsOverMaxNodes(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"result":{"points":[`)
+		for i := 0; i < 3; i++ {
+			if i > 0 {
+				fmt.Fprint(w, ",")
+			}
+			fmt.Fprintf(w, `{"id":"%d","vector":[1,0],"payload":{"text":"fact %d"}}`, i, i)
+		}
+		fmt.Fprint(w, `],"next_page_offset":null}}`)
+	}))
+	defer backend.Close()
+
+	h := NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65)
+	for _, target := range []string{"/api/graph?max_nodes=2", "/api/duplicates?max_nodes=2"} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		rr := httptest.NewRecorder()
+		h.Router().ServeHTTP(rr, req)
+		if rr.Code != http.StatusUnprocessableEntity {
+			t.Errorf("GET %s: got %d (%s), want 422", target, rr.Code, rr.Body.String())
+		}
+	}
+}
+
+func TestStrongestEdgeHeapIsBoundedAndDeterministic(t *testing.T) {
+	h := &edgeHeap{}
+	for _, edge := range []graphEdge{
+		{From: "b", To: "c", Similarity: 0.8},
+		{From: "a", To: "b", Similarity: 0.9},
+		{From: "a", To: "c", Similarity: 0.9},
+	} {
+		keepStrongestEdge(h, edge, 2)
+	}
+	if len(*h) != 2 {
+		t.Fatalf("heap len = %d, want 2", len(*h))
+	}
+	for _, edge := range *h {
+		if edge.Similarity != 0.9 {
+			t.Fatalf("kept weak edge: %#v", edge)
+		}
+	}
+}
+
+func TestUpdateTagsRejectsUnknownOversizedAndInvalidPrimary(t *testing.T) {
+	h := NewHandler(nil, 0.65)
+	tests := []struct {
+		name string
+		body string
+		want int
+	}{
+		{name: "unknown field", body: `{"tags":["health"],"extra":true}`, want: http.StatusBadRequest},
+		{name: "oversized primary", body: `{"tags":["health"],"primary_tag":"` + strings.Repeat("x", maxFactTagLength+1) + `"}`, want: http.StatusBadRequest},
+		{name: "too many tags", body: `{"tags":["` + strings.Repeat(`x","`, maxFactTags) + `x"]}`, want: http.StatusBadRequest},
+		{name: "oversized", body: `{"tags":["` + strings.Repeat("x", maxTagsBodyBytes) + `"]}`, want: http.StatusRequestEntityTooLarge},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPatch, "/api/facts/id/tags", strings.NewReader(tt.body))
+			req.Header.Set("X-Viz-Action", "update-tags")
+			rr := httptest.NewRecorder()
+			h.Router().ServeHTTP(rr, req)
+			if rr.Code != tt.want {
+				t.Fatalf("got %d (%s), want %d", rr.Code, rr.Body.String(), tt.want)
+			}
+		})
+	}
+}
 
 func TestBuildShellHTML_Succeeds(t *testing.T) {
 	html, err := buildShellHTML()
@@ -241,8 +333,11 @@ func TestPointToNode_ExposesPrimaryTag(t *testing.T) {
 	}
 }
 
-func TestNormalizeFactTags_AddsPrimaryTag(t *testing.T) {
-	tags, primary := normalizeFactTags([]string{"decision"}, "health")
+func TestNormalizeFactTags_AddsValidatedPrimaryTag(t *testing.T) {
+	tags, primary, err := normalizeFactTags([]string{"decision"}, "health")
+	if err != nil {
+		t.Fatalf("normalizeFactTags: %v", err)
+	}
 	if primary != "health" {
 		t.Fatalf("primary = %q, want health", primary)
 	}

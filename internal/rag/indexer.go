@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha1"
 	"crypto/sha256"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -24,6 +26,8 @@ type Indexer struct {
 	maxBytes int
 }
 
+const maxIndexerChunkBytes = 1024 * 1024
+
 func NewIndexer(chunks, folders *qdrant.Client, embed *embeddings.Client, docsDir string, maxBytes int) *Indexer {
 	return &Indexer{
 		chunks:   chunks,
@@ -34,13 +38,20 @@ func NewIndexer(chunks, folders *qdrant.Client, embed *embeddings.Client, docsDi
 	}
 }
 
-// fileState is the snapshot of what Qdrant knows about a given file path:
-// the stored content hash, the expected chunk count, and how many chunks
-// are actually present (used to detect a half-indexed file).
+// fileState is the snapshot of every generation Qdrant knows for one file.
+// Keeping point IDs lets a completed replacement remove only prior
+// generations, including legacy unversioned points.
 type fileState struct {
-	hash        string
-	totalChunks int
-	actualCount int
+	generations map[string]*generationState
+}
+
+// generationState describes one independently-addressable version of a file.
+// An empty generation is the legacy layout, whose point IDs did not include
+// the content hash.
+type generationState struct {
+	totalChunks  int
+	chunkIndexes map[int]bool
+	pointIDs     []string
 }
 
 // Run performs an incremental re-index of the documents directory.
@@ -77,12 +88,12 @@ func (idx *Indexer) Run(ctx context.Context) error {
 		}
 		walkedFiles[path] = true
 		changed, err := idx.indexFile(ctx, path, state[path])
+		if changed {
+			dirtyFolders[filepath.Dir(path)] = true
+		}
 		if err != nil {
 			slog.Warn("failed to index file", "path", path, "error", err)
 			return nil
-		}
-		if changed {
-			dirtyFolders[filepath.Dir(path)] = true
 		}
 		return nil
 	})
@@ -93,16 +104,21 @@ func (idx *Indexer) Run(ctx context.Context) error {
 	// Stale-file cleanup, guarded. If the walk had errors OR the walked count
 	// is suspiciously low vs. what Qdrant knows, skip — a transient filesystem
 	// issue (Resilio mid-sync, permission race) must not wipe the index.
-	idx.cleanupStale(ctx, state, walkedFiles, dirtyFolders, walkHadErrors)
+	cleanupHealthy, cleanupErr := idx.cleanupStale(ctx, state, walkedFiles, dirtyFolders, walkHadErrors)
 
+	var reconcileErrors []error
+	if cleanupErr != nil {
+		reconcileErrors = append(reconcileErrors, cleanupErr)
+	}
 	for dir := range dirtyFolders {
-		if err := idx.indexFolder(ctx, dir); err != nil {
-			slog.Warn("failed to index folder", "dir", dir, "error", err)
+		if err := idx.reconcileFolder(ctx, dir, cleanupHealthy); err != nil {
+			slog.Warn("failed to reconcile folder", "dir", dir, "error", err)
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("reconcile folder %s: %w", dir, err))
 		}
 	}
 
 	slog.Info("RAG indexer finished", "dirty_folders", len(dirtyFolders))
-	return nil
+	return errors.Join(reconcileErrors...)
 }
 
 // snapshotState scrolls the chunks collection once and returns a map keyed
@@ -110,7 +126,7 @@ func (idx *Indexer) Run(ctx context.Context) error {
 // fields needed for change detection are transferred — skipping the bulky
 // `text` field cuts the scroll payload roughly 10x on a mature index.
 func (idx *Indexer) snapshotState(ctx context.Context) (map[string]*fileState, error) {
-	fields := []string{"file_path", "file_hash", "total_chunks"}
+	fields := []string{"file_path", "generation", "total_chunks", "chunk_index"}
 	all, err := idx.chunks.ScrollAllWithPayload(ctx, nil, fields, false)
 	if err != nil {
 		return nil, err
@@ -123,20 +139,22 @@ func (idx *Indexer) snapshotState(ctx context.Context) (map[string]*fileState, e
 		}
 		s, ok := state[fp]
 		if !ok {
-			s = &fileState{}
+			s = &fileState{generations: map[string]*generationState{}}
 			state[fp] = s
 		}
-		if s.hash == "" {
-			if h, ok := p.Payload["file_hash"].(string); ok {
-				s.hash = h
-			}
+		generation, _ := p.Payload["generation"].(string)
+		g, ok := s.generations[generation]
+		if !ok {
+			g = &generationState{chunkIndexes: map[int]bool{}}
+			s.generations[generation] = g
 		}
-		if s.totalChunks == 0 {
-			if tc, ok := p.Payload["total_chunks"].(float64); ok {
-				s.totalChunks = int(tc)
-			}
+		if tc, ok := payloadInt(p.Payload["total_chunks"]); ok && tc > g.totalChunks {
+			g.totalChunks = tc
 		}
-		s.actualCount++
+		if ci, ok := payloadInt(p.Payload["chunk_index"]); ok {
+			g.chunkIndexes[ci] = true
+		}
+		g.pointIDs = append(g.pointIDs, p.ID)
 	}
 	return state, nil
 }
@@ -145,6 +163,13 @@ func (idx *Indexer) snapshotState(ctx context.Context) (map[string]*fileState, e
 // anything in Qdrant changed. Embeds all chunks before touching Qdrant so
 // that an embedding failure leaves the old state intact.
 func (idx *Indexer) indexFile(ctx context.Context, path string, existing *fileState) (bool, error) {
+	// Validate again at the mutation boundary. Config validation protects normal
+	// constructors, but tests and internal callers can construct Indexer directly;
+	// an invalid chunk size must never look like an intentionally empty file and
+	// trigger deletion of its last complete generation.
+	if idx.maxBytes < 1 || idx.maxBytes > maxIndexerChunkBytes {
+		return false, fmt.Errorf("invalid chunk max bytes %d: must be between 1 and %d", idx.maxBytes, maxIndexerChunkBytes)
+	}
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return false, err
@@ -154,20 +179,35 @@ func (idx *Indexer) indexFile(ctx context.Context, path string, existing *fileSt
 	ext := strings.ToLower(filepath.Ext(path))
 	isMarkdown := ext == ".md" || ext == ".markdown"
 
-	// Truly unchanged: same content AND every expected chunk is present.
-	// A prior half-indexed state (actualCount < totalChunks) falls through
-	// and triggers a fresh rebuild.
-	if existing != nil &&
-		existing.hash == hash &&
-		existing.totalChunks > 0 &&
-		existing.actualCount == existing.totalChunks {
-		return false, nil
-	}
-
 	chunks := chunk(string(content), idx.maxBytes, isMarkdown)
 	total := len(chunks)
 	if total == 0 {
-		return false, nil // empty file
+		if existing == nil || len(existing.allPointIDs()) == 0 {
+			return false, nil
+		}
+		// An empty, successfully-read file intentionally has no indexed chunks.
+		// This is distinct from a read/chunking failure and is therefore safe to
+		// use as the commit point for removing every older generation.
+		if err := idx.chunks.Delete(ctx, existing.allPointIDs()); err != nil {
+			return false, fmt.Errorf("remove chunks for empty file %s: %w", path, err)
+		}
+		slog.Info("removed chunks for empty file", "path", path)
+		return true, nil
+	}
+
+	// A generation is complete only when all expected indices are present.
+	// Legacy points have no generation payload and must be upgraded even when
+	// their file_hash happens to equal the current content hash.
+	if existing != nil && existing.complete(hash, total) {
+		oldIDs := existing.pointIDsExcept(hash)
+		if len(oldIDs) == 0 {
+			return false, nil
+		}
+		if err := idx.chunks.Delete(ctx, oldIDs); err != nil {
+			return false, fmt.Errorf("remove prior generations of %s: %w", path, err)
+		}
+		slog.Info("removed prior file generations", "path", path, "points", len(oldIDs))
+		return true, nil
 	}
 
 	// Batch-embed all chunks for this file in one shot (the embeddings client
@@ -184,16 +224,10 @@ func (idx *Indexer) indexFile(ctx context.Context, path string, existing *fileSt
 		return false, fmt.Errorf("embed returned %d vectors for %d chunks of %s", len(vecs), total, path)
 	}
 
-	// Delete old chunks only now — after all embeddings succeeded.
-	if existing != nil && existing.actualCount > 0 {
-		if err := idx.deleteFileChunks(ctx, path); err != nil {
-			slog.Warn("failed to delete old chunks", "path", path, "error", err)
-		}
-	}
-
 	now := time.Now().UTC().Format(time.RFC3339)
+	wroteAny := false
 	for i, c := range chunks {
-		id := chunkPointID(path, i)
+		id := chunkPointID(path, hash, i)
 		payload := map[string]interface{}{
 			"text":         c.text,
 			"file_path":    path,
@@ -202,10 +236,25 @@ func (idx *Indexer) indexFile(ctx context.Context, path string, existing *fileSt
 			"total_chunks": total,
 			"heading":      c.heading,
 			"file_hash":    hash,
+			"generation":   hash,
 			"indexed_at":   now,
 		}
 		if err := idx.chunks.Upsert(ctx, qdrant.Point{ID: id, Vector: vecs[i], Payload: payload}); err != nil {
-			return false, fmt.Errorf("upsert chunk %d of %s: %w", i, path, err)
+			return wroteAny, fmt.Errorf("upsert chunk %d of %s: %w", i, path, err)
+		}
+		wroteAny = true
+	}
+
+	// New and old IDs differ, so the previous complete generation remains
+	// queryable throughout embedding and every confirmed upsert. Only after the
+	// new generation is complete do we remove older/legacy points. If an upsert
+	// fails, the partial generation is safely overwritten on the next run.
+	if existing != nil {
+		oldIDs := existing.pointIDsExcept(hash)
+		if len(oldIDs) > 0 {
+			if err := idx.chunks.Delete(ctx, oldIDs); err != nil {
+				return true, fmt.Errorf("remove prior generations of %s: %w", path, err)
+			}
 		}
 	}
 
@@ -232,6 +281,45 @@ func (idx *Indexer) indexFolder(ctx context.Context, dir string) error {
 	return idx.folders.Upsert(ctx, qdrant.Point{ID: id, Vector: vec, Payload: payload})
 }
 
+// reconcileFolder refreshes a live folder summary or removes its point once
+// the folder has disappeared (or no longer contains indexable files). Deletes
+// are allowed only after a healthy filesystem walk; an incomplete walk must
+// never turn missing observations into destructive cleanup.
+func (idx *Indexer) reconcileFolder(ctx context.Context, dir string, allowDelete bool) error {
+	hasFiles, err := folderHasIndexableFiles(dir)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil && hasFiles {
+		return idx.indexFolder(ctx, dir)
+	}
+	if !allowDelete {
+		slog.Warn("skipping folder summary cleanup after unhealthy walk", "dir", dir)
+		return nil
+	}
+	if err := idx.folders.Delete(ctx, []string{folderPointID(dir)}); err != nil {
+		return fmt.Errorf("delete stale folder point: %w", err)
+	}
+	slog.Info("removed stale folder point", "dir", dir)
+	return nil
+}
+
+func folderHasIndexableFiles(dir string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		if isTextFile(entry.Name()) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // staleCleanupDecision decides whether to skip removing Qdrant chunks for
 // files that aren't on disk. Returns (skip, reason). Suppressing cleanup on
 // unhealthy walks is what protects the index against transient FS glitches
@@ -256,22 +344,24 @@ func (idx *Indexer) cleanupStale(
 	walkedFiles map[string]bool,
 	dirtyFolders map[string]bool,
 	walkHadErrors bool,
-) {
+) (healthy bool, cleanupErr error) {
 	if skip, reason := staleCleanupDecision(len(walkedFiles), len(state), walkHadErrors); skip {
 		slog.Warn("skipping stale cleanup",
 			"reason", reason,
 			"walked", len(walkedFiles),
 			"in_qdrant", len(state))
-		return
+		return false, nil
 	}
 
 	removed := 0
+	var cleanupErrors []error
 	for fp := range state {
 		if walkedFiles[fp] {
 			continue
 		}
 		if err := idx.deleteFileChunks(ctx, fp); err != nil {
 			slog.Warn("failed to delete stale chunks", "path", fp, "error", err)
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("delete stale chunks for %s: %w", fp, err))
 			continue
 		}
 		removed++
@@ -280,6 +370,7 @@ func (idx *Indexer) cleanupStale(
 	if removed > 0 {
 		slog.Info("removed stale file chunks", "files", removed)
 	}
+	return true, errors.Join(cleanupErrors...)
 }
 
 // deleteFileChunks removes all chunk points for a file in a single request.
@@ -301,9 +392,67 @@ func isTextFile(path string) bool {
 	return false
 }
 
-func chunkPointID(filePath string, index int) string {
-	h := sha1.Sum([]byte(fmt.Sprintf("%s:%d", filePath, index)))
+func chunkPointID(filePath, generation string, index int) string {
+	h := sha1.Sum([]byte(fmt.Sprintf("%s:%s:%d", filePath, generation, index)))
 	return fmt.Sprintf("%x-%x-%x-%x-%x", h[0:4], h[4:6], h[6:8], h[8:10], h[10:16])
+}
+
+func payloadInt(value interface{}) (int, bool) {
+	switch n := value.(type) {
+	case float64:
+		return int(n), n == float64(int(n))
+	case float32:
+		return int(n), n == float32(int(n))
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case json.Number:
+		v, err := n.Int64()
+		return int(v), err == nil
+	default:
+		return 0, false
+	}
+}
+
+func (s *fileState) complete(generation string, total int) bool {
+	if s == nil {
+		return false
+	}
+	g := s.generations[generation]
+	if g == nil || g.totalChunks != total || len(g.chunkIndexes) != total {
+		return false
+	}
+	for i := 0; i < total; i++ {
+		if !g.chunkIndexes[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *fileState) allPointIDs() []string {
+	if s == nil {
+		return nil
+	}
+	var ids []string
+	for _, g := range s.generations {
+		ids = append(ids, g.pointIDs...)
+	}
+	return ids
+}
+
+func (s *fileState) pointIDsExcept(generation string) []string {
+	if s == nil {
+		return nil
+	}
+	var ids []string
+	for name, g := range s.generations {
+		if name != generation {
+			ids = append(ids, g.pointIDs...)
+		}
+	}
+	return ids
 }
 
 func folderPointID(dir string) string {

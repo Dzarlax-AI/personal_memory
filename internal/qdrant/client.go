@@ -7,8 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
+	"time"
 )
+
+const defaultHTTPTimeout = 30 * time.Second
+const maxResponseBodyBytes int64 = 16 << 20
 
 type Client struct {
 	url        string
@@ -20,7 +25,7 @@ func NewClient(url, collection string) *Client {
 	return &Client{
 		url:        url,
 		collection: collection,
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: defaultHTTPTimeout},
 	}
 }
 
@@ -53,6 +58,42 @@ func qdrantPointID(id string) interface{} {
 	return id
 }
 
+// Get retrieves one point by its exact ID. The bool is false when Qdrant
+// reports that the point does not exist.
+func (c *Client) Get(ctx context.Context, id string) (Point, bool, error) {
+	requestURL := fmt.Sprintf("%s/collections/%s/points/%s", c.url, c.collection, url.PathEscape(id))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return Point{}, false, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return Point{}, false, fmt.Errorf("get point: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return Point{}, false, nil
+	}
+	b, err := readLimitedBody(resp.Body, maxResponseBodyBytes)
+	if err != nil {
+		return Point{}, false, fmt.Errorf("read point response: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return Point{}, false, fmt.Errorf("GET %s failed (status %d): %s", requestURL, resp.StatusCode, string(b))
+	}
+	var result struct {
+		Result struct {
+			ID      interface{}            `json:"id"`
+			Vector  []float32              `json:"vector"`
+			Payload map[string]interface{} `json:"payload"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(b, &result); err != nil {
+		return Point{}, false, fmt.Errorf("decode point response: %w", err)
+	}
+	return Point{ID: parsePointID(result.Result.ID), Vector: result.Result.Vector, Payload: result.Result.Payload}, true, nil
+}
+
 // EnsureCollection creates the collection if it doesn't exist.
 func (c *Client) EnsureCollection(ctx context.Context, vectorSize int) error {
 	// Check if collection exists.
@@ -65,10 +106,17 @@ func (c *Client) EnsureCollection(ctx context.Context, vectorSize int) error {
 	if err != nil {
 		return fmt.Errorf("check collection: %w", err)
 	}
+	checkBody, readErr := readLimitedBody(resp.Body, maxResponseBodyBytes)
 	resp.Body.Close()
+	if readErr != nil {
+		return fmt.Errorf("read collection check response: %w", readErr)
+	}
 
 	if resp.StatusCode == http.StatusOK {
 		return nil // already exists
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("GET %s failed (status %d): %s", url, resp.StatusCode, string(checkBody))
 	}
 
 	// Create collection.
@@ -78,7 +126,7 @@ func (c *Client) EnsureCollection(ctx context.Context, vectorSize int) error {
 			"distance": "Cosine",
 		},
 	}
-	return c.put(ctx, url, body)
+	return c.mutate(ctx, http.MethodPut, url, body, false)
 }
 
 // Upsert inserts or updates a point.
@@ -93,7 +141,7 @@ func (c *Client) Upsert(ctx context.Context, point Point) error {
 			},
 		},
 	}
-	return c.putWithMethod(ctx, http.MethodPut, url, body)
+	return c.mutate(ctx, http.MethodPut, url, body, true)
 }
 
 // Search performs a vector similarity search with optional filters.
@@ -225,7 +273,7 @@ func (c *Client) Delete(ctx context.Context, ids []string) error {
 	body := map[string]interface{}{
 		"points": points,
 	}
-	return c.postDiscard(ctx, url, body)
+	return c.mutate(ctx, http.MethodPost, url, body, true)
 }
 
 // DeleteByFilter removes all points matching the filter in a single request.
@@ -234,7 +282,7 @@ func (c *Client) DeleteByFilter(ctx context.Context, filter map[string]interface
 	body := map[string]interface{}{
 		"filter": filter,
 	}
-	return c.postDiscard(ctx, url, body)
+	return c.mutate(ctx, http.MethodPost, url, body, true)
 }
 
 // CreateFieldIndex creates a payload field index for fast filtering.
@@ -244,7 +292,7 @@ func (c *Client) CreateFieldIndex(ctx context.Context, fieldName, fieldSchema st
 		"field_name":   fieldName,
 		"field_schema": fieldSchema,
 	}
-	return c.putWithMethod(ctx, http.MethodPut, url, body)
+	return c.mutate(ctx, http.MethodPut, url, body, true)
 }
 
 // SetPayload updates payload fields on a point without re-embedding.
@@ -254,7 +302,7 @@ func (c *Client) SetPayload(ctx context.Context, id string, payload map[string]i
 		"payload": payload,
 		"points":  []interface{}{qdrantPointID(id)},
 	}
-	return c.putWithMethod(ctx, http.MethodPost, url, body)
+	return c.mutate(ctx, http.MethodPost, url, body, true)
 }
 
 // CreateSnapshot triggers a snapshot creation.
@@ -273,6 +321,12 @@ func (c *Client) CreateSnapshot(ctx context.Context) (string, error) {
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return "", fmt.Errorf("decode snapshot response: %w", err)
 	}
+	if err := validateMutationResponse(respBody, false); err != nil {
+		return "", fmt.Errorf("create snapshot: %w", err)
+	}
+	if result.Result.Name == "" {
+		return "", fmt.Errorf("create snapshot: Qdrant response did not include a snapshot name")
+	}
 	return result.Result.Name, nil
 }
 
@@ -289,9 +343,12 @@ func (c *Client) ListSnapshots(ctx context.Context) ([]string, error) {
 	}
 	defer resp.Body.Close()
 
-	b, err := io.ReadAll(resp.Body)
+	b, err := readLimitedBody(resp.Body, maxResponseBodyBytes)
 	if err != nil {
 		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("GET %s failed (status %d): %s", url, resp.StatusCode, string(b))
 	}
 
 	var result struct {
@@ -312,45 +369,93 @@ func (c *Client) ListSnapshots(ctx context.Context) ([]string, error) {
 
 // DeleteSnapshot removes a snapshot by name.
 func (c *Client) DeleteSnapshot(ctx context.Context, name string) error {
-	url := fmt.Sprintf("%s/collections/%s/snapshots/%s", c.url, c.collection, name)
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	resp.Body.Close()
-	return nil
+	requestURL := fmt.Sprintf("%s/collections/%s/snapshots/%s", c.url, c.collection, url.PathEscape(name))
+	return c.mutate(ctx, http.MethodDelete, requestURL, nil, false)
 }
 
 // --- HTTP helpers ---
 
-func (c *Client) put(ctx context.Context, url string, body interface{}) error {
-	return c.putWithMethod(ctx, http.MethodPut, url, body)
-}
+func (c *Client) mutate(ctx context.Context, method, requestURL string, body interface{}, wait bool) error {
+	if wait {
+		parsed, err := url.Parse(requestURL)
+		if err != nil {
+			return fmt.Errorf("parse mutation URL: %w", err)
+		}
+		query := parsed.Query()
+		query.Set("wait", "true")
+		parsed.RawQuery = query.Encode()
+		requestURL = parsed.String()
+	}
 
-func (c *Client) putWithMethod(ctx context.Context, method, url string, body interface{}) error {
-	b, err := json.Marshal(body)
+	var reqBody io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		reqBody = bytes.NewReader(encoded)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, requestURL, reqBody)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(b))
-	if err != nil {
-		return err
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("Content-Type", "application/json")
-
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s %s: %w", method, requestURL, err)
 	}
 	defer resp.Body.Close()
+	respBody, err := readLimitedBody(resp.Body, maxResponseBodyBytes)
+	if err != nil {
+		return fmt.Errorf("read %s %s response: %w", method, requestURL, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("%s %s failed (status %d): %s", method, requestURL, resp.StatusCode, string(respBody))
+	}
+	if err := validateMutationResponse(respBody, wait); err != nil {
+		return fmt.Errorf("%s %s: %w", method, requestURL, err)
+	}
+	return nil
+}
 
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("%s %s failed (status %d): %s", method, url, resp.StatusCode, string(respBody))
+func validateMutationResponse(body []byte, requireCompleted bool) error {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return fmt.Errorf("empty Qdrant mutation response")
+	}
+	var response struct {
+		Status interface{} `json:"status"`
+		Result interface{} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return fmt.Errorf("decode Qdrant mutation response: %w", err)
+	}
+
+	validated := false
+	if response.Status != nil {
+		status, ok := response.Status.(string)
+		if !ok || status != "ok" {
+			return fmt.Errorf("Qdrant mutation status is %v, want ok", response.Status)
+		}
+		validated = true
+	}
+	completed := false
+	if result, ok := response.Result.(map[string]interface{}); ok {
+		if rawStatus, exists := result["status"]; exists {
+			status, ok := rawStatus.(string)
+			if !ok || status != "completed" {
+				return fmt.Errorf("Qdrant operation status is %v, want completed", rawStatus)
+			}
+			completed = true
+			validated = true
+		}
+	}
+	if requireCompleted && !completed {
+		return fmt.Errorf("Qdrant mutation response does not confirm a completed operation")
+	}
+	if !validated {
+		return fmt.Errorf("Qdrant mutation response contains no verifiable status")
 	}
 	return nil
 }
@@ -379,7 +484,7 @@ func (c *Client) postJSON(ctx context.Context, url string, body interface{}) ([]
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readLimitedBody(resp.Body, maxResponseBodyBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -387,6 +492,17 @@ func (c *Client) postJSON(ctx context.Context, url string, body interface{}) ([]
 		return nil, fmt.Errorf("POST %s failed (status %d): %s", url, resp.StatusCode, string(respBody))
 	}
 	return respBody, nil
+}
+
+func readLimitedBody(reader io.Reader, limit int64) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("response body exceeds %d bytes", limit)
+	}
+	return body, nil
 }
 
 func (c *Client) postDiscard(ctx context.Context, url string, body interface{}) error {
