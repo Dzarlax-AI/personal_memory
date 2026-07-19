@@ -2,13 +2,15 @@ package memory
 
 import (
 	"context"
-	"crypto/sha1"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
@@ -18,22 +20,79 @@ import (
 )
 
 type Server struct {
-	qdrant           *qdrant.Client
-	embed            *embeddings.Client
-	cache            *Cache
-	user             string
-	dedupThreshold   float64
-	contradictionLow float64
+	qdrant                 *qdrant.Client
+	embed                  *embeddings.Client
+	cache                  *Cache
+	user                   string
+	dedupThreshold         float64
+	contradictionLow       float64
+	mutationMatchThreshold float64
+	recallCounterMu        sync.Mutex
+	recallCounter          *recallCounter
 }
 
-func NewServer(qc *qdrant.Client, ec *embeddings.Client, cache *Cache, user string, dedupThreshold, contradictionLow float64) *Server {
+// Start starts the bounded recall-counter worker. It is safe to call once.
+func (s *Server) Start(ctx context.Context) {
+	s.recallCounterMu.Lock()
+	defer s.recallCounterMu.Unlock()
+	if s.recallCounter == nil {
+		s.recallCounter = newRecallCounter(ctx, s.qdrant, defaultRecallQueueSize, defaultRecallFlushInterval)
+	}
+}
+
+// Shutdown stops accepting recall increments and drains queued work.
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.recallCounterMu.Lock()
+	counter := s.recallCounter
+	s.recallCounterMu.Unlock()
+	if counter == nil {
+		return nil
+	}
+	return counter.stop(ctx)
+}
+
+func (s *Server) countRecalls(ctx context.Context, hits []map[string]interface{}) error {
+	s.recallCounterMu.Lock()
+	counter := s.recallCounter
+	s.recallCounterMu.Unlock()
+	if counter == nil {
+		return fmt.Errorf("recall counter is not running")
+	}
+	for _, hit := range hits {
+		id, _ := hit["_point_id"].(string)
+		if id != "" {
+			if err := counter.enqueue(ctx, id); err != nil {
+				return err
+			}
+			hit["recall_count"] = payloadInt(hit["recall_count"]) + 1
+		}
+	}
+	return nil
+}
+
+const (
+	mutationAmbiguityMargin = 0.01
+	maxSearchLimit          = 100
+	maxFactBytes            = 64 << 10
+	maxQueryBytes           = 16 << 10
+	maxImportBytes          = 4 << 20
+	maxImportFacts          = 1000
+	maxNamespaceBytes       = 255
+	maxTags                 = 100
+	maxTagBytes             = 255
+)
+
+var validPointIDPattern = regexp.MustCompile(`^(?:[0-9]+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$`)
+
+func NewServer(qc *qdrant.Client, ec *embeddings.Client, cache *Cache, user string, dedupThreshold, contradictionLow, mutationMatchThreshold float64) *Server {
 	return &Server{
-		qdrant:           qc,
-		embed:            ec,
-		cache:            cache,
-		user:             user,
-		dedupThreshold:   dedupThreshold,
-		contradictionLow: contradictionLow,
+		qdrant:                 qc,
+		embed:                  ec,
+		cache:                  cache,
+		user:                   user,
+		dedupThreshold:         dedupThreshold,
+		contradictionLow:       contradictionLow,
+		mutationMatchThreshold: mutationMatchThreshold,
 	}
 }
 
@@ -79,7 +138,8 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
-		mcp.WithString("old_query", mcp.Description("Query to find the fact to update"), mcp.Required()),
+		mcp.WithString("old_query", mcp.Description("Query to find the fact to update; required unless point_id is set")),
+		mcp.WithString("point_id", mcp.Description("Exact fact ID; bypasses similarity matching after namespace validation")),
 		mcp.WithString("new_fact", mcp.Description("New fact text"), mcp.Required()),
 		mcp.WithString("tags", mcp.Description("Comma-separated semantic tags")),
 		mcp.WithString("primary_tag", mcp.Description("Single primary tag for overview grouping; must also be present in tags")),
@@ -93,7 +153,8 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 		mcp.WithDestructiveHintAnnotation(true),
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
-		mcp.WithString("query", mcp.Description("Query to find the fact to delete"), mcp.Required()),
+		mcp.WithString("query", mcp.Description("Query to find the fact to delete; required unless point_id is set")),
+		mcp.WithString("point_id", mcp.Description("Exact fact ID; bypasses similarity matching after namespace validation")),
 		mcp.WithString("namespace", mcp.Description("Filter by namespace")),
 	), s.deleteFact)
 
@@ -185,18 +246,21 @@ func strParam(args map[string]interface{}, key string) string {
 	return s
 }
 
-func intParam(args map[string]interface{}, key string, def int) int {
+func intParam(args map[string]interface{}, key string, def int) (int, error) {
 	v, ok := args[key]
 	if !ok || v == nil {
-		return def
+		return def, nil
 	}
 	switch n := v.(type) {
 	case float64:
-		return int(n)
+		if math.IsNaN(n) || math.IsInf(n, 0) || math.Trunc(n) != n || n > float64(^uint(0)>>1) || n < -float64(^uint(0)>>1)-1 {
+			return 0, fmt.Errorf("%s must be an integer", key)
+		}
+		return int(n), nil
 	case int:
-		return n
+		return n, nil
 	}
-	return def
+	return 0, fmt.Errorf("%s must be an integer", key)
 }
 
 func boolParam(args map[string]interface{}, key string, def bool) bool {
@@ -240,6 +304,73 @@ func stringFromPayload(v interface{}) string {
 	return s
 }
 
+func validateBoundedString(name, value string, maxBytes int, required bool) error {
+	if required && strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s is required", name)
+	}
+	if len(value) > maxBytes {
+		return fmt.Errorf("%s must be at most %d bytes", name, maxBytes)
+	}
+	return nil
+}
+
+func validateNamespace(namespace string) error {
+	return validateBoundedString("namespace", namespace, maxNamespaceBytes, false)
+}
+
+func validateTagsPayload(raw interface{}) error {
+	var tags []string
+	switch value := raw.(type) {
+	case nil:
+		return nil
+	case string:
+		if value == "" {
+			return nil
+		}
+		tags = strings.Split(value, ",")
+	case []string:
+		tags = value
+	case []interface{}:
+		if len(value) > maxTags {
+			return fmt.Errorf("tags must contain at most %d entries", maxTags)
+		}
+		tags = make([]string, 0, len(value))
+		for i, item := range value {
+			tag, ok := item.(string)
+			if !ok {
+				return fmt.Errorf("tags[%d] must be a string", i)
+			}
+			tags = append(tags, tag)
+		}
+	default:
+		return fmt.Errorf("tags must be a comma-separated string or array of strings")
+	}
+	if len(tags) > maxTags {
+		return fmt.Errorf("tags must contain at most %d entries", maxTags)
+	}
+	for i, tag := range tags {
+		if len(tag) > maxTagBytes {
+			return fmt.Errorf("tags[%d] must be at most %d bytes", i, maxTagBytes)
+		}
+	}
+	return nil
+}
+
+func validateCommonMetadata(args map[string]interface{}) error {
+	if err := validateNamespace(strParam(args, "namespace")); err != nil {
+		return err
+	}
+	if raw, ok := args["tags"]; ok {
+		if err := validateTagsPayload(raw); err != nil {
+			return err
+		}
+	}
+	if err := validateBoundedString("primary_tag", strParam(args, "primary_tag"), maxTagBytes, false); err != nil {
+		return err
+	}
+	return nil
+}
+
 // --- Helpers ---
 
 func normalizeFactTags(tags []string, primary string) ([]string, string) {
@@ -268,15 +399,6 @@ func normalizeFactTags(tags []string, primary string) ([]string, string) {
 		return out, out[0]
 	}
 	return out, ""
-}
-
-func pointID(text string) string {
-	h := sha1.New()
-	h.Write([]byte(text))
-	b := h.Sum(nil)
-	// Format as UUID v5 style: 8-4-4-4-12
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 func nowISO() string {
@@ -325,21 +447,88 @@ func (s *Server) buildFilters(tags []string, namespace string) map[string]interf
 	}
 }
 
+func validatePositiveLimit(name string, value int) string {
+	if value <= 0 {
+		return fmt.Sprintf("%s must be greater than zero", name)
+	}
+	if value > maxSearchLimit {
+		return fmt.Sprintf("%s must be at most %d", name, maxSearchLimit)
+	}
+	return ""
+}
+
+func mutationCandidates(points []qdrant.Point) string {
+	parts := make([]string, 0, len(points))
+	for _, point := range points {
+		text, _ := point.Payload["text"].(string)
+		parts = append(parts, fmt.Sprintf("id=%s score=%.3f text=%q", point.ID, point.Score, text))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func (s *Server) mutationTarget(ctx context.Context, args map[string]interface{}, queryKey string) (qdrant.Point, string) {
+	namespace := strings.TrimSpace(strParam(args, "namespace"))
+	if id := strings.TrimSpace(strParam(args, "point_id")); id != "" {
+		if !validPointIDPattern.MatchString(id) {
+			return qdrant.Point{}, "point_id must be a numeric legacy ID or UUID"
+		}
+		point, found, err := s.qdrant.Get(ctx, id)
+		if err != nil {
+			return qdrant.Point{}, fmt.Sprintf("exact point lookup failed: %v", err)
+		}
+		if !found {
+			return qdrant.Point{}, fmt.Sprintf("no fact found with point_id %s", id)
+		}
+		if namespace != "" && stringFromPayload(point.Payload["namespace"]) != namespace {
+			return qdrant.Point{}, fmt.Sprintf("point_id %s does not belong to namespace %q", id, namespace)
+		}
+		return point, ""
+	}
+
+	query := strings.TrimSpace(strParam(args, queryKey))
+	if query == "" {
+		return qdrant.Point{}, fmt.Sprintf("%s or point_id is required", queryKey)
+	}
+	vec, err := s.embed.Embed(ctx, query)
+	if err != nil {
+		return qdrant.Point{}, fmt.Sprintf("embedding failed: %v", err)
+	}
+	results, err := s.qdrant.Search(ctx, vec, 2, s.buildFilters(nil, namespace), nil)
+	if err != nil {
+		return qdrant.Point{}, fmt.Sprintf("search failed: %v", err)
+	}
+	if len(results) == 0 {
+		return qdrant.Point{}, "no matching fact found"
+	}
+	if results[0].Score < s.mutationMatchThreshold {
+		return qdrant.Point{}, fmt.Sprintf("mutation refused: best score %.3f is below threshold %.3f; candidates: %s", results[0].Score, s.mutationMatchThreshold, mutationCandidates(results))
+	}
+	if len(results) > 1 && results[0].Score-results[1].Score < mutationAmbiguityMargin {
+		return qdrant.Point{}, fmt.Sprintf("mutation refused: ambiguous matches (score delta %.3f is below %.3f); candidates: %s", results[0].Score-results[1].Score, mutationAmbiguityMargin, mutationCandidates(results))
+	}
+	return results[0], ""
+}
+
 // --- Tool implementations ---
 
 func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	fact := strParam(args, "fact")
-	if fact == "" {
-		return mcp.NewToolResultError("fact is required"), nil
+	if err := validateBoundedString("fact", fact, maxFactBytes, true); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	if err := validateCommonMetadata(args); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 	tags, primaryTag := normalizeFactTags(tagsParam(args), strParam(args, "primary_tag"))
-	namespace := strParam(args, "namespace")
-	if namespace == "" {
-		namespace = "default"
-	}
+	namespace := NormalizeNamespace(strParam(args, "namespace"))
 	permanent := boolParam(args, "permanent", false)
 	validUntil := strParam(args, "valid_until")
+	if validUntil != "" {
+		if _, err := time.Parse("2006-01-02", validUntil); err != nil {
+			return mcp.NewToolResultError("valid_until must use YYYY-MM-DD format"), nil
+		}
+	}
 
 	vec, err := s.embed.Embed(ctx, fact)
 	if err != nil {
@@ -382,7 +571,7 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	}
 
 	if err := s.qdrant.Upsert(ctx, qdrant.Point{
-		ID:      pointID(fact),
+		ID:      PointID(namespace, fact),
 		Vector:  vec,
 		Payload: payload,
 	}); err != nil {
@@ -401,15 +590,28 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	query := strParam(args, "query")
-	if query == "" {
-		return mcp.NewToolResultError("query is required"), nil
+	if err := validateBoundedString("query", query, maxQueryBytes, true); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	if err := validateCommonMetadata(args); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 	tags := tagsParam(args)
 	namespace := strParam(args, "namespace")
-	limit := intParam(args, "limit", 5)
+	limit, err := intParam(args, "limit", 5)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	if validationError := validatePositiveLimit("limit", limit); validationError != "" {
+		return mcp.NewToolResultError(validationError), nil
+	}
 
 	cacheKey := fmt.Sprintf("%s|%s|%v|%d", query, namespace, tags, limit)
 	if cached, ok := s.cache.Get(cacheKey); ok {
+		if err := s.countRecalls(ctx, cached); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("record recall failed: %v", err)), nil
+		}
+		s.cache.Set(cacheKey, cached)
 		return mcp.NewToolResultText(formatFacts(cached)), nil
 	}
 
@@ -429,6 +631,7 @@ func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			continue
 		}
 		hit := map[string]interface{}{
+			"_point_id":    p.ID,
 			"text":         p.Payload["text"],
 			"score":        p.Score,
 			"tags":         p.Payload["tags"],
@@ -438,50 +641,38 @@ func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		}
 		hits = append(hits, hit)
 
-		// Async update recall_count.
-		go func(id string, payload map[string]interface{}) {
-			rc := 0
-			if v, ok := payload["recall_count"].(float64); ok {
-				rc = int(v)
-			}
-			_ = s.qdrant.SetPayload(context.Background(), id, map[string]interface{}{
-				"recall_count":     rc + 1,
-				"last_recalled_at": nowISO(),
-			})
-		}(p.ID, p.Payload)
-
 		if len(hits) >= limit {
 			break
 		}
 	}
 
+	if err := s.countRecalls(ctx, hits); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("record recall failed: %v", err)), nil
+	}
 	s.cache.Set(cacheKey, hits)
 	return mcp.NewToolResultText(formatFacts(hits)), nil
 }
 
 func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
-	oldQuery := strParam(args, "old_query")
 	newFact := strParam(args, "new_fact")
-	if oldQuery == "" || newFact == "" {
-		return mcp.NewToolResultError("old_query and new_fact are required"), nil
+	if err := validateBoundedString("new_fact", newFact, maxFactBytes, true); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
-	namespace := strParam(args, "namespace")
-
-	vec, err := s.embed.Embed(ctx, oldQuery)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("embedding failed: %v", err)), nil
+	if err := validateCommonMetadata(args); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
-
-	results, err := s.qdrant.Search(ctx, vec, 1, s.buildFilters(nil, namespace), nil)
-	if err != nil || len(results) == 0 {
-		return mcp.NewToolResultError("no matching fact found"), nil
+	if strParam(args, "point_id") == "" {
+		if err := validateBoundedString("old_query", strParam(args, "old_query"), maxQueryBytes, true); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 	}
 
-	old := results[0]
+	old, targetError := s.mutationTarget(ctx, args, "old_query")
+	if targetError != "" {
+		return mcp.NewToolResultError(targetError), nil
+	}
 	oldText, _ := old.Payload["text"].(string)
-	newID := pointID(newFact)
-
 	// Embed new fact.
 	newVec, err := s.embed.Embed(ctx, newFact)
 	if err != nil {
@@ -493,8 +684,11 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	payload["text"] = newFact
 	payload["updated_at"] = nowISO()
 	if ns := strParam(args, "namespace"); ns != "" {
-		payload["namespace"] = ns
+		payload["namespace"] = NormalizeNamespace(ns)
 	}
+	namespace := NormalizeNamespace(stringFromPayload(payload["namespace"]))
+	payload["namespace"] = namespace
+	newID := PointID(namespace, newFact)
 	if tags := tagsParam(args); tags != nil {
 		primary := strParam(args, "primary_tag")
 		if primary == "" {
@@ -532,23 +726,18 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 
 func (s *Server) deleteFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
-	query := strParam(args, "query")
-	if query == "" {
-		return mcp.NewToolResultError("query is required"), nil
+	if err := validateNamespace(strParam(args, "namespace")); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
-	namespace := strParam(args, "namespace")
-
-	vec, err := s.embed.Embed(ctx, query)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("embedding failed: %v", err)), nil
+	if strParam(args, "point_id") == "" {
+		if err := validateBoundedString("query", strParam(args, "query"), maxQueryBytes, true); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 	}
-
-	results, err := s.qdrant.Search(ctx, vec, 1, s.buildFilters(nil, namespace), nil)
-	if err != nil || len(results) == 0 {
-		return mcp.NewToolResultError("no matching fact found"), nil
+	target, targetError := s.mutationTarget(ctx, args, "query")
+	if targetError != "" {
+		return mcp.NewToolResultError(targetError), nil
 	}
-
-	target := results[0]
 	if err := s.qdrant.Delete(ctx, []string{target.ID}); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("delete failed: %v", err)), nil
 	}
@@ -560,8 +749,17 @@ func (s *Server) deleteFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 
 func (s *Server) forgetOld(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
-	days := intParam(args, "days", 90)
+	days, err := intParam(args, "days", 90)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	if days <= 0 {
+		return mcp.NewToolResultError("days must be greater than zero"), nil
+	}
 	namespace := strParam(args, "namespace")
+	if err := validateNamespace(namespace); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	dryRun := boolParam(args, "dry_run", true)
 
 	cutoff := time.Now().AddDate(0, 0, -days)
@@ -615,18 +813,36 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	if factsRaw == "" {
 		return mcp.NewToolResultError("facts is required"), nil
 	}
+	if len(factsRaw) > maxImportBytes {
+		return mcp.NewToolResultError(fmt.Sprintf("facts must be at most %d bytes", maxImportBytes)), nil
+	}
 
 	// Parse JSON array of fact objects.
 	var facts []map[string]interface{}
 	if err := json.Unmarshal([]byte(factsRaw), &facts); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("invalid JSON: %v", err)), nil
 	}
+	if len(facts) > maxImportFacts {
+		return mcp.NewToolResultError(fmt.Sprintf("facts must contain at most %d entries", maxImportFacts)), nil
+	}
 
 	imported := 0
 	skipped := 0
 	for _, f := range facts {
 		text, _ := f["text"].(string)
-		if text == "" {
+		if err := validateBoundedString("text", text, maxFactBytes, true); err != nil {
+			skipped++
+			continue
+		}
+		if err := validateNamespace(stringFromPayload(f["namespace"])); err != nil {
+			skipped++
+			continue
+		}
+		if err := validateTagsPayload(f["tags"]); err != nil {
+			skipped++
+			continue
+		}
+		if err := validateBoundedString("primary_tag", stringFromPayload(f["primary_tag"]), maxTagBytes, false); err != nil {
 			skipped++
 			continue
 		}
@@ -638,16 +854,13 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			continue
 		}
 
-		// Dedup check.
-		existing, _ := s.qdrant.Search(ctx, vec, 1, nil, nil)
+		namespace := NormalizeNamespace(stringFromPayload(f["namespace"]))
+
+		// Deduplication is namespace-scoped, matching store_fact semantics.
+		existing, _ := s.qdrant.Search(ctx, vec, 1, s.buildFilters(nil, namespace), nil)
 		if len(existing) > 0 && existing[0].Score >= s.dedupThreshold {
 			skipped++
 			continue
-		}
-
-		namespace, _ := f["namespace"].(string)
-		if namespace == "" {
-			namespace = "default"
 		}
 
 		payload := map[string]interface{}{
@@ -671,7 +884,7 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		}
 
 		if err := s.qdrant.Upsert(ctx, qdrant.Point{
-			ID:      pointID(text),
+			ID:      PointID(namespace, text),
 			Vector:  vec,
 			Payload: payload,
 		}); err != nil {
@@ -689,11 +902,20 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 func (s *Server) findRelated(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	query := strParam(args, "query")
-	if query == "" {
-		return mcp.NewToolResultError("query is required"), nil
+	if err := validateBoundedString("query", query, maxQueryBytes, true); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 	namespace := strParam(args, "namespace")
-	limit := intParam(args, "limit", 5)
+	if err := validateNamespace(namespace); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	limit, err := intParam(args, "limit", 5)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	if validationError := validatePositiveLimit("limit", limit); validationError != "" {
+		return mcp.NewToolResultError(validationError), nil
+	}
 
 	vec, err := s.embed.Embed(ctx, query)
 	if err != nil {
@@ -731,6 +953,9 @@ func (s *Server) findRelated(ctx context.Context, req mcp.CallToolRequest) (*mcp
 
 func (s *Server) listFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
+	if err := validateCommonMetadata(args); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	namespace := strParam(args, "namespace")
 	tags := tagsParam(args)
 
@@ -855,6 +1080,9 @@ func (s *Server) getStats(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 func (s *Server) listTags(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	namespace := strParam(args, "namespace")
+	if err := validateNamespace(namespace); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 
 	filters := s.buildFilters(nil, namespace)
 	points, err := s.qdrant.ScrollAll(ctx, filters, false)
@@ -884,6 +1112,9 @@ func (s *Server) listTags(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 func (s *Server) exportFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	namespace := strParam(args, "namespace")
+	if err := validateNamespace(namespace); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 
 	filters := s.buildFilters(nil, namespace)
 	points, err := s.qdrant.ScrollAll(ctx, filters, false)
@@ -957,7 +1188,16 @@ func (s *Server) getOperationalFacts(ctx context.Context, namespace string, topR
 func (s *Server) getOperationalContext(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	namespace := strParam(args, "namespace")
-	topRecalled := intParam(args, "top_recalled", 10)
+	if err := validateNamespace(namespace); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	topRecalled, err := intParam(args, "top_recalled", 10)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	if validationError := validatePositiveLimit("top_recalled", topRecalled); validationError != "" {
+		return mcp.NewToolResultError(validationError), nil
+	}
 
 	points, err := s.getOperationalFacts(ctx, namespace, topRecalled)
 	if err != nil {
@@ -992,7 +1232,12 @@ func (s *Server) getOperationalContext(ctx context.Context, req mcp.CallToolRequ
 // Returns operational facts as plain text, suitable for Claude Code hooks.
 func (s *Server) OperationalContextHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		points, err := s.getOperationalFacts(r.Context(), r.URL.Query().Get("namespace"), 10)
+		namespace := r.URL.Query().Get("namespace")
+		if err := validateNamespace(namespace); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		points, err := s.getOperationalFacts(r.Context(), namespace, 10)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1027,8 +1272,8 @@ func formatFacts(hits []map[string]interface{}) string {
 		primary := formatPrimaryTag(h["primary_tag"])
 
 		line := fmt.Sprintf("- [%.3f] %s%s ns:%s %s", h["score"], tagsList, primary, ns, text)
-		if rc, ok := h["recall_count"].(float64); ok && rc > 0 {
-			line = fmt.Sprintf("- [%.3f] %s%s ns:%s recalls:%.0f %s", h["score"], tagsList, primary, ns, rc, text)
+		if rc := payloadInt(h["recall_count"]); rc > 0 {
+			line = fmt.Sprintf("- [%.3f] %s%s ns:%s recalls:%d %s", h["score"], tagsList, primary, ns, rc, text)
 		}
 		lines = append(lines, line)
 	}

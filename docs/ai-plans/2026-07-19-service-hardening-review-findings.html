@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>План реализации: hardening personal-memory после глубокого ревью</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --text: #18212f;
+      --muted: #5e6878;
+      --line: #d9dee7;
+      --code: #eef1f5;
+      --accent: #175cd3;
+      --critical: #b42318;
+      --warn: #b54708;
+      --ok: #067647;
+      --info: #026aa2;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+    }
+    main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 64px; }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 22px;
+      margin: 16px 0;
+    }
+    h1, h2, h3 { line-height: 1.25; margin-top: 0; }
+    h1 { font-size: 30px; margin-bottom: 8px; }
+    h2 { font-size: 21px; }
+    h3 { font-size: 16px; margin-top: 22px; }
+    p { margin: 8px 0; }
+    ul, ol { padding-left: 25px; }
+    li { margin: 7px 0; }
+    code {
+      background: var(--code);
+      padding: 2px 5px;
+      border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 0.94em;
+    }
+    pre {
+      margin: 12px 0;
+      padding: 14px;
+      border-radius: 8px;
+      overflow-x: auto;
+      background: #111827;
+      color: #f9fafb;
+    }
+    pre code { padding: 0; background: transparent; color: inherit; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border: 1px solid var(--line); padding: 9px; text-align: left; vertical-align: top; }
+    th { background: #f1f3f6; }
+    .meta { color: var(--muted); }
+    .badge {
+      display: inline-block;
+      margin-right: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .badge-critical { background: #fee4e2; color: var(--critical); }
+    .badge-warn { background: #fef0c7; color: var(--warn); }
+    .badge-info { background: #dff3ff; color: var(--info); }
+    .badge-ok { background: #dcfae6; color: var(--ok); }
+    .callout { border-left: 4px solid var(--accent); }
+    .risk { border-left: 4px solid var(--critical); }
+    .approval { border-left: 4px solid var(--warn); }
+    .checkpoint { border-left: 4px solid var(--ok); }
+    .wave { border-top: 4px solid var(--accent); }
+    .checklist { list-style: none; padding-left: 0; }
+    .checklist li::before { content: "☐"; margin-right: 8px; color: var(--accent); }
+    .small { font-size: 0.92em; color: var(--muted); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Hardening personal-memory после глубокого ревью</h1>
+  <p>
+    <span class="badge badge-ok">План одобрен — реализация идёт</span>
+    <span class="badge badge-info">Последовательные волны</span>
+    <span class="badge badge-warn">Production не изменён и не развёрнут</span>
+  </p>
+  <p class="meta">
+    Создано 2026-07-19 для репозитория <code>personal_memory</code>.
+    Исходное состояние: <code>main</code> на <code>a693256</code>, рабочее дерево чистое.
+  </p>
+
+  <section>
+    <h2>1. Задача и границы</h2>
+    <p>
+      Последовательно устранить подтверждённые ревью риски потери данных, несогласованности Qdrant,
+      деградации RAG, зависаний внешних клиентов, ошибок Todoist, неточных recall-метрик,
+      квадратичной нагрузки viz и недетерминированных deployment-зависимостей.
+    </p>
+    <p>
+      Работа идёт небольшими тестируемыми волнами. Каждая волна должна оставлять сервис в рабочем
+      состоянии и заканчиваться checkpoint’ом пользователя. Автоматический deploy, изменение
+      production-конфигурации в <code>personal_ai_stack</code>, push, PR и commit не входят в
+      разрешённые действия без отдельного явного запроса.
+    </p>
+    <h3>Не входит в scope</h3>
+    <ul>
+      <li>Новый UI или изменение визуального языка dashboard.</li>
+      <li>Переезд с Qdrant/TEI, изменение embedding-модели или размерности vectors.</li>
+      <li>Multi-user tenancy и новая модель OAuth scopes.</li>
+      <li>Восстановление фактов, уже исторически потерянных из-за одинакового text-only ID.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>2. Текущее и целевое поведение</h2>
+    <table>
+      <thead><tr><th>Область</th><th>Сейчас</th><th>После выполнения</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Memory mutations</td>
+          <td><code>update_fact</code>/<code>delete_fact</code> берут ближайший result без нижнего score.</td>
+          <td>Мутация отклоняется при слабом или неоднозначном совпадении; опасные числа валидируются.</td>
+        </tr>
+        <tr>
+          <td>Point IDs</td>
+          <td>ID зависит только от текста и конфликтует между namespace.</td>
+          <td>Новые ID включают namespace; legacy IDs читаются; отдельная dry-run миграция переводит существующие точки.</td>
+        </tr>
+        <tr>
+          <td>Qdrant writes</td>
+          <td>HTTP acknowledgment принимается за завершённую запись.</td>
+          <td>Критические write/delete/payload операции используют <code>wait=true</code>, проверяют HTTP и Qdrant status.</td>
+        </tr>
+        <tr>
+          <td>RAG</td>
+          <td>Старые chunks удаляются до полной записи новых; пустой файл сохраняет старый индекс.</td>
+          <td>Новая версия файла полностью записывается первой; после подтверждения удаляются предыдущие версии.</td>
+        </tr>
+        <tr>
+          <td>Reliability</td>
+          <td>Qdrant/TEI без client timeout; server shutdown обрывает запросы.</td>
+          <td>Ограниченные HTTP timeouts, bounded bodies, graceful shutdown и корректная обработка status codes.</td>
+        </tr>
+        <tr>
+          <td>Auxiliary paths</td>
+          <td>Todoist filter не escaped; recall counts теряются; viz делает все pairwise comparisons.</td>
+          <td>Корректные URL/schema, сериализованные increments, hard caps и bounded top-K для viz.</td>
+        </tr>
+        <tr>
+          <td>Build/deploy</td>
+          <td>Mutable images/model revision и скачиваемые browser assets без lock/checksum.</td>
+          <td>Закреплённые версии/digests, проверяемые browser assets и воспроизводимая test-команда.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="callout">
+    <h2>3. Выбранный подход и альтернативы</h2>
+    <h3>Рекомендация: независимые волны с checkpoint после каждой</h3>
+    <p>
+      Сначала закрыть прямые data-loss сценарии без миграции, затем отдельно выполнить ID migration
+      и RAG versioning, после чего заниматься доступностью, метриками, viz и supply chain. Такой порядок
+      минимизирует blast radius и позволяет остановиться после любой волны с рабочим сервисом.
+    </p>
+    <table>
+      <thead><tr><th>Вариант</th><th>Плюсы</th><th>Минусы</th><th>Решение</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Один большой hardening change</td>
+          <td>Один общий релиз.</td>
+          <td>Сложное ревью, миграция смешана с runtime-изменениями, тяжёлый rollback.</td>
+          <td>Отклонён.</td>
+        </tr>
+        <tr>
+          <td>Исправить только P1</td>
+          <td>Быстро снижает основной риск.</td>
+          <td>Оставляет подтверждённые функциональные и эксплуатационные дефекты.</td>
+          <td>Подходит как промежуточная остановка после волн 1–3.</td>
+        </tr>
+        <tr>
+          <td>Шесть независимых волн</td>
+          <td>Проверяемые границы, простой rollback, понятное продвижение step-by-step.</td>
+          <td>Больше checkpoint’ов и потенциальных commit boundaries.</td>
+          <td><strong>Выбрано.</strong></td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="small">
+      Предлагаемые commit boundaries описаны только как логические точки. Фактические commits выполняются
+      исключительно после отдельного разрешения пользователя.
+    </p>
+  </section>
+
+  <section>
+    <h2>4. Архитектурные решения</h2>
+    <h3>Безопасные mutations</h3>
+    <ul>
+      <li>Добавить <code>MUTATION_MATCH_THRESHOLD</code> с консервативным default <code>0.90</code> и validation <code>0 &lt; threshold &lt;= 1</code>.</li>
+      <li>Искать top-2 candidates; отклонять mutation, если лучший score ниже threshold или два кандидата практически неразличимы.</li>
+      <li>В error result возвращать candidate text/ID/score для уточнения запроса, но ничего не менять.</li>
+      <li>Добавить optional exact <code>point_id</code> для повторной гарантированной операции, сохранив query-path для совместимости.</li>
+    </ul>
+
+    <h3>Namespace-aware IDs и миграция</h3>
+    <pre><code>func pointID(namespace, text string) string {
+    return deterministicUUID(namespace + "\x00" + text)
+}</code></pre>
+    <ul>
+      <li>Новые writes сразу используют ID v2; legacy numeric и text-only IDs продолжают читаться.</li>
+      <li>Создать отдельную команду <code>cmd/migrate-memory-ids</code>; default — dry run.</li>
+      <li>Apply-mode: snapshot → остановить все memory writes и явно подтвердить maintenance mode → scroll с vectors → full payload/vector conflict check → upsert new ID с <code>wait=true</code> → verify → delete old ID.</li>
+      <li>Миграция идемпотентна и не запускается автоматически при старте сервера.</li>
+    </ul>
+
+    <h3>Versioned RAG replacement</h3>
+    <pre><code>chunkPointID(filePath, fileHash string, chunkIndex int)
+
+1. Embed all new chunks.
+2. Upsert every chunk with the new file_hash and wait=true.
+3. Verify expected chunk count for the new file_hash.
+4. Delete points for file_path whose file_hash differs.
+5. For an empty file, delete every chunk for file_path.</code></pre>
+    <p>
+      Folder points получают такой же cleanup: summary удаляется, если folder исчез или больше не содержит
+      индексируемых файлов. Ошибка cleanup не маскируется как успешный reindex.
+    </p>
+
+    <h3>Recall counter</h3>
+    <p>
+      Cache entries сохраняют point ID. Один server-lifetime worker сериализует increments по ID,
+      обновляет cache-visible count и пишет абсолютное значение в Qdrant с timeout/retry. Это исключает
+      lost updates внутри текущей single-process архитектуры; distributed counter остаётся вне scope.
+    </p>
+  </section>
+
+  <section>
+    <h2>5. Файлы, которые вероятно изменятся</h2>
+    <table>
+      <thead><tr><th>Путь</th><th>Причина</th></tr></thead>
+      <tbody>
+        <tr><td><code>internal/config/config.go</code>, <code>config_test.go</code></td><td>Fail-fast validation, mutation threshold, HTTP/shutdown/viz limits, explicit insecure-auth flag.</td></tr>
+        <tr><td><code>internal/memory/server.go</code>, <code>server_test.go</code></td><td>Mutation guard, namespace-aware IDs, bounded inputs, recall counter integration.</td></tr>
+        <tr><td><code>internal/memory/recall_counter.go</code>, <code>recall_counter_test.go</code></td><td>Новый изолированный serial worker для recall increments.</td></tr>
+        <tr><td><code>cmd/migrate-memory-ids/main.go</code></td><td>Dry-run/apply migration legacy point IDs.</td></tr>
+        <tr><td><code>internal/qdrant/client.go</code>, <code>client_test.go</code></td><td>Timeout, <code>wait=true</code>, bounded responses, status parsing, retrieve/verification helpers.</td></tr>
+        <tr><td><code>internal/embeddings/client.go</code>, новый test</td><td>HTTP timeout, bounded error/JSON body, response shape validation.</td></tr>
+        <tr><td><code>internal/rag/indexer.go</code>, <code>indexer_test.go</code></td><td>Versioned replace, empty-file cleanup, folder cleanup, explicit partial-failure semantics.</td></tr>
+        <tr><td><code>internal/rag/chunker.go</code>, <code>chunker_test.go</code></td><td>Defensive rejection <code>maxBytes &lt;= 0</code>.</td></tr>
+        <tr><td><code>internal/backup/loop.go</code>, новый test</td><td>Interval/retention guard и проверяемые snapshot errors.</td></tr>
+        <tr><td><code>internal/todoist/client.go</code>, <code>server.go</code>, новые tests</td><td><code>url.Values</code>, labels schema, content/priority/limit validation.</td></tr>
+        <tr><td><code>internal/viz/handler.go</code>, <code>handler_test.go</code></td><td>Caps, top-K heap, request body limit, validation query params.</td></tr>
+        <tr><td><code>cmd/server/main.go</code></td><td>HTTP server timeouts, graceful <code>Shutdown</code>, startup validation, worker lifecycle.</td></tr>
+        <tr><td><code>Dockerfile</code>, <code>docker-compose.yml</code>, <code>Makefile</code>, scripts</td><td>Pinning/checksums и воспроизводимый dev/test path.</td></tr>
+        <tr><td><code>README.md</code>, <code>AGENTS.md</code>, <code>CLAUDE.md</code></td><td>Новые env vars, migration runbook, canonical checks и синхронизация architecture docs.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="wave">
+    <h2>6. Последовательность выполнения</h2>
+
+    <h3>Волна 1 — немедленные data-safety guardrails</h3>
+    <ol>
+      <li>Добавить failing tests для low-score/ambiguous update и delete, negative <code>days</code>, invalid limits и invalid config ranges.</li>
+      <li>Запустить targeted tests и зафиксировать ожидаемые failures.</li>
+      <li>Добавить typed config validation с ошибкой startup вместо silent fallback для некорректных значений.</li>
+      <li>Реализовать mutation threshold, ambiguity guard и optional exact <code>point_id</code>.</li>
+      <li>Запретить <code>days &lt;= 0</code>, non-positive limits, <code>KEEP_SNAPSHOTS &lt; 1</code>, <code>RAG_CHUNK_MAX_BYTES &lt; 1</code> и thresholds вне диапазона.</li>
+      <li>Прогнать targeted tests, <code>go vet ./...</code>, <code>make test</code>, затем race suite.</li>
+    </ol>
+    <p><span class="badge badge-ok">Checkpoint 1</span> Пользователь проверяет новый mutation contract до любых миграций.</p>
+
+    <h3>Волна 2 — Qdrant consistency и namespace-aware IDs</h3>
+    <ol>
+      <li>Добавить HTTP-contract tests: every critical write содержит <code>wait=true</code>; 4xx/5xx и non-completed Qdrant status возвращают error.</li>
+      <li>Добавить namespace collision tests: одинаковый текст в двух namespaces получает разные IDs.</li>
+      <li>Реализовать общий Qdrant request helper с client timeout, bounded response body и status parsing.</li>
+      <li>Перевести upsert/delete/set-payload/index creation на подтверждённые операции.</li>
+      <li>Изменить new-write ID на namespace-aware v2, сохранив чтение legacy IDs.</li>
+      <li>Реализовать и протестировать dry-run migration command, включая collision и interrupted-run cases.</li>
+      <li>До apply-mode создать Qdrant snapshot и вывести exact migration counts; фактический apply требует отдельного подтверждения.</li>
+    </ol>
+    <p><span class="badge badge-ok">Checkpoint 2</span> Отдельно согласовать запуск apply migration на реальных данных.</p>
+
+    <h3>Волна 3 — RAG replace без окна потери данных</h3>
+    <ol>
+      <li>Добавить fake-Qdrant/fake-embed tests для empty file, shrink, failure на каждом upsert и stale folder.</li>
+      <li>Включить <code>file_hash</code> в chunk ID и записывать новую версию до удаления предыдущей.</li>
+      <li>Добавить verification нового chunk count перед cleanup.</li>
+      <li>Сделать empty-file cleanup явным; cleanup failure возвращать как run error.</li>
+      <li>Удалять stale folder points и не обновлять summary при неполном файловом walk.</li>
+      <li>Запустить reindex на временном каталоге и проверить повторный идемпотентный run.</li>
+    </ol>
+    <p><span class="badge badge-ok">Checkpoint 3</span> Это безопасная точка для промежуточного релиза всех P1 fixes.</p>
+
+    <h3>Волна 4 — lifecycle, backup и recall correctness</h3>
+    <ol>
+      <li>Добавить tests для TEI/Qdrant timeout, oversized response, snapshot 5xx и graceful cancellation.</li>
+      <li>Добавить server timeouts и заменить <code>Close</code> на bounded <code>Shutdown</code>.</li>
+      <li>Запустить recall counter worker на server context; учитывать cache hits и сериализовать writes.</li>
+      <li>На shutdown прекратить приём increments, bounded-flush pending counts и завершить worker.</li>
+      <li>Проверить backup retention boundary и корректные ошибки List/DeleteSnapshot.</li>
+    </ol>
+    <p><span class="badge badge-ok">Checkpoint 4</span> Проверить shutdown под активным MCP-запросом и достоверность recall count.</p>
+
+    <h3>Волна 5 — Todoist и bounded viz</h3>
+    <ol>
+      <li>Добавить Todoist request tests для <code>#Work</code>, пробелов, <code>&amp;</code>, project ID, labels и priority boundaries.</li>
+      <li>Собирать query через <code>url.Values</code>; синхронизировать MCP schema с implementation.</li>
+      <li>Добавить viz validation для threshold/max_edges и hard maximum числа nodes/pairs.</li>
+      <li>Заменить накопление всех graph edges на bounded min-heap strongest-K; duplicates также получает server-side cap.</li>
+      <li>Ограничить размер PATCH body и число/длину tags.</li>
+      <li>Прогнать handler benchmarks на синтетических наборах фиксированного размера без публикации выдуманных production-оценок.</li>
+    </ol>
+    <p><span class="badge badge-ok">Checkpoint 5</span> Ручная QA dashboard и Todoist filters.</p>
+
+    <h3>Волна 6 — auth/deployment hardening и воспроизводимость</h3>
+    <ol>
+      <li>Добавить startup test: пустой <code>API_KEY</code> и выключенный OAuth запрещены, кроме явного <code>ALLOW_INSECURE_AUTH=true</code>.</li>
+      <li>Определить отдельный trusted-proxy контракт для <code>/viz</code>; не принимать обычный browser header как доказательство ForwardAuth.</li>
+      <li>Закрепить TEI/Qdrant image versions/digests и embedding model revision на immutable commit.</li>
+      <li>Создать browser asset lock/checksum manifest; Makefile и Dockerfile проверяют SHA-256 перед build.</li>
+      <li>Сделать <code>make test</code> канонической self-contained командой и синхронизировать README/AGENTS/CLAUDE.</li>
+      <li>Отдельно подготовить production deploy diff в <code>personal_ai_stack</code>; не применять без нового approval.</li>
+    </ol>
+    <p><span class="badge badge-ok">Checkpoint 6</span> Финальный code review, deploy review и отдельное решение о релизе.</p>
+  </section>
+
+  <section>
+    <h2>7. Конкретный test plan</h2>
+    <pre><code>make dev-deps
+GOCACHE=/tmp/personal-memory-go-build go vet ./...
+GOCACHE=/tmp/personal-memory-go-build go test ./...
+GOCACHE=/tmp/personal-memory-go-build-race go test -race ./...
+
+# После появления migration command
+go run ./cmd/migrate-memory-ids --dry-run
+
+# RAG QA на временном каталоге/тестовых коллекциях
+go test ./internal/rag -run 'TestIndexer|TestVersioned|TestEmptyFile' -count=1
+
+# Targeted client and safety checks
+go test ./internal/qdrant ./internal/memory ./internal/todoist ./internal/backup -count=1</code></pre>
+    <p>Дополнительные обязательные cases:</p>
+    <ul class="checklist">
+      <li>Одинаковый text в <code>personal</code> и <code>work</code> сохраняется как две точки.</li>
+      <li>Low-score и ambiguous mutations не меняют Qdrant.</li>
+      <li>Qdrant 202/acknowledged без applied status не выдаётся пользователю как завершённая операция.</li>
+      <li>Ошибка посередине RAG upsert сохраняет старую полную версию.</li>
+      <li>Пустой файл удаляет старые chunks.</li>
+      <li>Cached recall увеличивает count; параллельные recalls не теряются.</li>
+      <li><code>#Work &amp; today</code> приходит в Todoist ровно одним query parameter.</li>
+      <li>Viz отклоняет отрицательные/слишком большие limits без panic.</li>
+      <li>SIGTERM даёт активному запросу bounded время завершиться.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>8. Manual QA и эксплуатационные проверки</h2>
+    <ul class="checklist">
+      <li>Создать два тестовых факта с одинаковым текстом в разных namespace, recall/export/update/delete проверить независимо.</li>
+      <li>Попытаться удалить факт неточным запросом и убедиться, что сервис возвращает safe rejection.</li>
+      <li>В dry-run миграции сверить число source, planned, skipped и conflict points; никаких writes быть не должно.</li>
+      <li>Изменить тестовый документ: больше → меньше → пустой → восстановленный; search не должен возвращать старый текст.</li>
+      <li>Остановить TEI/Qdrant и убедиться, что MCP-запрос завершается timeout-ошибкой, а не висит.</li>
+      <li>Проверить Todoist filters <code>today</code>, <code>#Work</code>, <code>@label</code> на тестовых/безопасных read-only запросах.</li>
+      <li>Открыть все viz tabs, изменить tags, проверить graph/duplicates caps и отсутствие 500.</li>
+      <li>До production запуска проверить, что notifications/invites Todoist не затрагиваются; текущий scope не создаёт календарные события.</li>
+      <li>После отдельного deploy: <code>/health</code>, auth challenge, memory recall/store и server logs.</li>
+    </ul>
+  </section>
+
+  <section class="risk">
+    <h2>9. Риски, edge cases и меры</h2>
+    <table>
+      <thead><tr><th>Риск</th><th>Мера</th></tr></thead>
+      <tbody>
+        <tr><td>ID migration перезапишет конфликтующую или конкурентно созданную target point.</td><td>Dry run, preflight полного payload/vector, snapshot и обязательный maintenance mode со всеми остановленными memory writers; apply без явного подтверждения запрещён.</td></tr>
+        <tr><td>Слишком высокий mutation threshold ухудшит удобство.</td><td>Консервативный default, configurable threshold, exact <code>point_id</code> escape hatch и реальные score в error.</td></tr>
+        <tr><td><code>wait=true</code> увеличит latency writes.</td><td>Принять для correctness-critical writes; batching оставить отдельной оптимизацией.</td></tr>
+        <tr><td>Versioned chunks временно удвоят объём файла.</td><td>Cleanup сразу после verification; повторный run очищает старые версии.</td></tr>
+        <tr><td>Recall worker потеряет последние increments при жёстком kill.</td><td>Graceful bounded flush; метрика остаётся best-effort, факты не затрагиваются.</td></tr>
+        <tr><td>Fail-closed auth сломает локальный запуск без secret.</td><td>Явный <code>ALLOW_INSECURE_AUTH=true</code> только для локальной среды.</td></tr>
+        <tr><td>Pinning модели без reindex сохранит уже смешанный vector space, если drift случился раньше.</td><td>Перед релизом сверить фактическую production revision; при сомнении планировать полный controlled reindex отдельно.</td></tr>
+        <tr><td>Изменение production compose выходит за текущий repo.</td><td>Отдельный diff, approval и deploy verification в <code>personal_ai_stack</code>.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>10. Rollback plan</h2>
+    <ol>
+      <li>Каждая волна откатывается независимо возвратом её code/config diff; не смешивать волны в один обязательный deploy.</li>
+      <li>Перед ID migration создать и проверить имя Qdrant snapshot, остановить все memory writers и держать их остановленными до завершения; при ошибке восстановить collection из snapshot до возобновления writes.</li>
+      <li>До завершения migration не удалять legacy support.</li>
+      <li>RAG полностью восстанавливается controlled reindex из исходных документов; memory collection этим не затрагивается.</li>
+      <li>При проблемах pinned deployment вернуть предыдущие image digests и model revision вместе, не по отдельности.</li>
+      <li>Production rollback выполняется только по отдельному deploy runbook с health/log verification.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>11. Предположения и открытые вопросы</h2>
+    <h3>Принятые предположения</h3>
+    <ul>
+      <li>Сервис остаётся single-process; recall counter не обязан быть distributed.</li>
+      <li>Qdrant и TEI доступны только как внутренние dependencies, но клиенты всё равно обязаны иметь timeout.</li>
+      <li>RAG index можно перестроить из документов; memory collection требует snapshot перед миграцией.</li>
+      <li>Default mutation threshold <code>0.90</code> — безопасная стартовая политика, которую можно изменить после наблюдения реальных scores.</li>
+    </ul>
+    <h3>Решения, требующие отдельного подтверждения в соответствующей волне</h3>
+    <ul>
+      <li>Запуск apply-mode ID migration на реальной collection.</li>
+      <li>Конкретные immutable TEI/Qdrant image digests и embedding model commit после сверки production.</li>
+      <li>Механизм trusted-proxy защиты <code>/viz</code> и связанные изменения в другом deployment repo.</li>
+      <li>Любой commit, push, PR или deploy.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>12. Фактическое выполнение — все волны</h2>
+    <ul class="checklist">
+      <li><strong>Волна 1:</strong> конфигурация стала fail-fast; memory inputs ограничены; <code>update_fact</code>/<code>delete_fact</code> отклоняют low-score и ambiguous matches и поддерживают exact <code>point_id</code>.</li>
+      <li><strong>Волна 2:</strong> Qdrant mutations используют <code>wait=true</code> и проверяют application status; новые memory IDs учитывают namespace; добавлен dry-run-by-default идемпотентный мигратор с полной payload/vector collision protection, write-before-delete и обязательным подтверждением остановленных writers для apply.</li>
+      <li><strong>Волна 3:</strong> RAG chunks получили generation-aware IDs; старая полная версия сохраняется до подтверждения новой; partial runs возобновляются; empty files и stale folder summaries очищаются только после безопасного walk.</li>
+      <li><strong>Волна 4:</strong> Qdrant/TEI получили timeout и bounded bodies; recall worker учитывает cache hits, сериализует increments, применяет backpressure/retry и дренируется при shutdown; HTTP, backup и RAG background lifecycle завершаются bounded graceful shutdown.</li>
+      <li><strong>Волна 5:</strong> Todoist query/path encoding и MCP labels schema синхронизированы, inputs валидируются; Todoist остаётся полностью выключаемым feature gate. Graph и duplicates ограничены по nodes/results и используют bounded strongest-K heaps; PATCH tags имеет body/schema limits.</li>
+      <li><strong>Волна 6:</strong> auth переведён в fail-closed режим с явным dev-only escape hatch; viz проверяет trusted proxy secret; Docker/model/browser dependencies закреплены digest/revision/checksum; docs и canonical checks синхронизированы.</li>
+    </ul>
+    <p><strong>Фактически изменённые области:</strong> server/config/auth lifecycle, memory/Qdrant clients и migration command, RAG indexer, backup, Todoist, viz, Docker/Compose/Makefile, environment example и project documentation.</p>
+    <p><strong>Закрытие финального review:</strong> Memory MCP и HTTP request bodies получили проверяемые byte/count caps и строгие integer-параметры без дробного усечения. ID migration сравнивает полный нормализованный payload и vector, блокирует конфликтующую группу до writes и требует явно подтверждённый maintenance mode, исключающий конкурентные writers.</p>
+    <p><strong>Закрытие PR review:</strong> Qdrant exact retrieval запрашивает vectors; numeric IDs и scroll offsets сохраняются без потери точности до <code>uint64</code> max без изменения типов payload. Standalone indexer валидирует только собственный RAG-контракт. Graph/Duplicates передают доступные filters в Qdrant, читают страницы по 100 точек, имеют общий 20-секундный deadline и абсолютный scan cap, учитывают request cancellation, а Duplicates UI показывает recoverable bounded retry. Также исправлены Todoist base URL fallback и lint findings.</p>
+    <p><strong>Финальные автоматические checks:</strong> <code>go test -race ./... -count=1</code> прошёл для всех packages; <code>make test</code> подтвердил SHA-256 пяти browser assets, выполнил <code>go vet ./...</code>, все package tests и сборку server/indexer/migration binaries; <code>docker build --check .</code>, <code>docker compose config --no-env-resolution -q</code> и <code>git diff --check</code> прошли.</p>
+    <p><strong>Известные ограничения:</strong> recall counter гарантирует отсутствие lost updates только внутри одного процесса; жёсткий kill может потерять ещё не записанные increments. Viz по-прежнему выполняет O(n²) сравнения, но только внутри валидированного hard node cap. Legacy IDs остаются до отдельно подтверждённого apply migration в maintenance mode; CLI требует <code>-confirm-writes-stopped</code>, однако организационное условие остановки всех внешних writers оператор проверяет самостоятельно.</p>
+    <p><strong>Не выполнялось:</strong> commit, push, PR, production migration, изменение внешнего <code>personal_ai_stack</code> и deploy.</p>
+  </section>
+
+  <section>
+    <h2>13. Детали Волны 6</h2>
+    <ul class="checklist">
+      <li>Auth переведён в fail-closed режим: пустые API-key/OAuth запрещают startup, кроме явного development-only <code>ALLOW_INSECURE_AUTH=true</code>; сравнение секретов выполняется constant-time.</li>
+      <li>Feature gate Todoist сохранён: <code>TODOIST_TOKEN</code>, <code>API_KEY</code>, client и route требуются только при <code>ENABLE_TODOIST=true</code>. Добавлен отдельный положительный тест выключенного Todoist без token.</li>
+      <li>Для viz добавлен trusted-proxy secret: приложение проверяет <code>X-Personal-Memory-Proxy-Secret</code>, а repository compose настраивает Traefik на overwrite header после Authentik ForwardAuth.</li>
+      <li>Закреплены digest Docker base, TEI/Qdrant images и immutable embedding model revision; application image для production документирован как отдельный CI <code>sha-*</code>/digest pin.</li>
+      <li>Design-system v1.4.0 загружается из точных GitHub release assets; DS и vis bundles проверяются по <code>build/browser-assets.sha256</code>. <code>make test</code> проверяет assets, vet/tests и сборку всех трёх binaries.</li>
+      <li>Добавлена defensive validation для <code>search_documents</code>: только два известных mode и integer limit 1–100; chunk maximum ограничен 1 MiB.</li>
+    </ul>
+    <p><strong>Выполненные checks:</strong> <code>make test</code> прошёл полностью: проверены SHA-256 всех пяти browser assets, <code>go vet ./...</code>, все package tests и сборка server/indexer/migration binaries. Полный <code>go test -race ./... -count=1</code> прошёл после финальных исправлений, как и <code>docker build --check .</code>, Compose config validation и <code>git diff --check</code>.</p>
+    <p><strong>Deployment boundary:</strong> внешний <code>personal_ai_stack</code> не менялся. До production нужен отдельный review/approval diff с <code>VIZ_PROXY_SECRET</code>, Traefik header overwrite, immutable dependency refs и выбранным application SHA/digest; затем обязательны health/auth/log checks.</p>
+  </section>
+
+  <section class="approval">
+    <h2>14. Approval gate</h2>
+    <p>
+      Пользователь одобрил реализацию после создания плана. Apply-mode ID migration, изменение внешнего
+      production deploy repo, commit, push, PR и deploy по-прежнему требуют отдельного явного разрешения.
+    </p>
+    <p>
+      После каждой реализованной волны этот HTML-файл обновляется: фактические изменения, выполненные
+      проверки, известные ограничения и рекомендации для следующего checkpoint.
+    </p>
+  </section>
+</main>
+</body>
+</html>

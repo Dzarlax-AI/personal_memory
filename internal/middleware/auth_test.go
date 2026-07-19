@@ -68,8 +68,49 @@ func TestAPIKeyAuth_EmptyConfig(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200 (no auth configured), got %d", rec.Code)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 (fail closed), got %d", rec.Code)
+	}
+}
+
+func TestProxySecretAuth(t *testing.T) {
+	handler := ProxySecretAuth("proxy-secret")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	for _, tt := range []struct {
+		name   string
+		secret string
+		want   int
+	}{
+		{name: "valid", secret: "proxy-secret", want: http.StatusOK},
+		{name: "invalid", secret: "browser-spoof", want: http.StatusUnauthorized},
+		{name: "missing", want: http.StatusUnauthorized},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/viz", nil)
+			if tt.secret != "" {
+				req.Header.Set(VizProxySecretHeader, tt.secret)
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tt.want {
+				t.Fatalf("expected %d, got %d", tt.want, rec.Code)
+			}
+		})
+	}
+}
+
+func TestProxySecretAuthEmptyConfigFailsClosed(t *testing.T) {
+	handler := ProxySecretAuth("")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/viz", nil)
+	req.Header.Set(VizProxySecretHeader, "anything")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
 	}
 }
 

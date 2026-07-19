@@ -21,13 +21,13 @@ Client → Traefik (mcp.<domain>) → memory-mcp:8000 (Go)
            ├─ /memory   → memory MCP (X-API-Key)
            │             (tools include RAG when ENABLE_RAG=true)
            ├─ /todoist  → todoist MCP (X-API-Key, ENABLE_TODOIST)
-           ├─ /viz/     → viz dashboard (Authentik ForwardAuth, ENABLE_VIZ)
+           ├─ /viz/     → viz dashboard (Authentik + proxy secret, ENABLE_VIZ)
            └─ /health   → liveness (no auth)
 ```
 
-Single Go process serves all routes on one port via Chi router. MCP endpoints are protected by an `X-API-Key` middleware in application code. `/viz` is protected at the Traefik layer with Authentik ForwardAuth so browsers get a proper OIDC login flow.
+Single Go process serves all routes on one port via Chi router. `/memory` accepts API-key and optional OAuth auth; optional `/todoist` is API-key-only. `/viz` combines Traefik Authentik ForwardAuth with an application-verified proxy secret so browsers get OIDC without trusting identity headers directly.
 
-Todoist, viz, and RAG are toggled by `ENABLE_TODOIST` / `ENABLE_VIZ` / `ENABLE_RAG` env vars. Backup runs as a goroutine.
+Todoist, viz, and RAG are toggled by `ENABLE_TODOIST` / `ENABLE_VIZ` / `ENABLE_RAG` env vars. Disabled features do not require their secrets or register their routes. Todoist requires both `TODOIST_TOKEN` and `API_KEY` only when enabled. Viz requires Traefik to overwrite `X-Personal-Memory-Proxy-Secret` with `VIZ_PROXY_SECRET` after successful ForwardAuth. Backup runs as a goroutine.
 
 ### Qdrant collections
 
@@ -109,8 +109,8 @@ user              string    — from MEMORY_USER env var
 
 ### Point IDs
 
-- **New points**: deterministic UUID-v5-like hex (SHA1 of text, formatted `8-4-4-4-12`)
-- **Legacy points** (from old Python implementation): numeric integer IDs
+- **New points**: deterministic UUID-v5-like hex derived from namespace + exact text
+- **Legacy points**: numeric and text-only deterministic IDs; both remain readable and can be rewritten with `cmd/migrate-memory-ids`
 
 The Qdrant client unmarshals `id` into `interface{}` and converts to string with `parsePointID`. Don't assume IDs are always strings — Qdrant returns whatever was stored.
 
@@ -118,7 +118,8 @@ The Qdrant client unmarshals `id` into `interface{}` and converts to string with
 
 | Variable | Default | Description |
 |---|---|---|
-| `API_KEY` | — | Shared secret for `X-API-Key` header (generate with `openssl rand -hex 32`). If empty, auth is disabled. |
+| `API_KEY` | — | Shared secret for `X-API-Key`. Required unless OAuth secures `/memory`; also required whenever Todoist is enabled. Empty auth fails startup by default. |
+| `ALLOW_INSECURE_AUTH` | `false` | Explicit isolated-development escape hatch for running without API-key/OAuth auth (and viz without a proxy secret). Never enable in production. |
 | `MEMORY_USER` | `claude` | Username stored in fact metadata |
 | `MEMORY_DOMAIN` | required | Domain — MCP at `mcp.<domain>` (used by Traefik labels in deploy) |
 | `QDRANT_URL` | `http://memory-qdrant:6333` | Qdrant endpoint. In production: `http://infra-qdrant:6333` |
@@ -126,6 +127,7 @@ The Qdrant client unmarshals `id` into `interface{}` and converts to string with
 | `ENABLE_TODOIST` | `false` | Enable Todoist MCP server |
 | `ENABLE_VIZ` | `false` | Enable visualization dashboard |
 | `TODOIST_TOKEN` | — | Todoist API token (only when `ENABLE_TODOIST=true`) |
+| `VIZ_PROXY_SECRET` | — | Required only when `ENABLE_VIZ=true`; Traefik overwrites the trusted proxy header after ForwardAuth. |
 | `CACHE_TTL` | `60` | Search cache TTL in seconds |
 | `DEDUP_THRESHOLD` | `0.97` | Cosine similarity for dedup |
 | `CONTRADICTION_LOW` | `0.60` | Lower bound for contradiction warning |
@@ -149,9 +151,9 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 ### memory/server.go
 - `InitCollection` runs at startup — embeds "init" to get vector size, creates collection if missing
 - `cache.Invalidate()` is called after any write operation (store, delete, update, import, forget_old)
-- `recall_count` is updated via `qdrant.SetPayload` in a background goroutine — no re-embedding
+- Recall events, including cache hits, are queued to a bounded worker that batches atomic Qdrant increments and drains during graceful shutdown; metrics remain best-effort under hard kills
 - `forget_old` defaults to `dry_run=true` — safe by default
-- New point IDs are SHA1-based hex UUIDs (deterministic by text); legacy numeric IDs are handled on read
+- New point IDs are deterministic from namespace + exact text; legacy numeric/text-only IDs are handled on read and by the standalone migration
 - TEI and Qdrant accessed via Docker network (no auth needed)
 
 ### qdrant/client.go
@@ -165,18 +167,19 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - Single `ScrollAll` at the start of `Run` snapshots every file's hash + expected chunk count; per-file hash checks are in-memory afterwards (no N+1 round-trips)
 - Files are truly "unchanged" only when hash matches AND `actualCount == totalChunks` — a half-indexed file (partial upsert from a prior run) is detected and rebuilt
 - Embeds are batched via `embeddings.Client.EmbedBatch` (TEI sub-batches of 32)
-- Embed-then-delete ordering: old chunks are deleted only after all embeddings succeed
+- Generation-based replacement writes and verifies a complete new file generation before deleting old chunks; empty files remove their old generations
 - Stale cleanup aborts if the walk had any errors OR if it would remove more than half the known files (guards against transient Resilio/FS glitches wiping the index)
 - Walk skips hidden dirs (`.git`, `.sync`, `.trash`, …) except for the root
 
 ### rag/server.go
 - `Server.EnsureCollections` / package-level `rag.EnsureCollections` — create collections + payload indexes; shared between server and standalone indexer binary
 - `reindex_documents` is mutex-guarded (`sync.Mutex.TryLock`) and runs on the server-lifetime context so graceful shutdown cancels in-flight reindexing
-- `search_documents` returns file paths relative to `RAG_DOCUMENTS_DIR` (no absolute server paths leak to clients)
+- `search_documents` accepts only `mode=hierarchical|flat`, caps integer `limit` at 100, and returns paths relative to `RAG_DOCUMENTS_DIR`
 
 ### todoist/server.go
 - Thin wrapper over Todoist REST API v1 (`https://api.todoist.com/api/v1`)
 - `TODOIST_TOKEN` is read from env at startup — never passed by the client
+- The route and client are created only when `ENABLE_TODOIST=true`; disabled Todoist requires neither token nor Todoist-specific route
 - Stateless — no caching, no local storage
 
 ### viz/handler.go
@@ -184,13 +187,13 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - `static/` subtree is embedded via `//go:embed all:static`; `shell.html` is composed with view fragments at handler construction time, cached as `composedHTML`
 - `WithDocumentRAG(chunks, docsDir)` is an opt-in hook; when nil, `/api/documents` returns 404 and the Documents tab is hidden client-side
 - Graph API computes pairwise cosine similarity in-process; caps at `max_edges` strongest edges
-- No auth check here — protected at Traefik layer by Authentik ForwardAuth
+- The app verifies `VIZ_PROXY_SECRET`; Traefik must overwrite the trusted header only after Authentik ForwardAuth succeeds
 
 ### cmd/server/main.go
 - Chi router with logger + recoverer middleware
 - Public: `/health` (no auth)
-- `chi.Group` applies `APIKeyAuth` middleware to `/memory` and `/todoist`
-- `/viz` mounted outside the auth group so Traefik/Authentik handles auth instead
+- `chi.Group` applies API-key/OAuth auth to `/memory`; the optional `/todoist` group is API-key-only
+- `/viz` uses app-level proxy-secret middleware in addition to Traefik/Authentik; `/health` remains public
 - `signal.NotifyContext` for graceful shutdown; backup goroutine respects context
 - Single `StreamableHTTPServer` per MCP server (memory, todoist)
 
@@ -198,22 +201,21 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 
 ### Local build
 ```bash
-go build ./cmd/server
-go test ./...
+make test
 ```
 
 ### Docker (multi-stage)
 ```bash
 docker build -t personal-memory .
 ```
-Builder stage: `golang:1.24-alpine`, CGO disabled, static binary.
-Runtime stage: `alpine:3.21` + `ca-certificates` — final image ~32MB.
+Builder/runtime base images are digest-pinned. TEI, Qdrant, and the embedding model revision are immutable in repository compose. Browser assets are exact-version downloads checked against `build/browser-assets.sha256` before compilation.
 
 ### CI/CD
 `.github/workflows/docker.yml`: on push to `main`, runs `go test` then builds and pushes to `ghcr.io/dzarlax-ai/personal-memory:{latest,sha}`.
 
 ### Deploy
 Production deploy configs live in `personal_ai_stack/deploy/memory/`. Deploy skill (`deploy-personal`) handles syncing configs and pulling the latest image on the VPS.
+This repository does not update that external deploy config automatically. Production needs a separate reviewed diff for `VIZ_PROXY_SECRET`, the Traefik header overwrite, immutable dependency refs, and a concrete application `sha-*` tag/digest; do not deploy moving `latest`.
 
 ## Verification
 

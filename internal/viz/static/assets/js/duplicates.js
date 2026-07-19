@@ -1,10 +1,26 @@
 // Duplicates tab: near-duplicate fact pairs above a similarity threshold.
 
-async function loadDuplicates() {
-  const res = await fetch(`${BASE}/api/duplicates?threshold=0.90`);
+async function loadDuplicates(maxNodes = 1000) {
+  const container = document.getElementById('dup-content');
+  container.innerHTML = '<div class="loading"><div class="spinner"></div>Scanning for duplicates...</div>';
+  let res;
+  try {
+    res = await fetch(`${BASE}/api/duplicates?threshold=0.90&max_nodes=${maxNodes}`);
+  } catch (err) {
+    container.innerHTML = `<div class="empty-state">Duplicate scan failed: ${escapeHtml(err.message)}. <button onclick="loadDuplicates(${maxNodes})">Retry</button></div>`;
+    return;
+  }
+  if (!res.ok) {
+    const message = (await res.text()).trim() || `HTTP ${res.status}`;
+    const retry = res.status === 422 && maxNodes < 5000
+      ? ' <button onclick="loadDuplicates(5000)">Scan up to 5,000 facts</button>'
+      : ` <button onclick="loadDuplicates(${maxNodes})">Retry</button>`;
+    container.innerHTML = `<div class="empty-state">Duplicate scan could not run: ${escapeHtml(message)}.${retry}</div>`;
+    document.getElementById('dup-badge').textContent = '—';
+    return;
+  }
   const data = await res.json();
   const pairs = Array.isArray(data) ? data : (data.pairs || []);
-  const container = document.getElementById('dup-content');
   document.getElementById('dup-badge').textContent = pairs.length;
 
   if (pairs.length === 0) {

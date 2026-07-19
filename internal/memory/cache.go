@@ -30,7 +30,7 @@ func (c *Cache) Get(key string) ([]map[string]interface{}, bool) {
 	if !ok || time.Since(entry.timestamp) > c.ttl {
 		return nil, false
 	}
-	return entry.data, true
+	return cloneHits(entry.data), true
 }
 
 func (c *Cache) Set(key string, data []map[string]interface{}) {
@@ -38,8 +38,19 @@ func (c *Cache) Set(key string, data []map[string]interface{}) {
 	defer c.mu.Unlock()
 	c.entries[key] = cacheEntry{
 		timestamp: time.Now(),
-		data:      data,
+		data:      cloneHits(data),
 	}
+}
+
+func cloneHits(data []map[string]interface{}) []map[string]interface{} {
+	cloned := make([]map[string]interface{}, len(data))
+	for i, hit := range data {
+		cloned[i] = make(map[string]interface{}, len(hit))
+		for key, value := range hit {
+			cloned[i][key] = value
+		}
+	}
+	return cloned
 }
 
 func (c *Cache) Invalidate() {

@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Product-led README implementation plan</title>
+  <style>
+    :root { color-scheme: light dark; --accent: #3b82f6; --muted: #64748b; --panel: color-mix(in srgb, Canvas 94%, var(--accent)); }
+    body { max-width: 980px; margin: 0 auto; padding: 32px 22px 72px; font: 16px/1.55 system-ui, sans-serif; }
+    h1, h2, h3 { line-height: 1.2; }
+    h2 { margin-top: 2rem; border-bottom: 1px solid color-mix(in srgb, CanvasText 20%, transparent); padding-bottom: .35rem; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    code { background: var(--panel); padding: .1rem .3rem; border-radius: 4px; }
+    pre { overflow-x: auto; background: var(--panel); padding: 1rem; border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: .6rem; border: 1px solid color-mix(in srgb, CanvasText 20%, transparent); text-align: left; vertical-align: top; }
+    .callout { border-left: 4px solid var(--accent); background: var(--panel); padding: .8rem 1rem; }
+    .muted { color: var(--muted); }
+    li { margin: .25rem 0; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Product-led README implementation plan</h1>
+  <p class="muted">Prepared 2026-07-19 for the <code>codex/service-hardening</code> worktree.</p>
+
+  <section class="callout">
+    <p><strong>Goal:</strong> replace the current reference-heavy README with professional English documentation for a universal, self-hosted MCP memory product. Users come first; developer and operator material follows.</p>
+    <p><strong>Planning rule:</strong> this HTML file is the only planning artifact for the README rewrite. No separate specification will be generated.</p>
+  </section>
+
+  <section>
+    <h2>1. Scope and success criteria</h2>
+    <p>The work changes <code>README.md</code> only, plus this plan's completion record after implementation. It does not change application behavior, Compose topology, production infrastructure, licensing, or deployment state.</p>
+    <p>The rewrite is complete when a new reader can answer, in order:</p>
+    <ol>
+      <li>What problem does Personal Memory solve?</li>
+      <li>Which capabilities are core and which are optional?</li>
+      <li>What infrastructure is actually required?</li>
+      <li>How do I deploy it, connect an MCP client, and use the first tools?</li>
+      <li>How do I develop, secure, back up, migrate, and operate it?</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>2. Current behavior and verified gaps</h2>
+    <ul>
+      <li>The README leads with implementation components before clearly explaining the product's purpose and user outcomes.</li>
+      <li>It mixes user onboarding, architecture, operator runbooks, tool reference, and personal workflow guidance without a layered reading path.</li>
+      <li>It contains a duplicated <code>Backups</code> heading and personal conventions that should not define a universal project.</li>
+      <li>Architecture text says two services and external <code>infra-qdrant</code>; repository Compose currently defines three services and local <code>memory-qdrant</code>.</li>
+      <li>The tool list omits <code>get_operational_context</code>, exact <code>point_id</code> mutation paths, input bounds, and the authenticated plain-text operational endpoint.</li>
+      <li>RAG documentation omits generation-aware replacement and does not state that the provided Compose file needs an added documents bind mount.</li>
+      <li>The repository has no LICENSE or CONTRIBUTING file, so the README must not claim an open-source license or invent a contribution policy.</li>
+      <li>Named-client compatibility claims are temporally fragile and not fully test-backed by this repository.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>3. Desired information architecture</h2>
+    <table>
+      <thead><tr><th>Order</th><th>Section</th><th>Reader outcome</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>Hero and overview</td><td>Understand the product in one screen: durable user-controlled context for MCP clients.</td></tr>
+        <tr><td>2</td><td>Why Personal Memory</td><td>Understand the stateless-session problem and why semantic memory helps.</td></tr>
+        <tr><td>3</td><td>Capabilities</td><td>Separate core facts from optional document RAG, Todoist, and visualization.</td></tr>
+        <tr><td>4</td><td>How it works</td><td>See one compact conceptual Mermaid flow without package-level detail.</td></tr>
+        <tr><td>5</td><td>Quick start</td><td>Prepare the external Traefik network and storage paths, configure secrets, start Compose, and verify health.</td></tr>
+        <tr><td>6</td><td>Connect and use</td><td>Connect a Streamable HTTP MCP client and understand typical save/recall/search workflows.</td></tr>
+        <tr><td>7</td><td>Core concepts and tools</td><td>Use namespaces, tags, expiration, exact mutation IDs, RAG, and optional Todoist correctly.</td></tr>
+        <tr><td>8</td><td>Developer and operator guide</td><td>Build, test, configure, secure, index, back up, restore, and migrate safely.</td></tr>
+        <tr><td>9</td><td>Reference</td><td>Find exact environment variables, routes, binaries, and project layout.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>4. Content decisions</h2>
+    <ul>
+      <li>Position the project as a universal self-hosted product, but avoid the legal phrase “open source” until a license exists. Use “self-hosted project” and “public source repository” where needed.</li>
+      <li>Describe persistent semantic facts as the core product. Mark RAG, Todoist, visualization, and OAuth as optional feature gates.</li>
+      <li>State accurately that fact/document embeddings remain inside the deployment, while Todoist and an OAuth issuer may involve external services.</li>
+      <li>Use generic placeholders such as <code>example.com</code>; remove Resilio-specific and personal namespace prescriptions from the main onboarding path.</li>
+      <li>Present repository Compose as a production-oriented baseline that expects an external <code>traefik</code> network and host bind directories. Do not call it a standalone one-command stack.</li>
+      <li>Call out the mismatch between production pinning guidance and the checked-in <code>:latest</code> application image without pretending it is fixed.</li>
+      <li>Use named client examples only where repository artifacts support them. Frame client-specific commands as examples that may need verification against current client documentation.</li>
+      <li>Keep safety-sensitive operational details: fail-closed auth, request limits, RAG generation replacement, snapshot restore, and exclusive maintenance-mode ID migration.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>5. File changes</h2>
+    <table>
+      <thead><tr><th>File</th><th>Change</th></tr></thead>
+      <tbody>
+        <tr><td><code>README.md</code></td><td>Full structural rewrite in English. Preserve verified technical content, remove stale/personal content, add product purpose and user workflows.</td></tr>
+        <tr><td><code>docs/ai-plans/2026-07-19-product-led-readme.html</code></td><td>After implementation, record actual changes, checks, known repository gaps, and follow-up recommendations.</td></tr>
+      </tbody>
+    </table>
+    <p>No source, generated asset, Compose, or deployment file is changed by this task.</p>
+  </section>
+
+  <section>
+    <h2>6. Sequential implementation tasks</h2>
+    <h3>Task 1 — Establish the product narrative</h3>
+    <ol>
+      <li>Replace the title and opening paragraphs with a concise value proposition centered on durable, user-controlled context.</li>
+      <li>Add “Why Personal Memory” and a four-capability overview.</li>
+      <li>State privacy boundaries without absolute security or compliance claims.</li>
+    </ol>
+
+    <h3>Task 2 — Build the user journey</h3>
+    <ol>
+      <li>Add a compact conceptual architecture diagram.</li>
+      <li>Write an accurate quick start covering required external network, host directories, <code>.env</code>, Compose startup, logs, and <code>/health</code>.</li>
+      <li>Explain the missing RAG documents mount when RAG is enabled.</li>
+      <li>Provide client connection examples and intent-led usage examples for storing, recalling, organizing, document search, and optional Todoist.</li>
+    </ol>
+
+    <h3>Task 3 — Rebuild the reference layer</h3>
+    <ol>
+      <li>Document all 12 memory tools, 2 gated RAG tools, and 7 gated Todoist tools with exact arguments.</li>
+      <li>Document input limits, mutation confidence/ambiguity behavior, <code>point_id</code>, dry-run deletion, and conditional routes.</li>
+      <li>Group environment variables by server/auth, memory, integrations, RAG, visualization, and backup instead of one undifferentiated table.</li>
+    </ol>
+
+    <h3>Task 4 — Add the developer/operator path</h3>
+    <ol>
+      <li>Document the actual three-service Compose topology and current trust boundaries.</li>
+      <li>Describe <code>make test</code>, raw Go checks, Docker build, shipped binaries, and repository layout.</li>
+      <li>Preserve accurate RAG indexing, snapshot restore, safe ID migration, image pinning, deployment verification, and rollback guidance.</li>
+      <li>Explicitly state that no license or contribution policy is currently provided instead of inventing one.</li>
+    </ol>
+
+    <h3>Task 5 — Edit for professional quality</h3>
+    <ol>
+      <li>Remove duplicate headings, redundant explanations, personal namespace mandates, and unsupported named-client claims.</li>
+      <li>Use consistent heading depth, blank-line spacing, tables, callouts, code fences, terminology, and US-English spelling.</li>
+      <li>Keep the README skimmable: purpose before mechanism, basic path before optional detail, user content before operator reference.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>7. Verification plan</h2>
+    <h3>Automated and source-backed checks</h3>
+    <pre><code># Markdown structure and stale wording
+rg -n '^## Backups$|infra-qdrant|two Docker services|11 memory tools|Resilio.*intended' README.md
+
+# Cross-check documented variables and tool names
+rg -o '`[A-Z][A-Z0-9_]+`' README.md | sort -u
+rg -n 'mcp.NewTool|WithString|WithNumber|WithBoolean|RegisterTools' internal cmd
+
+# Validate referenced relative paths and repository formatting
+git diff --check
+make test</code></pre>
+    <p>Expected: no duplicated/stale phrases, every referenced local file exists, <code>git diff --check</code> is silent, and <code>make test</code> passes.</p>
+
+    <h3>Manual QA checklist</h3>
+    <ul>
+      <li>Read only the first screen: the product purpose and core/optional boundary are clear.</li>
+      <li>Follow quick start literally against repository Compose; every prerequisite that Compose assumes is stated.</li>
+      <li>Confirm Todoist remains absent and token-free when <code>ENABLE_TODOIST=false</code>.</li>
+      <li>Confirm OAuth is documented only for the memory endpoint.</li>
+      <li>Confirm RAG setup mentions a documents bind mount and generation-safe replacement.</li>
+      <li>Confirm migration apply requires snapshot, stopped writers, and <code>-confirm-writes-stopped</code>.</li>
+      <li>Confirm no private host, key, domain, local username, or VPS address appears.</li>
+      <li>Confirm no license, compliance, production-readiness, performance, or adoption claim is fabricated.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>8. Risks and mitigations</h2>
+    <table>
+      <thead><tr><th>Risk</th><th>Mitigation</th></tr></thead>
+      <tbody>
+        <tr><td>A polished quick start implies a turnkey stack that does not exist.</td><td>State external network/storage prerequisites and the missing RAG mount explicitly.</td></tr>
+        <tr><td>Product language overstates privacy or maturity.</td><td>Describe concrete data flows and controls; avoid absolute or compliance claims.</td></tr>
+        <tr><td>Technical detail is lost during simplification.</td><td>Move verified details into the developer/operator section rather than deleting safety-critical knowledge.</td></tr>
+        <tr><td>Client setup becomes stale.</td><td>Prefer transport/auth facts implemented here; qualify named-client examples.</td></tr>
+        <tr><td>README and source drift.</td><td>Cross-check config, tool registrations, Compose, Dockerfile, Makefile, and migration command before completion.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>9. Rollback and known follow-ups</h2>
+    <p>Rollback is a single-file restoration of <code>README.md</code>; no runtime state is affected.</p>
+    <p>Potential follow-ups are deliberately out of scope and will be reported, not silently implemented:</p>
+    <ul>
+      <li>add a LICENSE and contribution policy;</li>
+      <li>provide a truly standalone local Compose profile with no external Traefik dependency;</li>
+      <li>add an explicit documents bind mount/example for RAG;</li>
+      <li>replace the application image's moving <code>:latest</code> tag with a deploy-selected immutable reference.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>10. Completion record</h2>
+    <p><strong>Status:</strong> implemented after user approval.</p>
+    <ul>
+      <li>Replaced the reference-first README with a product-led user journey followed by developer and operator documentation.</li>
+      <li>Added purpose, capabilities, conceptual architecture, accurate deployment prerequisites, quick start, client connection patterns, intent-led usage examples, core concepts, and complete tool/configuration references.</li>
+      <li>Corrected the Compose topology to three services, documented the external Traefik dependency and missing RAG documents mount, and removed personal workflow prescriptions.</li>
+      <li>Documented all 12 memory tools, 2 gated RAG tools, 7 gated Todoist tools, the operational HTTP endpoint, input limits, exact-ID mutations, generation-safe RAG replacement, and maintenance-only ID migration.</li>
+      <li>Qualified named-client examples, external-service boundaries, the moving application image tag, and the absence of LICENSE/CONTRIBUTING files.</li>
+    </ul>
+    <p><strong>Verification:</strong> every configuration variable from <code>internal/config</code> appears in the README; every registered MCP tool is documented; stale architecture phrases and duplicated headings are absent; referenced repository files exist; <code>git diff --check</code> passes; <code>make test</code> passes asset checks, vet, all tests, and all three binary builds. Independent review found no P0/P1; all three P2 wording findings were corrected.</p>
+    <p><strong>Runtime boundary:</strong> no commit, push, PR, production deployment, migration, or external deployment-repository change was performed by the README task.</p>
+  </section>
+
+  <section class="callout">
+    <h2>11. Approval gate</h2>
+    <p>The user approved implementation. Commit, push, PR, production deployment, migration, and changes to the external deployment repository still require explicit authorization.</p>
+  </section>
+</main>
+</body>
+</html>

@@ -1,8 +1,8 @@
 services:
   memory-embeddings:
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    image: ghcr.io/huggingface/text-embeddings-inference@sha256:492506e6a76ce6d0fd834a49f69bee4134f5b37de06052519d358a3d5387434d
     container_name: memory-embeddings
-    command: --model-id ${EMBED_MODEL:-intfloat/multilingual-e5-small} --revision main
+    command: --model-id ${EMBED_MODEL:-intfloat/multilingual-e5-small} --revision ${EMBED_MODEL_REVISION:-614241f622f53c4eeff9890bdc4f31cfecc418b3}
     restart: always
     networks:
       - traefik
@@ -12,7 +12,7 @@ services:
           memory: 2G
 
   memory-qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant@sha256:f1c7272cdac52b38c1a0e89313922d940ba50afd90d593a1605dbbc214e66ffb
     container_name: memory-qdrant
     restart: always
     ports:
@@ -49,8 +49,10 @@ services:
       - "traefik.http.routers.memory-viz.entrypoints=https"
       - "traefik.http.routers.memory-viz.rule=Host(`mcp.${MEMORY_DOMAIN}`) && PathPrefix(`/viz`)"
       - "traefik.http.routers.memory-viz.tls.certresolver=letsEncrypt"
-      - "traefik.http.routers.memory-viz.middlewares=authentik-auth"
+      - "traefik.http.routers.memory-viz.middlewares=authentik-auth,memory-viz-proxy-secret"
       - "traefik.http.routers.memory-viz.service=memory-mcp"
+      # Overwrite any browser-supplied value after ForwardAuth succeeds.
+      - "traefik.http.middlewares.memory-viz-proxy-secret.headers.customrequestheaders.X-Personal-Memory-Proxy-Secret=${VIZ_PROXY_SECRET}"
 
 volumes:
   qdrant_storage:

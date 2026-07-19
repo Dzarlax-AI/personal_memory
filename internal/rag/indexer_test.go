@@ -12,7 +12,7 @@ import (
 var uuidV5Pattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 func TestChunkPointID_MatchesQdrantUUIDFormat(t *testing.T) {
-	id := chunkPointID("/root/documents/personal/notes/architecture.md", 3)
+	id := chunkPointID("/root/documents/personal/notes/architecture.md", "generation-a", 3)
 	if !uuidV5Pattern.MatchString(id) {
 		t.Errorf("chunkPointID returned %q, which does not match UUID 8-4-4-4-12 (Qdrant rejects this)", id)
 	}
@@ -26,13 +26,16 @@ func TestFolderPointID_MatchesQdrantUUIDFormat(t *testing.T) {
 }
 
 func TestChunkPointID_DeterministicPerFilePath(t *testing.T) {
-	a := chunkPointID("/a/b/c.md", 0)
-	b := chunkPointID("/a/b/c.md", 0)
+	a := chunkPointID("/a/b/c.md", "generation-a", 0)
+	b := chunkPointID("/a/b/c.md", "generation-a", 0)
 	if a != b {
 		t.Errorf("chunkPointID must be deterministic; got %q then %q", a, b)
 	}
-	if chunkPointID("/a/b/c.md", 0) == chunkPointID("/a/b/c.md", 1) {
+	if chunkPointID("/a/b/c.md", "generation-a", 0) == chunkPointID("/a/b/c.md", "generation-a", 1) {
 		t.Error("different chunk indices should produce different ids")
+	}
+	if chunkPointID("/a/b/c.md", "generation-a", 0) == chunkPointID("/a/b/c.md", "generation-b", 0) {
+		t.Error("different generations should produce different ids")
 	}
 }
 

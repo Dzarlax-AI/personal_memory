@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"net/http"
 	"strings"
 
@@ -15,6 +17,8 @@ type AuthConfig struct {
 	Verifier      oauth.TokenVerifier
 }
 
+const VizProxySecretHeader = "X-Personal-Memory-Proxy-Secret"
+
 func APIKeyAuth(apiKey string) func(http.Handler) http.Handler {
 	return Auth(AuthConfig{APIKey: apiKey})
 }
@@ -23,10 +27,10 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if cfg.APIKey == "" && !cfg.OAuthEnabled {
-				next.ServeHTTP(w, r)
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			if cfg.APIKey != "" && requestAPIKey(r) == cfg.APIKey {
+			if cfg.APIKey != "" && constantTimeEqual(requestAPIKey(r), cfg.APIKey) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -47,6 +51,27 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 		})
 	}
+}
+
+// ProxySecretAuth protects routes whose public authentication is delegated to
+// a trusted reverse proxy. The proxy must overwrite (not merely forward) this
+// header after it authenticates the request.
+func ProxySecretAuth(secret string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if secret == "" || !constantTimeEqual(r.Header.Get(VizProxySecretHeader), secret) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func constantTimeEqual(got, want string) bool {
+	gotHash := sha256.Sum256([]byte(got))
+	wantHash := sha256.Sum256([]byte(want))
+	return subtle.ConstantTimeCompare(gotHash[:], wantHash[:]) == 1
 }
 
 func requestAPIKey(r *http.Request) string {
