@@ -1,22 +1,21 @@
   <div class="view" id="forgotten-view">
-    <div class="section-title">Never Recalled</div>
+    <h2 class="section-title">Never Recalled</h2>
     <div class="section-sub">Facts with recall_count = 0. If they're never useful, consider removing them.</div>
     <div class="filter-toolbar">
-      <label>Namespace:
-        <select id="forgotten-ns-filter"><option value="">All</option></select>
-      </label>
-      <label>Tag:
-        <select id="forgotten-tag-filter"><option value="">All</option></select>
-      </label>
-      <label>Sort:
-        <select id="forgotten-sort">
-          <option value="oldest">Oldest</option>
-          <option value="newest">Newest</option>
-          <option value="namespace">Namespace</option>
-        </select>
-      </label>
+      <label for="forgotten-ns-filter">Namespace</label>
+      <select id="forgotten-ns-filter"><option value="">All</option></select>
+      <label for="forgotten-tag-filter">Tag</label>
+      <input id="forgotten-tag-filter" type="search" list="forgotten-tag-options" placeholder="All tags" autocomplete="off">
+      <datalist id="forgotten-tag-options"></datalist>
+      <label for="forgotten-sort">Sort</label>
+      <select id="forgotten-sort">
+        <option value="oldest">Oldest</option>
+        <option value="newest">Newest</option>
+        <option value="namespace">Namespace</option>
+      </select>
       <label class="checkbox-label"><input type="checkbox" id="forgotten-permanent-only"> Permanent only</label>
-      <span class="toolbar-count" id="forgotten-count"></span>
+      <span class="toolbar-count" id="forgotten-count" aria-live="polite"></span>
     </div>
     <div class="forgotten-list" id="forgotten-list"></div>
+    <button id="forgotten-more" class="toolbar-btn load-more" type="button" hidden>Show more</button>
   </div>

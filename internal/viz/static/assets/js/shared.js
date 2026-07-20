@@ -20,6 +20,65 @@ function tagsList(tags) {
     : [];
 }
 
+// Old imports occasionally stored a tag as a quoted JSON-ish value. Keep the
+// source value for API filters, but make the human-facing label predictable.
+function normalizeTagDisplay(value) {
+  let normalized = typeof value === 'string' ? value.trim() : '';
+  if (!normalized) return '';
+  if (normalized.startsWith('[') && normalized.endsWith(']')) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+  if ((normalized.startsWith('"') && normalized.endsWith('"')) ||
+      (normalized.startsWith("'") && normalized.endsWith("'"))) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+  return normalized || value.trim();
+}
+
+function tagOptions(nodes) {
+  const originalsByDisplay = new Map();
+  nodes.flatMap(node => tagsList(node.tags)).forEach(original => {
+    const display = normalizeTagDisplay(original);
+    if (!display) return;
+    if (!originalsByDisplay.has(display)) originalsByDisplay.set(display, new Set());
+    originalsByDisplay.get(display).add(original);
+  });
+  return [...originalsByDisplay.entries()].flatMap(([normalized, originals]) => {
+    const exact = [...originals].sort();
+    return exact.map(original => ({
+      original,
+      // Never map a collision to an arbitrary stored tag. The raw value is
+      // included only when a human needs to choose between legacy variants.
+      display: exact.length === 1 ? normalized : `${normalized} (${original})`,
+    }));
+  }).sort((a, b) => a.display.localeCompare(b.display));
+}
+
+function setTagDatalist(inputID, listID, options, selectedOriginal = '') {
+  const input = document.getElementById(inputID);
+  const list = document.getElementById(listID);
+  list.innerHTML = '';
+  const displayByOriginal = new Map();
+  options.forEach(({ display, original }) => {
+    const option = document.createElement('option');
+    option.value = display;
+    list.appendChild(option);
+    displayByOriginal.set(original, display);
+  });
+  input.dataset.originalByDisplay = JSON.stringify(Object.fromEntries(options.map(o => [o.display, o.original])));
+  input.value = displayByOriginal.get(selectedOriginal) || selectedOriginal || '';
+}
+
+function originalTagFilter(input) {
+  const value = input.value.trim();
+  if (!value) return '';
+  try {
+    return JSON.parse(input.dataset.originalByDisplay || '{}')[value] || value;
+  } catch (_) {
+    return value;
+  }
+}
+
 function primaryTag(fact) {
   const primary = typeof fact.primary_tag === 'string' ? fact.primary_tag.trim() : '';
   return primary && tagsList(fact.tags).includes(primary) ? primary : null;
@@ -56,6 +115,36 @@ function factText(fact) {
     ? ` Payload keys: ${fact.payload_keys.join(', ')}.`
     : '';
   return `No text payload stored for point ${fact.id || 'unknown'}.${keys}`;
+}
+
+async function responseMessage(res) {
+  const body = await res.text();
+  if (!body) return `HTTP ${res.status}`;
+  try {
+    const data = JSON.parse(body);
+    return data.error || data.message || body;
+  } catch (_) {
+    return body.trim() || `HTTP ${res.status}`;
+  }
+}
+
+function renderRetry(container, message, onRetry) {
+  container.replaceChildren();
+  const state = document.createElement('div');
+  state.className = 'empty-state';
+  state.textContent = message;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'toolbar-btn';
+  button.textContent = 'Retry';
+  button.addEventListener('click', onRetry);
+  state.appendChild(document.createTextNode(' '));
+  state.appendChild(button);
+  container.appendChild(state);
+}
+
+function renderFactsFailure(container, context, retry) {
+  renderRetry(container, `Failed to load facts for ${context}.`, retry);
 }
 
 // Cross-view state. Mutated by the view modules; read by init/router.

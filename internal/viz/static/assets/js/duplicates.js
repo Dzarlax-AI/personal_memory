@@ -1,49 +1,67 @@
-// Duplicates tab: near-duplicate fact pairs above a similarity threshold.
+// Duplicates tab: bounded, paginated scan results.
+
+let duplicatesLoaded = false;
+let duplicatesPromise = null;
+let duplicatesData = [];
+let duplicatesShown = 50;
 
 async function loadDuplicates(maxNodes = 1000) {
+  if (duplicatesPromise) return duplicatesPromise;
   const container = document.getElementById('dup-content');
   container.innerHTML = '<div class="loading"><div class="spinner"></div>Scanning for duplicates...</div>';
-  let res;
-  try {
-    res = await fetch(`${BASE}/api/duplicates?threshold=0.90&max_nodes=${maxNodes}`);
-  } catch (err) {
-    container.innerHTML = `<div class="empty-state">Duplicate scan failed: ${escapeHtml(err.message)}. <button onclick="loadDuplicates(${maxNodes})">Retry</button></div>`;
-    return;
-  }
-  if (!res.ok) {
-    const message = (await res.text()).trim() || `HTTP ${res.status}`;
-    const retry = res.status === 422 && maxNodes < 5000
-      ? ' <button onclick="loadDuplicates(5000)">Scan up to 5,000 facts</button>'
-      : ` <button onclick="loadDuplicates(${maxNodes})">Retry</button>`;
-    container.innerHTML = `<div class="empty-state">Duplicate scan could not run: ${escapeHtml(message)}.${retry}</div>`;
+  duplicatesPromise = (async () => {
+    const res = await fetch(`${BASE}/api/duplicates?threshold=0.90&max_nodes=${maxNodes}`);
+    if (!res.ok) {
+      const error = new Error(await responseMessage(res));
+      error.status = res.status;
+      throw error;
+    }
+    const data = await res.json();
+    duplicatesData = Array.isArray(data) ? data : (data.pairs || []);
+    duplicatesShown = 50;
+    duplicatesLoaded = true;
+    renderDuplicates();
+    return duplicatesData;
+  })().catch(error => {
+    duplicatesPromise = null;
+    duplicatesLoaded = false;
+    const retryLimit = error.status === 422 && maxNodes < 5000 ? 5000 : maxNodes;
+    renderRetry(container, `Duplicate scan could not run: ${error.message || error}`, () => loadDuplicates(retryLimit));
+    if (retryLimit === 5000 && maxNodes !== 5000) container.querySelector('button').textContent = 'Scan up to 5,000 facts';
     document.getElementById('dup-badge').textContent = '—';
-    return;
-  }
-  const data = await res.json();
-  const pairs = Array.isArray(data) ? data : (data.pairs || []);
-  document.getElementById('dup-badge').textContent = pairs.length;
+    return null;
+  });
+  return duplicatesPromise;
+}
 
-  if (pairs.length === 0) {
+function renderDuplicates() {
+  const container = document.getElementById('dup-content');
+  document.getElementById('dup-badge').textContent = duplicatesData.length;
+  document.getElementById('dup-count').textContent = `${duplicatesData.length} duplicate pairs found`;
+  if (duplicatesData.length === 0) {
     container.innerHTML = '<div class="empty-state">No near-duplicates found. Memory is clean!</div>';
     return;
   }
+  const visible = duplicatesData.slice(0, duplicatesShown);
+  container.innerHTML = `<div class="dup-list">${visible.map(duplicateHTML).join('')}</div>`;
+  if (duplicatesShown < duplicatesData.length) {
+    const more = document.createElement('button');
+    more.type = 'button'; more.className = 'toolbar-btn load-more';
+    more.textContent = `Show ${Math.min(50, duplicatesData.length - duplicatesShown)} more pairs (${duplicatesData.length - duplicatesShown} remaining)`;
+    more.addEventListener('click', () => { duplicatesShown += 50; renderDuplicates(); });
+    container.appendChild(more);
+  }
+}
 
-  container.innerHTML = '<div class="dup-list">' + pairs.map(p => {
-    const score = p.similarity ?? p.score ?? 0;
-    const scoreClass = score >= 0.95 ? 'high' : 'medium';
-    const scoreLabel = score >= 0.97 ? 'near-identical' : score >= 0.95 ? 'very similar' : 'similar';
-    return `<div class="dup-pair">
-      <div class="dup-score ${scoreClass}">${(score * 100).toFixed(1)}% — ${scoreLabel}</div>
-      <div class="dup-facts">
-        <div>
-          ${escapeHtml(factText(p.a).slice(0, 200))}${factText(p.a).length > 200 ? '...' : ''}
-          <div class="dup-meta">${escapeHtml(normalizeNamespace(p.a.namespace))} | ${escapeHtml((p.a.tags || []).join(', '))} | recalls: ${Number(p.a.recall_count || 0)}</div>
-        </div>
-        <div>
-          ${escapeHtml(factText(p.b).slice(0, 200))}${factText(p.b).length > 200 ? '...' : ''}
-          <div class="dup-meta">${escapeHtml(normalizeNamespace(p.b.namespace))} | ${escapeHtml((p.b.tags || []).join(', '))} | recalls: ${Number(p.b.recall_count || 0)}</div>
-        </div>
-      </div>
-    </div>`;
-  }).join('') + '</div>';
+function duplicateHTML(pair) {
+  const score = Number(pair.similarity ?? pair.score ?? 0);
+  const scoreClass = score >= 0.95 ? 'high' : 'medium';
+  const scoreLabel = score >= 0.97 ? 'near-identical' : score >= 0.95 ? 'very similar' : 'similar';
+  return `<article class="dup-pair"><div class="dup-score ${scoreClass}">${(score * 100).toFixed(1)}% — ${scoreLabel}</div><div class="dup-facts">${duplicateFactHTML(pair.a || {})}${duplicateFactHTML(pair.b || {})}</div></article>`;
+}
+
+function duplicateFactHTML(fact) {
+  const text = factText(fact);
+  const tags = tagOptions([fact]).map(tag => tag.display).join(', ');
+  return `<div>${escapeHtml(text.slice(0, 200))}${text.length > 200 ? '...' : ''}<div class="dup-meta">${escapeHtml(normalizeNamespace(fact.namespace))} | ${escapeHtml(tags)} | recalls: ${Number(fact.recall_count || 0)}</div></div>`;
 }

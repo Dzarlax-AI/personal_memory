@@ -13,17 +13,22 @@ async function loadFacts() {
     renderForgotten(factsData.nodes);
     renderHeatmap(factsData.nodes);
     return factsData;
-  })();
+  })().catch(error => {
+    factsPromise = null;
+    throw error;
+  });
 
   return factsPromise;
 }
 
 async function initFacts() {
+  if (!factsData) {
+    document.getElementById('treemap').innerHTML = '<div class="loading"><div class="spinner"></div>Loading knowledge map...</div>';
+  }
   try {
     await loadFacts();
   } catch (e) {
-    document.getElementById('treemap').innerHTML =
-      `<div class="empty-state">Failed to load facts: ${escapeHtml(e.message)}</div>`;
+    renderFactsFailure(document.getElementById('treemap'), 'the overview', initFacts);
   }
 }
 
@@ -42,6 +47,12 @@ function renderStats(nodes) {
 
 function renderTreemap(nodes) {
   const container = document.getElementById('treemap');
+  if (nodes.length === 0) {
+    container.innerHTML = '<div class="empty-state">No facts have been stored yet.</div>';
+    document.getElementById('activity-section').hidden = true;
+    document.getElementById('heatmap-grid').replaceChildren();
+    return;
+  }
   const nsByNs = {};
   nodes.forEach(n => {
     const ns = normalizeNamespace(n.namespace);
@@ -71,11 +82,11 @@ function renderTreemap(nodes) {
       const alpha = group === '_no_primary_tag' ? '33' : '55';
       const name = group === '_no_primary_tag' ? 'no primary tag' : group;
       const tag = group === '_no_primary_tag' ? '' : group;
-      return `<div class="treemap-tile" style="background:${color}${alpha};min-width:${size}px"
+      return `<button class="treemap-tile" type="button" style="background:${color}${alpha};min-width:${size}px"
         data-namespace="${escapeAttr(graphNamespaceFilter(ns))}" data-tag="${escapeAttr(tag)}">
         <span class="tile-name">${escapeHtml(name)}</span>
         <span class="tile-count">${count} fact${count === 1 ? '' : 's'}</span>
-      </div>`;
+      </button>`;
     }).join('');
 
     div.innerHTML = `
@@ -93,8 +104,8 @@ function renderTreemap(nodes) {
 }
 
 function renderHeatmap(nodes) {
-  // Appended to the overview treemap container.
-  const container = document.getElementById('treemap');
+  const section = document.getElementById('activity-section');
+  const grid = document.getElementById('heatmap-grid');
   const datesMap = {};
   nodes.forEach(n => {
     const d = (n.created_at || '').slice(0, 10);
@@ -102,28 +113,34 @@ function renderHeatmap(nodes) {
   });
 
   const dates = Object.keys(datesMap).sort();
-  if (dates.length === 0) return;
+  if (dates.length === 0) {
+    section.hidden = true;
+    grid.replaceChildren();
+    return;
+  }
 
   const first = new Date(dates[0]);
   const last = new Date(dates[dates.length - 1]);
   const maxCount = Math.max(...Object.values(datesMap));
-
-  let cells = '';
-  for (let d = new Date(first); d <= last; d.setDate(d.getDate() + 1)) {
+  const gridStart = new Date(first);
+  gridStart.setUTCDate(gridStart.getUTCDate() - gridStart.getUTCDay());
+  const gridEnd = new Date(last);
+  gridEnd.setUTCDate(gridEnd.getUTCDate() + (6 - gridEnd.getUTCDay()));
+  grid.replaceChildren();
+  for (let d = new Date(gridStart); d <= gridEnd; d.setUTCDate(d.getUTCDate() + 1)) {
     const key = d.toISOString().slice(0, 10);
     const count = datesMap[key] || 0;
     const intensity = count > 0 ? Math.min(0.3 + (count / maxCount) * 0.7, 1) : 0;
     const color = count > 0 ? `rgba(88, 166, 255, ${intensity})` : 'var(--surface-2)';
-    cells += `<div class="heatmap-cell" style="background:${color}" title="${key}: ${count} facts"></div>`;
+    const cell = document.createElement('div');
+    cell.className = 'heatmap-cell';
+    cell.style.background = color;
+    cell.setAttribute('role', 'listitem');
+    cell.setAttribute('aria-label', `${key}: ${count} fact${count === 1 ? '' : 's'}`);
+    cell.title = `${key}: ${count} facts`;
+    grid.appendChild(cell);
   }
-
-  const heatDiv = document.createElement('div');
-  heatDiv.style.marginTop = '24px';
-  heatDiv.innerHTML = `
-    <div class="section-title" style="margin-bottom:8px">Activity</div>
-    <div class="heatmap-grid">${cells}</div>
-  `;
-  container.appendChild(heatDiv);
+  section.hidden = false;
 }
 
 function navigateToGraph(namespace, projectTag) {

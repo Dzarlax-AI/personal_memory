@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Implementation Plan: Web UI Remediation</title>
+  <style>
+    :root { color-scheme: light; --bg:#f3f5f8; --surface:#fff; --text:#18212f; --muted:#5d6878; --border:#dfe4eb; --accent:#2563eb; --accent-bg:#eff6ff; --warn:#a16207; --warn-bg:#fffbeb; --risk:#b42318; --risk-bg:#fff5f4; --ok:#067647; --ok-bg:#ecfdf3; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:15px/1.55 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { max-width:1080px; margin:0 auto; padding:36px 24px 64px; }
+    header { margin-bottom:24px; }
+    h1 { margin:0 0 8px; font-size:32px; line-height:1.2; }
+    h2 { margin:0 0 12px; font-size:20px; }
+    h3 { margin:18px 0 8px; font-size:16px; }
+    p { margin:8px 0; }
+    section { margin:14px 0; padding:22px; background:var(--surface); border:1px solid var(--border); border-radius:12px; }
+    ul,ol { margin:8px 0; padding-left:22px; }
+    li + li { margin-top:7px; }
+    code { padding:2px 5px; background:#eef1f5; border-radius:5px; font-size:13px; }
+    .badge { display:inline-block; padding:5px 10px; border-radius:999px; background:var(--warn-bg); color:var(--warn); font-size:12px; font-weight:700; }
+    .muted { color:var(--muted); }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:12px; }
+    .card { padding:15px; border:1px solid var(--border); border-radius:9px; }
+    .selected { border-color:var(--accent); background:var(--accent-bg); }
+    .callout { border-left:4px solid var(--accent); }
+    .risk { border-left:4px solid var(--risk); background:var(--risk-bg); }
+    .approval { border-left:4px solid var(--warn); background:var(--warn-bg); }
+    .done { color:var(--ok); }
+    table { width:100%; border-collapse:collapse; font-size:14px; }
+    th,td { padding:9px 10px; text-align:left; vertical-align:top; border-bottom:1px solid var(--border); }
+    th { color:var(--muted); font-weight:650; }
+    @media (max-width:680px) { main { padding:24px 14px 48px; } section { padding:17px; } table { display:block; overflow-x:auto; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="badge">Implemented and verified locally</span>
+    <h1>Web UI Remediation</h1>
+    <p class="muted">Production-informed improvement plan for the self-hosted Memory Dashboard.</p>
+  </header>
+
+  <section>
+    <h2>1. Task Summary</h2>
+    <p>Improve the existing <code>/viz</code> dashboard using the production audit as evidence. The first release will focus on data minimization, load cost, responsive behavior, resilient states, and keyboard/screen-reader semantics while preserving the existing dark visual language and six-tab information architecture.</p>
+    <p><strong>Definition of done:</strong> opening Overview does not scan the document index or expose complete payloads; every tab has explicit loading/error/empty behavior; the primary flows fit a 390 px viewport; interactive elements are keyboard operable; existing desktop routes and graph filtering continue to work.</p>
+  </section>
+
+  <section>
+    <h2>2. Current Behavior</h2>
+    <ul>
+      <li><code>init.js</code> calls <code>loadDocuments()</code> during every dashboard bootstrap, even when Overview is active.</li>
+      <li><code>GET /viz/api/documents</code> scans and aggregates every document chunk. Production currently reports 78,064 chunks, 1,990 files, and 248 folders.</li>
+      <li><code>GET /viz/api/facts</code> returns complete fact payloads. Overview, Forgotten, Timeline, and Graph share that response even when they only need summaries.</li>
+      <li>A rejected shared facts promise is retained, so dependent tabs cannot retry without reloading the page.</li>
+      <li>Graph assumes a successful JSON response and has no visible loading, empty, or failure state.</li>
+      <li>Treemap tiles and document folder headers are pointer-only generic elements. Graph has no non-canvas alternative.</li>
+      <li>The fixed-height, overflow-hidden shell and wide content produce horizontal overflow at 390 px. Timeline and Documents also clip long content.</li>
+      <li>Legacy malformed tag values appear directly in native select controls.</li>
+      <li>Duplicates and Forgotten identify cleanup candidates but do not offer a safe, reversible mutation workflow.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>3. Considered Approaches</h2>
+    <div class="grid">
+      <div class="card selected">
+        <h3>Recommended: focused remediation</h3>
+        <p>Keep the current UI architecture, add summary/detail API boundaries, lazy loading, resilient states, responsive CSS, and semantic controls. Lowest migration risk and fastest path to a visibly better release.</p>
+      </div>
+      <div class="card">
+        <h3>Frontend rewrite</h3>
+        <p>Replace the embedded vanilla UI with a framework application. Better component structure long term, but introduces a build pipeline and expands deployment and maintenance risk without being necessary for the current scale.</p>
+      </div>
+      <div class="card">
+        <h3>Cosmetic-only patch</h3>
+        <p>Fix CSS and labels only. Fast, but leaves the highest-impact privacy and performance problems intact.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="callout">
+    <h2>4. Desired Design and Scope</h2>
+    <h3>API and privacy boundary</h3>
+    <ul>
+      <li>Make the default facts response a summary DTO containing only fields required by overview, filters, forgotten, timeline, and graph rendering.</li>
+      <li>Add a single-fact detail endpoint for explicit detail-panel requests. Full payload remains hidden until a user selects a fact.</li>
+      <li>Return relative document paths only. Do not expose the absolute documents root or absolute file paths.</li>
+      <li>Keep existing tag update authorization and anti-CSRF header behavior unchanged.</li>
+    </ul>
+    <h3>Loading model</h3>
+    <ul>
+      <li>Load each heavy tab on first activation. Determine Documents availability through lightweight server-rendered configuration or a small metadata request rather than a full chunk scan.</li>
+      <li>Build document inventory from file-level metadata where supported. If the current Qdrant model cannot avoid the chunk scan safely, add a short-lived server cache with cancellation and explicit refresh behavior; do not silently serve unbounded stale data.</li>
+      <li>Clear failed client promises so Retry can make a fresh request.</li>
+    </ul>
+    <h3>Interaction model</h3>
+    <ul>
+      <li>Preserve existing tabs and visual identity. Use buttons for treemap tiles and folder expanders, real headings, associated labels, active-tab semantics, visible focus, and live status regions.</li>
+      <li>Add a graph status layer and an accessible result list synchronized with graph filters. Selecting a list item opens the same detail panel.</li>
+      <li>Replace unwieldy tag selects with searchable inputs backed by normalized display values. Normalization is presentation-safe; stored tag values are not rewritten in this release.</li>
+      <li>Add pagination or incremental rendering to Duplicates, Forgotten, and Documents to keep initial DOM size bounded.</li>
+    </ul>
+    <h3>Explicitly deferred</h3>
+    <p>Merge/delete/keep actions are deferred until an undo or snapshot-backed recovery model and exact semantics are designed. This release may improve candidate inspection and navigation, but it will not introduce destructive controls.</p>
+  </section>
+
+  <section>
+    <h2>5. Files Likely to Change</h2>
+    <table>
+      <thead><tr><th>Path</th><th>Reason</th></tr></thead>
+      <tbody>
+        <tr><td><code>internal/viz/handler.go</code></td><td>Summary/detail DTOs, relative document responses, lightweight availability/metadata, bounded caching if required.</td></tr>
+        <tr><td><code>internal/viz/handler_test.go</code></td><td>Privacy contract, route behavior, caching/bounds, error cases, relative-path assertions.</td></tr>
+        <tr><td><code>internal/viz/static/shell.html</code></td><td>Navigation semantics and dashboard status containers.</td></tr>
+        <tr><td><code>internal/viz/static/views/*.html</code></td><td>Headings, labels, live regions, graph alternative list, searchable filters, pagination controls.</td></tr>
+        <tr><td><code>internal/viz/static/assets/js/shared.js</code></td><td>Request/error helpers, normalization, shared summary/detail state.</td></tr>
+        <tr><td><code>internal/viz/static/assets/js/init.js</code></td><td>Per-tab lazy loading, retry-safe lifecycle, active-tab semantics.</td></tr>
+        <tr><td><code>internal/viz/static/assets/js/overview.js</code></td><td>Semantic treemap buttons, clearer heatmap, retry behavior.</td></tr>
+        <tr><td><code>internal/viz/static/assets/js/{graph,documents,duplicates,forgotten,timeline}.js</code></td><td>Resilient states, bounded rendering, detail loading, keyboard behavior, normalized filters.</td></tr>
+        <tr><td><code>internal/viz/static/assets/styles.css</code></td><td>Responsive layout, containment, focus styles, state overlays, list/detail layouts; also remove the stray unmatched brace currently present.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>6. Implementation Steps</h2>
+    <ol>
+      <li>Add failing Go tests that assert summary endpoints omit full payloads and absolute paths, detail access remains explicit, and document responses remain bounded/cached.</li>
+      <li>Introduce explicit summary and detail response types in the viz handler. Retain existing graph/duplicate computation limits and proxy authorization boundaries.</li>
+      <li>Separate Documents availability/metadata from inventory loading; implement lazy loading and the least invasive safe server-side optimization supported by the current Qdrant data.</li>
+      <li>Refactor shared client fetch state so loading, success, empty, failure, and Retry are explicit and rejected requests can recover.</li>
+      <li>Update screen markup and event handling for semantic controls, focus management, Escape-close behavior, active-tab state, associated labels, and live announcements.</li>
+      <li>Add bounded page/increment rendering to long lists and a filter-synchronized accessible list for Graph.</li>
+      <li>Implement responsive rules for header, tabs, toolbars, graph, timeline, cards, and long paths at 390 px, 768 px, and desktop widths.</li>
+      <li>Run automated tests and perform authenticated browser QA against representative empty, error, loading, normal, long-text, and mobile states.</li>
+      <li>Update this plan with actual changes, checks, limitations, and follow-up recommendations.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>7. Test Plan</h2>
+    <h3>Automated</h3>
+    <ul>
+      <li><code>gofmt -w</code> on changed Go source and tests.</li>
+      <li><code>go test ./internal/viz -count=1</code></li>
+      <li><code>go test ./... -count=1</code></li>
+      <li><code>go vet ./...</code></li>
+      <li>Add source-level UI contract tests for required ARIA/state hooks where full browser automation is not available in the repository.</li>
+    </ul>
+    <h3>Manual QA</h3>
+    <ul>
+      <li>Open each direct route and use browser Back/Forward navigation.</li>
+      <li>Confirm Overview does not request the full Documents inventory.</li>
+      <li>Simulate facts, graph, and documents API failures; verify clear error text and a working Retry action.</li>
+      <li>Navigate all tabs, treemap tiles, folder expanders, filters, list pagination, graph alternative list, and detail panel using only the keyboard.</li>
+      <li>Confirm focus returns to the invoking element after closing details and Escape closes the panel.</li>
+      <li>Verify 390×844, 768×1024, and normal desktop viewports have no horizontal page overflow.</li>
+      <li>Verify long multilingual facts, long folder paths, missing text, empty collections, and malformed legacy tags remain readable and safe.</li>
+      <li>Inspect Network responses to confirm list endpoints omit full payloads and absolute server paths.</li>
+      <li>Check browser console for errors and warnings.</li>
+    </ul>
+  </section>
+
+  <section class="risk">
+    <h2>8. Risks and Edge Cases</h2>
+    <ul>
+      <li><strong>API compatibility:</strong> the viz API is internal but could have unknown consumers. Prefer new versioned/explicit routes or compatibility fields during the transition where inexpensive.</li>
+      <li><strong>Detail lookup:</strong> Qdrant contains both legacy numeric IDs and newer string IDs. Reuse existing ID normalization and test both forms.</li>
+      <li><strong>Documents performance:</strong> the collection is chunk-oriented. A correct cache may be safer than inventing an inaccurate file-level query. Cache invalidation must account for reindex completion.</li>
+      <li><strong>Information disclosure:</strong> error text must not expose backend URLs, credentials, absolute paths, or raw Qdrant responses.</li>
+      <li><strong>Accessibility:</strong> the canvas library cannot become fully semantic by attributes alone; the synchronized list is the functional alternative.</li>
+      <li><strong>Large datasets:</strong> client rendering must remain bounded even if production fact or folder counts increase significantly.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>9. Rollback Plan</h2>
+    <p>Deliver the work as one isolated branch and PR with no database migration. If production verification fails, redeploy the previous immutable image SHA. The existing Qdrant collections and payloads are not rewritten, so rollback requires no data restoration. Any new routes remain additive until the old client path is removed within the same reviewed change.</p>
+  </section>
+
+  <section>
+    <h2>10. Assumptions and Open Questions</h2>
+    <ul>
+      <li>The current Authentik ForwardAuth boundary remains the intended protection for all <code>/viz</code> routes.</li>
+      <li>The dashboard remains an embedded, dependency-free vanilla JavaScript UI; no frontend framework or new runtime CDN will be introduced.</li>
+      <li>Malformed tags will be normalized for display/filtering only. A persistent data cleanup migration is outside this release.</li>
+      <li>No blocking product questions remain because the user delegated prioritization. Destructive cleanup actions are intentionally deferred.</li>
+    </ul>
+  </section>
+
+  <section class="approval">
+    <h2>Approval Gate</h2>
+    <p class="done"><strong>Approved by the user and implemented on branch <code>codex/viz-remediation</code>.</strong></p>
+    <p>Approval covered source changes and tests, but not pushing, PR creation, deployment, or destructive production-data operations.</p>
+  </section>
+
+  <section>
+    <h2>11. Implementation Result</h2>
+    <ul>
+      <li>Fact collection endpoints now return privacy-safe summaries. Complete payloads are available only through explicit single-fact detail requests.</li>
+      <li>Document responses expose relative paths only. Startup uses lightweight status, while full inventory is lazy, TTL-cached, cancellation-aware, and protected from concurrent refresh stampedes.</li>
+      <li>Facts, Graph, Documents, Duplicates, Forgotten, and Timeline now expose explicit loading, empty, failure, and retry states.</li>
+      <li>Long result sets use bounded initial rendering. Document file rows are created only after folder expansion and in 50-item pages.</li>
+      <li>Graph includes a synchronized keyboard-accessible result list and on-demand non-modal fact inspector. Async graph/detail/tag updates guard against stale-response races.</li>
+      <li>Tabs, labels, headings, treemap controls, folder expanders, live regions, focus behavior, and legacy-tag filter mapping were made semantic and keyboard operable.</li>
+      <li>Responsive rules now prevent page-level horizontal overflow at 390 px. Mobile cards stack, Graph remains scrollable, long paths wrap, and Timeline receives an internal scroll surface.</li>
+      <li>The Activity visualization is a full-width, UTC-aligned seven-row calendar heatmap with complete weeks and accessible daily labels.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>12. Verification Performed</h2>
+    <ul>
+      <li><code>go test ./... -count=1</code> — passed.</li>
+      <li><code>go vet ./...</code> — passed.</li>
+      <li><code>go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids</code> — passed.</li>
+      <li>Node syntax checks for every dashboard JavaScript file — passed.</li>
+      <li><code>git diff --check</code> — passed.</li>
+      <li>Independent backend and frontend spec reviews — passed.</li>
+      <li>Independent backend and frontend quality reviews — passed with no remaining P0–P3 findings.</li>
+      <li>Local browser QA at 1280×720 and 390×844 covered Overview, Activity, Graph, graph detail, Documents, lazy folder expansion, responsive containment, DOM bounds, and console output.</li>
+      <li>The final mobile Documents check confirmed 312 items, 50 bounded folder controls, zero eagerly rendered file rows, a 390 px page width with no horizontal overflow, a working forced refresh, and no browser warnings or errors.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>13. Known Limitations and Follow-ups</h2>
+    <ul>
+      <li>Merge, delete, and keep actions remain intentionally deferred until a reversible recovery model is designed.</li>
+      <li>Legacy malformed tags are normalized for display only; stored Qdrant payloads are not migrated.</li>
+      <li>The document inventory cache is time-based because reindex completion is external to the visualization handler.</li>
+      <li>Browser QA used deterministic representative data. Production verification should follow deployment without performing mutations.</li>
+      <li>A full screen-reader session and instrumented color-contrast audit remain recommended follow-ups; no WCAG compliance claim is made.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

@@ -13,7 +13,7 @@
 <body>
   <header class="viz-header">
     <h1>Memory Dashboard</h1>
-    <div class="viz-stats" id="stats"></div>
+    <div class="viz-stats" id="stats" aria-live="polite"></div>
   </header>
 
   <nav class="tab-nav viz-tabs">
@@ -22,7 +22,7 @@
     <a class="tab-nav-item" data-view="forgotten" href="/viz/forgotten">Forgotten <span class="badge badge--neutral" id="forgot-badge">0</span></a>
     <a class="tab-nav-item" data-view="timeline" href="/viz/timeline">Timeline</a>
     <a class="tab-nav-item" data-view="graph" href="/viz/graph">Graph</a>
-    <a class="tab-nav-item" data-view="documents" href="/viz/documents" id="docs-tab">Documents <span class="badge badge--neutral" id="docs-badge">0</span></a>
+    <a class="tab-nav-item" data-view="documents" href="/viz/documents" id="docs-tab">Documents <span class="badge badge--neutral" id="docs-badge" aria-live="polite">—</span></a>
   </nav>
 
   <!-- VIEWS -->

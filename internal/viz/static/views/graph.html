@@ -1,28 +1,39 @@
   <div class="view view-full" id="graph-view" style="position:relative;">
+    <h2 class="sr-only">Fact relationship graph</h2>
     <div class="graph-controls">
-      <label>Namespace:</label>
+      <label for="ns-filter">Namespace</label>
       <select id="ns-filter"><option value="">All</option></select>
-      <label>Tag:</label>
-      <select id="tag-filter"><option value="">All</option></select>
-      <label>Text:</label>
+      <label for="tag-filter">Tag</label>
+      <input id="tag-filter" type="search" list="tag-filter-options" placeholder="All tags" autocomplete="off">
+      <datalist id="tag-filter-options"></datalist>
+      <label for="text-filter">Text</label>
       <select id="text-filter">
         <option value="">All</option>
         <option value="missing">Missing</option>
         <option value="present">Present</option>
       </select>
-      <label>Similarity:</label>
+      <label for="threshold">Similarity</label>
       <input type="range" id="threshold" min="0.50" max="0.99" step="0.01" value="0.85">
-      <span class="threshold-val" id="threshold-val">0.85</span>
+      <output class="threshold-val" id="threshold-val" for="threshold">0.85</output>
       <span id="tag-filter-label" style="display:none;font-size:13px;color:var(--orange)"></span>
       <button id="reset-graph-filters" class="toolbar-btn" type="button">Reset</button>
     </div>
-    <div id="graph-container"></div>
+    <div id="graph-status" class="graph-status" role="status" aria-live="polite"></div>
+    <div id="graph-container" aria-label="Fact relationship graph" tabindex="0"></div>
     <div class="legend" id="legend"></div>
-    <div class="detail-panel" id="detail-panel">
-      <button class="close-btn" id="detail-close">&times;</button>
-      <h3>Fact Details</h3>
-      <div class="fact-text" id="detail-text"></div>
-      <div class="meta" id="detail-meta"></div>
+    <section class="graph-results" aria-labelledby="graph-results-heading">
+      <h3 id="graph-results-heading">Graph results</h3>
+      <div id="graph-results-count" aria-live="polite"></div>
+      <div id="graph-results-list" class="graph-results-list"></div>
+      <button id="graph-results-more" class="toolbar-btn load-more" type="button" hidden>Show more results</button>
+    </section>
+    <section class="detail-panel" id="detail-panel" role="region" aria-labelledby="detail-heading" aria-describedby="detail-state" tabindex="-1">
+      <button class="close-btn" id="detail-close" type="button" aria-label="Close fact details">&times;</button>
+      <h3 id="detail-heading">Fact details</h3>
+      <div id="detail-state" class="detail-state" role="status" aria-live="polite"></div>
+      <div id="detail-content" hidden>
+        <div class="fact-text" id="detail-text"></div>
+        <div class="meta" id="detail-meta"></div>
       <div class="tag-editor">
         <label for="detail-tags">Tags</label>
         <div class="tag-editor-row">
@@ -31,12 +42,13 @@
         </div>
         <label for="detail-primary-tag">Primary tag</label>
         <input id="detail-primary-tag" type="text" autocomplete="off">
-        <div id="tag-save-status" class="save-status"></div>
+        <div id="tag-save-status" class="save-status" role="status" aria-live="polite"></div>
       </div>
       <details class="payload-details" id="payload-details" style="display:none">
         <summary>Payload</summary>
         <div id="payload-keys"></div>
         <pre id="payload-json"></pre>
       </details>
-    </div>
+      </div>
+    </section>
   </div>

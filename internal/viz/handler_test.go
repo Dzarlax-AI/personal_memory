@@ -8,7 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 	"github.com/go-chi/chi/v5"
@@ -66,6 +69,541 @@ func mustWriteTestResponse(t *testing.T, w http.ResponseWriter, format string, a
 	if _, err := fmt.Fprintf(w, format, args...); err != nil {
 		t.Fatalf("write test response: %v", err)
 	}
+}
+
+func TestFactListGraphAndDuplicateSummariesHidePayload(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		mustWriteTestResponse(t, w, `{"result":{"points":[{"id":"one","vector":[1,0],"payload":{"text":"visible fact","namespace":"projects","tags":["personal-memory"],"primary_tag":"personal-memory","created_at":"2026-07-20T00:00:00Z","permanent":true,"recall_count":4,"secret":"must not leave the summary"}},{"id":"two","vector":[1,0],"payload":{"text":"second fact","secret":"must not leave the summary"}}],"next_page_offset":null}}`)
+	}))
+	defer backend.Close()
+
+	h := NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65)
+	for _, target := range []string{
+		"/api/facts",
+		"/api/graph?threshold=0.5",
+		"/api/duplicates?threshold=0.5",
+	} {
+		rr := httptest.NewRecorder()
+		h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, target, nil))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET %s: got %d (%s), want 200", target, rr.Code, rr.Body.String())
+		}
+		assertJSONOmitsKeys(t, rr.Body.Bytes(), "payload", "payload_keys", "text_source", "secret")
+	}
+}
+
+func TestFactSummaryAndDetailJSONContracts(t *testing.T) {
+	payload := map[string]interface{}{
+		"text": "visible fact", "namespace": "projects", "tags": []interface{}{"personal-memory"},
+		"primary_tag": "personal-memory", "created_at": "2026-07-20T00:00:00Z",
+		"permanent": true, "recall_count": float64(4), "secret": "detail only",
+	}
+	summaryBody, err := json.Marshal(pointToSummary(qdrant.ScrollPoint{ID: "fact-1", Payload: payload}))
+	if err != nil {
+		t.Fatalf("marshal summary: %v", err)
+	}
+	assertJSONOmitsKeys(t, summaryBody, "payload", "payload_keys", "text_source", "secret")
+	var summary map[string]interface{}
+	if err := json.Unmarshal(summaryBody, &summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if len(summary) != 9 {
+		t.Fatalf("summary keys = %#v, want exactly the 9 approved fields", summary)
+	}
+
+	detailBody, err := json.Marshal(pointToDetail(qdrant.Point{ID: "fact-1", Payload: payload}))
+	if err != nil {
+		t.Fatalf("marshal detail: %v", err)
+	}
+	var detail map[string]interface{}
+	if err := json.Unmarshal(detailBody, &detail); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	if _, ok := detail["payload"].(map[string]interface{}); !ok {
+		t.Fatalf("detail payload = %#v, want object", detail["payload"])
+	}
+	if _, ok := detail["payload_keys"].([]interface{}); !ok {
+		t.Fatalf("detail payload_keys = %#v, want array", detail["payload_keys"])
+	}
+}
+
+func TestFactDetailReturnsPayloadForSelectedLegacyNumericID(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.URL.Path, "/collections/memory/points/42"; got != want {
+			t.Fatalf("request path = %q, want %q", got, want)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		mustWriteTestResponse(t, w, `{"result":{"id":42,"vector":[1,0],"payload":{"text":"legacy fact","secret":"selected detail only"}}}`)
+	}))
+	defer backend.Close()
+
+	h := NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65)
+	rr := httptest.NewRecorder()
+	h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/facts/42", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET detail: got %d (%s), want 200", rr.Code, rr.Body.String())
+	}
+	var detail map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	if detail["id"] != "42" {
+		t.Fatalf("id = %#v, want legacy numeric id as string", detail["id"])
+	}
+	if _, ok := detail["payload"].(map[string]interface{}); !ok {
+		t.Fatalf("detail payload = %#v, want object", detail["payload"])
+	}
+	if _, ok := detail["payload_keys"].([]interface{}); !ok {
+		t.Fatalf("detail payload_keys = %#v, want array", detail["payload_keys"])
+	}
+}
+
+func TestFactDetailReturnsPayloadForSelectedStringUUID(t *testing.T) {
+	const id = "de305d54-75b4-431b-adb2-eb6b9e546014"
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.URL.Path, "/collections/memory/points/"+id; got != want {
+			t.Fatalf("request path = %q, want %q", got, want)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		mustWriteTestResponse(t, w, `{"result":{"id":"`+id+`","payload":{"text":"string ID detail","secret":"selected detail only"}}}`)
+	}))
+	defer backend.Close()
+
+	h := NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65)
+	rr := httptest.NewRecorder()
+	h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/facts/"+id, nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET detail: got %d (%s), want 200", rr.Code, rr.Body.String())
+	}
+	var detail map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	if detail["id"] != id {
+		t.Fatalf("id = %#v, want %q", detail["id"], id)
+	}
+}
+
+func TestDocumentsResponseUsesRelativePathsAndCachesFullScan(t *testing.T) {
+	var scanCalls, countCalls int
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/collections/doc_chunks/points/count":
+			countCalls++
+			mustWriteTestResponse(t, w, `{"result":{"count":2}}`)
+		case "/collections/doc_chunks/points/scroll":
+			scanCalls++
+			mustWriteTestResponse(t, w, `{"result":{"points":[{"id":"a","payload":{"file_path":"/srv/private-documents/notes/a.md","folder_path":"/srv/private-documents/notes","chunk_index":0,"heading":"A","indexed_at":"2026-07-20T00:00:00Z"}},{"id":"b","payload":{"file_path":"/srv/private-documents/notes/a.md","folder_path":"/srv/private-documents/notes","chunk_index":1,"indexed_at":"2026-07-20T00:00:00Z"}}],"next_page_offset":null}}`)
+		default:
+			t.Fatalf("unexpected Qdrant request %s", r.URL.Path)
+		}
+	}))
+	defer backend.Close()
+
+	h := NewHandler(nil, 0.65).WithDocumentRAG(qdrant.NewClient(backend.URL, "doc_chunks"), "/srv/private-documents")
+	h.documentsCacheTTL = time.Hour
+	// Status must remain a direct count operation, not a full 78k-style scan.
+	status := httptest.NewRecorder()
+	h.Router().ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/api/documents/status", nil))
+	if status.Code != http.StatusOK || scanCalls != 0 || countCalls != 1 {
+		t.Fatalf("status code=%d scans=%d counts=%d, want 200/0/1", status.Code, scanCalls, countCalls)
+	}
+
+	for i := 0; i < 2; i++ {
+		rr := httptest.NewRecorder()
+		h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/documents", nil))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("documents request %d: got %d (%s)", i, rr.Code, rr.Body.String())
+		}
+		assertJSONOmitsKeys(t, rr.Body.Bytes(), "documents_dir", "path", "file_path", "folder_path")
+		if strings.Contains(rr.Body.String(), "/srv/private-documents") {
+			t.Fatalf("documents response leaked absolute root: %s", rr.Body.String())
+		}
+	}
+	if scanCalls != 1 {
+		t.Fatalf("full document scans = %d, want 1 while cache is fresh", scanCalls)
+	}
+
+	status = httptest.NewRecorder()
+	h.Router().ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/api/documents/status", nil))
+	if !strings.Contains(status.Body.String(), `"cached":true`) {
+		t.Fatalf("cached status = %s, want cached true", status.Body.String())
+	}
+}
+
+func TestDocumentsForcedRefreshBypassesFreshCache(t *testing.T) {
+	var scanCalls atomic.Int32
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scanCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		mustWriteTestResponse(t, w, `{"result":{"points":[],"next_page_offset":null}}`)
+	}))
+	defer backend.Close()
+
+	h := NewHandler(nil, 0.65).WithDocumentRAG(qdrant.NewClient(backend.URL, "doc_chunks"), "/srv/documents")
+	targets := []string{"/api/documents", "/api/documents", "/api/documents?refresh=1"}
+	expiryStrings := make([]string, 0, len(targets))
+	expiries := make([]time.Time, 0, len(targets))
+	for i, target := range targets {
+		if i == 2 {
+			// Ensure the forced refresh has an observably later wall-clock expiry.
+			time.Sleep(2 * time.Millisecond)
+		}
+		rr := httptest.NewRecorder()
+		h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, target, nil))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET %s: got %d (%s), want 200", target, rr.Code, rr.Body.String())
+		}
+		var response documentsResponse
+		if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode GET %s: %v", target, err)
+		}
+		if response.CacheExpiresAt == "" {
+			t.Fatalf("GET %s omitted cache_expires_at", target)
+		}
+		expiresAt, err := time.Parse(time.RFC3339Nano, response.CacheExpiresAt)
+		if err != nil {
+			t.Fatalf("GET %s cache_expires_at %q is not RFC3339: %v", target, response.CacheExpiresAt, err)
+		}
+		if !strings.HasSuffix(response.CacheExpiresAt, "Z") {
+			t.Fatalf("GET %s cache_expires_at %q is not UTC", target, response.CacheExpiresAt)
+		}
+		expiryStrings = append(expiryStrings, response.CacheExpiresAt)
+		expiries = append(expiries, expiresAt)
+	}
+	if got := scanCalls.Load(); got != 2 {
+		t.Fatalf("document scans = %d, want cached ordinary GET plus one forced refresh", got)
+	}
+	if expiryStrings[0] != expiryStrings[1] {
+		t.Fatalf("cache hit expiry changed from %q to %q", expiryStrings[0], expiryStrings[1])
+	}
+	if !expiries[2].After(expiries[1]) {
+		t.Fatalf("forced refresh expiry %s did not advance beyond cached expiry %s", expiries[2], expiries[1])
+	}
+}
+
+func TestDocumentRefreshPublishesImmutableExpiry(t *testing.T) {
+	h := &Handler{documentsCacheTTL: time.Hour}
+	refresh, owner := h.acquireDocumentsRefresh()
+	if !owner {
+		t.Fatal("first refresh did not become owner")
+	}
+	built := &documentsResponse{}
+	published := h.finishDocumentsRefresh(refresh, built, nil)
+	if built.CacheExpiresAt != "" {
+		t.Fatalf("unpublished builder response was mutated: %q", built.CacheExpiresAt)
+	}
+	if published == nil || published.CacheExpiresAt == "" {
+		t.Fatalf("published response expiry = %#v, want populated cache_expires_at", published)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, published.CacheExpiresAt); err != nil {
+		t.Fatalf("published expiry %q is not RFC3339: %v", published.CacheExpiresAt, err)
+	}
+	cached, ok := h.cachedDocuments()
+	if !ok || cached.CacheExpiresAt != published.CacheExpiresAt {
+		t.Fatalf("cached expiry = %#v, want stable %q", cached, published.CacheExpiresAt)
+	}
+}
+
+func TestConcurrentForcedDocumentRefreshesCoalesce(t *testing.T) {
+	var scanCalls atomic.Int32
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := scanCalls.Add(1)
+		if call > 1 {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-release
+		}
+		w.Header().Set("Content-Type", "application/json")
+		mustWriteTestResponse(t, w, `{"result":{"points":[],"next_page_offset":null}}`)
+	}))
+	defer backend.Close()
+
+	h := NewHandler(nil, 0.65).WithDocumentRAG(qdrant.NewClient(backend.URL, "doc_chunks"), "/srv/documents")
+	prime := httptest.NewRecorder()
+	h.Router().ServeHTTP(prime, httptest.NewRequest(http.MethodGet, "/api/documents", nil))
+	if prime.Code != http.StatusOK {
+		t.Fatalf("prime cache: got %d (%s), want 200", prime.Code, prime.Body.String())
+	}
+
+	const callers = 8
+	start := make(chan struct{})
+	results := make(chan int, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			rr := httptest.NewRecorder()
+			h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/documents?refresh=1", nil))
+			results <- rr.Code
+		}()
+	}
+	close(start)
+	<-started
+	time.Sleep(50 * time.Millisecond)
+	if got := scanCalls.Load(); got != 2 {
+		t.Fatalf("total scans = %d, want one prime plus one coalesced forced refresh", got)
+	}
+	releaseOnce.Do(func() { close(release) })
+	wg.Wait()
+	close(results)
+	for code := range results {
+		if code != http.StatusOK {
+			t.Fatalf("forced refresh status = %d, want 200", code)
+		}
+	}
+}
+
+func TestRelToDocsRejectsCrossPlatformAbsoluteAndTraversalPaths(t *testing.T) {
+	h := &Handler{docsDir: "/srv/documents"}
+	tests := []struct {
+		name     string
+		path     string
+		absolute bool
+		want     string
+	}{
+		{name: "POSIX inside root", path: "/srv/documents/notes/a.md", absolute: true, want: "notes/a.md"},
+		{name: "POSIX outside root", path: "/etc/passwd", absolute: true, want: ""},
+		{name: "Windows drive backslashes", path: `C:\Users\me\secret.md`, absolute: true, want: ""},
+		{name: "Windows drive slashes", path: "C:/Users/me/secret.md", absolute: true, want: ""},
+		{name: "UNC backslashes", path: `\\server\share\secret.md`, absolute: true, want: ""},
+		{name: "UNC slashes", path: "//server/share/secret.md", absolute: true, want: ""},
+		{name: "safe relative", path: "notes/a.md", want: "notes/a.md"},
+		{name: "safe relative backslashes", path: `notes\a.md`, want: "notes/a.md"},
+		{name: "slash traversal", path: "../secret.md", want: ""},
+		{name: "backslash traversal", path: `..\secret.md`, want: ""},
+		{name: "drive relative", path: `C:secret.md`, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isCrossPlatformAbsolute(tt.path); got != tt.absolute {
+				t.Fatalf("isCrossPlatformAbsolute(%q) = %v, want %v", tt.path, got, tt.absolute)
+			}
+			if got := h.relToDocs(tt.path); got != tt.want {
+				t.Fatalf("relToDocs(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFailedDocumentInventoryIsNotCached(t *testing.T) {
+	scanCalls := 0
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scanCalls++
+		if scanCalls == 1 {
+			http.Error(w, "Qdrant is unavailable", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		mustWriteTestResponse(t, w, `{"result":{"points":[],"next_page_offset":null}}`)
+	}))
+	defer backend.Close()
+
+	h := NewHandler(nil, 0.65).WithDocumentRAG(qdrant.NewClient(backend.URL, "doc_chunks"), "/srv/documents")
+	for i, want := range []int{http.StatusInternalServerError, http.StatusOK} {
+		rr := httptest.NewRecorder()
+		h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/documents", nil))
+		if rr.Code != want {
+			t.Fatalf("request %d: got %d (%s), want %d", i, rr.Code, rr.Body.String(), want)
+		}
+	}
+	if scanCalls != 2 {
+		t.Fatalf("document scans = %d, want 2 because failed inventory must not cache", scanCalls)
+	}
+}
+
+func TestCanceledDocumentInventoryIsNotCached(t *testing.T) {
+	scanCalls := 0
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scanCalls++
+		w.Header().Set("Content-Type", "application/json")
+		mustWriteTestResponse(t, w, `{"result":{"points":[],"next_page_offset":null}}`)
+	}))
+	defer backend.Close()
+
+	h := NewHandler(nil, 0.65).WithDocumentRAG(qdrant.NewClient(backend.URL, "doc_chunks"), "/srv/documents")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	request := httptest.NewRequest(http.MethodGet, "/api/documents", nil).WithContext(ctx)
+	first := httptest.NewRecorder()
+	h.Router().ServeHTTP(first, request)
+	if first.Code != http.StatusRequestTimeout {
+		t.Fatalf("canceled inventory: got %d (%s), want 408", first.Code, first.Body.String())
+	}
+
+	second := httptest.NewRecorder()
+	h.Router().ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/api/documents", nil))
+	if second.Code != http.StatusOK {
+		t.Fatalf("second inventory: got %d (%s), want 200", second.Code, second.Body.String())
+	}
+	if scanCalls != 1 {
+		t.Fatalf("successful document scans = %d, want 1 because canceled inventory must not cache", scanCalls)
+	}
+}
+
+func TestConcurrentDocumentInventoryRequestsCoalesceToOneScan(t *testing.T) {
+	var scanCalls atomic.Int32
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scanCalls.Add(1)
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		mustWriteTestResponse(t, w, `{"result":{"points":[],"next_page_offset":null}}`)
+	}))
+	defer backend.Close()
+
+	h := NewHandler(nil, 0.65).WithDocumentRAG(qdrant.NewClient(backend.URL, "doc_chunks"), "/srv/documents")
+	const callers = 8
+	start := make(chan struct{})
+	results := make(chan int, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			rr := httptest.NewRecorder()
+			h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/documents", nil))
+			results <- rr.Code
+		}()
+	}
+	close(start)
+	<-started
+	// Keep the owner in the Qdrant call long enough for all simultaneous
+	// callers to observe the same in-flight refresh.
+	time.Sleep(50 * time.Millisecond)
+	if got := scanCalls.Load(); got != 1 {
+		t.Fatalf("concurrent scan calls = %d, want exactly 1", got)
+	}
+	releaseOnce.Do(func() { close(release) })
+	wg.Wait()
+	close(results)
+	for code := range results {
+		if code != http.StatusOK {
+			t.Fatalf("coalesced request status = %d, want 200", code)
+		}
+	}
+}
+
+func TestDocumentRefreshWaiterHonorsCancellation(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		mustWriteTestResponse(t, w, `{"result":{"points":[],"next_page_offset":null}}`)
+	}))
+	defer backend.Close()
+
+	h := NewHandler(nil, 0.65).WithDocumentRAG(qdrant.NewClient(backend.URL, "doc_chunks"), "/srv/documents")
+	ownerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		rr := httptest.NewRecorder()
+		h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/documents", nil))
+		ownerDone <- rr
+	}()
+	<-started
+
+	ctx, cancel := context.WithCancel(context.Background())
+	waiterDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		rr := httptest.NewRecorder()
+		h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/documents", nil).WithContext(ctx))
+		waiterDone <- rr
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	select {
+	case waiter := <-waiterDone:
+		if waiter.Code != http.StatusRequestTimeout {
+			t.Fatalf("canceled waiter status = %d (%s), want 408", waiter.Code, waiter.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled document refresh waiter did not return promptly")
+	}
+
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case owner := <-ownerDone:
+		if owner.Code != http.StatusOK {
+			t.Fatalf("refresh owner status = %d (%s), want 200", owner.Code, owner.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("document refresh owner did not finish")
+	}
+}
+
+func TestBackendErrorsAreGeneric(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "GET http://qdrant.private:6333 failed: internal storage detail", http.StatusInternalServerError)
+	}))
+	defer backend.Close()
+
+	h := NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65)
+	for _, target := range []string{"/api/facts", "/api/facts/secret-id", "/api/graph"} {
+		rr := httptest.NewRecorder()
+		h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, target, nil))
+		if rr.Code != http.StatusInternalServerError {
+			t.Fatalf("GET %s: got %d, want 500", target, rr.Code)
+		}
+		if strings.Contains(rr.Body.String(), "qdrant.private") || strings.Contains(rr.Body.String(), "storage detail") {
+			t.Fatalf("GET %s leaked backend error: %s", target, rr.Body.String())
+		}
+	}
+}
+
+func assertJSONOmitsKeys(t *testing.T, body []byte, forbidden ...string) {
+	t.Helper()
+	var value interface{}
+	if err := json.Unmarshal(body, &value); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	for _, key := range forbidden {
+		if jsonContainsKey(value, key) {
+			t.Fatalf("response contains forbidden key %q: %s", key, body)
+		}
+	}
+}
+
+func jsonContainsKey(value interface{}, wanted string) bool {
+	switch node := value.(type) {
+	case map[string]interface{}:
+		for key, child := range node {
+			if key == wanted || jsonContainsKey(child, wanted) {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, child := range node {
+			if jsonContainsKey(child, wanted) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestScrollGraphPointsPagesFiltersAndStopsAtBound(t *testing.T) {
@@ -202,7 +740,7 @@ func TestDuplicatesUIHandlesErrorsAndOffersBoundedRetry(t *testing.T) {
 		t.Fatalf("read duplicates.js: %v", err)
 	}
 	source := string(js)
-	for _, want := range []string{"if (!res.ok)", "await res.text()", "loadDuplicates(5000)", "Retry"} {
+	for _, want := range []string{"if (!res.ok)", "responseMessage(res)", "retryLimit", "maxNodes < 5000", "loadDuplicates(retryLimit)", "Scan up to 5,000 facts"} {
 		if !strings.Contains(source, want) {
 			t.Errorf("duplicates.js does not contain %q", want)
 		}
@@ -352,6 +890,160 @@ func TestBuildShellHTML_DarkModeDefault(t *testing.T) {
 	}
 }
 
+func TestStaticUIContractsForLazyLoadingAccessibilityAndResilience(t *testing.T) {
+	read := func(t *testing.T, name string) string {
+		t.Helper()
+		body, err := staticFS.ReadFile("static/" + name)
+		if err != nil {
+			t.Fatalf("read static %s: %v", name, err)
+		}
+		return string(body)
+	}
+	require := func(t *testing.T, source, needle string) {
+		t.Helper()
+		if !strings.Contains(source, needle) {
+			t.Errorf("static source is missing %q", needle)
+		}
+	}
+	forbid := func(t *testing.T, source, needle string) {
+		t.Helper()
+		if strings.Contains(source, needle) {
+			t.Errorf("static source must not contain %q", needle)
+		}
+	}
+
+	init := read(t, "assets/js/init.js")
+	require(t, init, "loadDocumentStatus().catch")
+	forbid(t, init, "initFacts();\nloadDocuments();")
+	require(t, init, "aria-current")
+	require(t, init, "documentsAreStale()")
+	require(t, init, "name === 'forgotten' && !factsData")
+
+	overview := read(t, "assets/js/overview.js")
+	require(t, overview, "factsPromise = null")
+	require(t, overview, "renderFactsFailure")
+	require(t, overview, "<button class=\"treemap-tile\"")
+	require(t, overview, "activity-section")
+	require(t, overview, "gridStart.setUTCDate")
+	require(t, overview, "gridEnd.setUTCDate")
+	require(t, overview, "getUTCDay")
+	require(t, overview, "role', 'listitem")
+	require(t, overview, "No facts have been stored yet")
+	require(t, overview, "activity-section').hidden = true")
+	require(t, overview, "Loading knowledge map")
+
+	graph := read(t, "assets/js/graph.js")
+	require(t, graph, "api/facts/${encodeURIComponent(id)}")
+	require(t, graph, "Retry with up to 5,000 nodes")
+	require(t, graph, "panel.focus()")
+	require(t, graph, "graph-results-list")
+	require(t, graph, "save.disabled = true")
+	require(t, graph, "factAtSave")
+	require(t, graph, "detailAtSave")
+	require(t, graph, "selectedFact !== factAtSave || detailRequest !== detailAtSave")
+	require(t, graph, "pendingTagSaves")
+	require(t, graph, "pendingTagSaves.has(fact.id)")
+	require(t, graph, "saveFailureMessage")
+	require(t, graph, "graphAbortController")
+	require(t, graph, "graphAbortController.abort()")
+	require(t, graph, "request !== graphRequest")
+	require(t, graph, "resetGraphNetwork()")
+	require(t, graph, "const activeNetwork = network")
+
+	documents := read(t, "assets/js/documents.js")
+	require(t, documents, "api/documents/status")
+	require(t, documents, "aria-expanded")
+	require(t, documents, "documentsShown += 50")
+	require(t, documents, "FILE_PAGE_SIZE = 50")
+	require(t, documents, "renderDocumentFilePage")
+	require(t, documents, "documentsFreshUntil")
+	require(t, documents, "documentsAreStale")
+	require(t, documents, "loadDocuments(true)")
+	require(t, documents, "Date.parse(documentsData.cache_expires_at")
+	require(t, documents, "Number.isNaN(parsedExpiry) ? 0 : parsedExpiry")
+	require(t, documents, "loadDocuments(force)")
+	require(t, documents, "status.enabled && !documentsData")
+	require(t, documents, "if (!documentsData)")
+	require(t, documents, "api/documents?refresh=1")
+	require(t, documents, "const endpoint = force")
+	require(t, documents, "status.cached ? (status.total_files ?? 0) : '—'")
+	forbid(t, documents, "status.total_files || status.total_chunks")
+	forbid(t, documents, "onclick=")
+
+	forgotten := read(t, "assets/js/forgotten.js")
+	require(t, forgotten, "forgottenShown += 50")
+	require(t, forgotten, "Loading never-recalled facts")
+	sharedTimeline := read(t, "assets/js/timeline.js")
+	require(t, sharedTimeline, "Loading timeline")
+	require(t, sharedTimeline, "No facts with creation dates")
+	require(t, sharedTimeline, "renderRetry")
+	shared := read(t, "assets/js/shared.js")
+	require(t, shared, "normalizeTagDisplay")
+	require(t, shared, "originalsByDisplay")
+	require(t, shared, "${normalized} (${original})")
+	duplicates := read(t, "assets/js/duplicates.js")
+	require(t, duplicates, "duplicatesShown += 50")
+
+	graphView := read(t, "views/graph.html")
+	require(t, graphView, "role=\"region\"")
+	forbid(t, graphView, "aria-modal")
+	require(t, graphView, "<output")
+	require(t, graphView, "for=\"ns-filter\"")
+	overviewView := read(t, "views/overview.html")
+	require(t, overviewView, "id=\"activity-section\"")
+	require(t, overviewView, "id=\"heatmap-grid\"")
+	require(t, overviewView, "role=\"list\"")
+	documentsView := read(t, "views/documents.html")
+	require(t, documentsView, "id=\"docs-refresh\"")
+	shell := read(t, "shell.html")
+	require(t, shell, "id=\"docs-badge\" aria-live=\"polite\">—")
+
+	css := read(t, "assets/styles.css")
+	require(t, css, "@media (max-width: 390px)")
+	require(t, css, ":focus-visible")
+	require(t, css, "prefers-reduced-motion")
+	require(t, css, "#graph-view { overflow-y: auto; }")
+	require(t, css, "grid-template-rows: repeat(7, 16px)")
+	require(t, css, ".heatmap-scroll")
+	require(t, css, "flex: 1 1 100% !important")
+	require(t, css, ".graph-status { position: static")
+	require(t, css, "overflow-x: hidden;\n  flex-shrink: 0;")
+	require(t, css, ".activity-section { width: 100%; margin-top: 24px; flex-shrink: 0; }")
+	if !balancedCSSBraces(css) {
+		t.Error("styles.css has unmatched braces")
+	}
+}
+
+func balancedCSSBraces(source string) bool {
+	depth := 0
+	inComment := false
+	for i := 0; i < len(source); i++ {
+		if !inComment && i+1 < len(source) && source[i:i+2] == "/*" {
+			inComment = true
+			i++
+			continue
+		}
+		if inComment && i+1 < len(source) && source[i:i+2] == "*/" {
+			inComment = false
+			i++
+			continue
+		}
+		if inComment {
+			continue
+		}
+		switch source[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth < 0 {
+				return false
+			}
+		}
+	}
+	return !inComment && depth == 0
+}
+
 func TestNewHandler_ComposesHTMLAtConstruction(t *testing.T) {
 	h := NewHandler(nil, 0.65)
 	if len(h.composedHTML) == 0 {
@@ -450,8 +1142,8 @@ func TestFilterGraphPoints_FiltersPrimaryTagSeparatelyFromTags(t *testing.T) {
 	}
 }
 
-func TestPointToNode_UsesLegacyTextFallbacks(t *testing.T) {
-	node := pointToNode(qdrant.ScrollPoint{
+func TestPointToSummary_UsesLegacyTextFallbacks(t *testing.T) {
+	node := pointToSummary(qdrant.ScrollPoint{
 		ID: "1",
 		Payload: map[string]interface{}{
 			"fact":       "legacy fact text",
@@ -461,16 +1153,16 @@ func TestPointToNode_UsesLegacyTextFallbacks(t *testing.T) {
 		},
 	})
 
-	if node["text"] != "legacy fact text" {
-		t.Fatalf("text = %q, want legacy fallback", node["text"])
+	if node.Text != "legacy fact text" {
+		t.Fatalf("text = %q, want legacy fallback", node.Text)
 	}
-	if node["created_at"] != "2026-05-21T10:00:00Z" {
-		t.Fatalf("created_at = %q, want created fallback", node["created_at"])
+	if node.CreatedAt != "2026-05-21T10:00:00Z" {
+		t.Fatalf("created_at = %q, want created fallback", node.CreatedAt)
 	}
 }
 
-func TestPointToNode_ExposesPrimaryTag(t *testing.T) {
-	node := pointToNode(qdrant.ScrollPoint{
+func TestPointToSummary_ExposesPrimaryTag(t *testing.T) {
+	node := pointToSummary(qdrant.ScrollPoint{
 		ID: "1",
 		Payload: map[string]interface{}{
 			"text":        "fact text",
@@ -479,8 +1171,8 @@ func TestPointToNode_ExposesPrimaryTag(t *testing.T) {
 		},
 	})
 
-	if node["primary_tag"] != "health" {
-		t.Fatalf("primary_tag = %q, want health", node["primary_tag"])
+	if node.PrimaryTag != "health" {
+		t.Fatalf("primary_tag = %q, want health", node.PrimaryTag)
 	}
 }
 
@@ -497,26 +1189,19 @@ func TestNormalizeFactTags_AddsValidatedPrimaryTag(t *testing.T) {
 	}
 }
 
-func TestPointToNode_ExposesPayloadKeysForTextlessPoints(t *testing.T) {
-	node := pointToNode(qdrant.ScrollPoint{
+func TestPointToSummary_HidesPayloadKeysForTextlessPoints(t *testing.T) {
+	node := pointToSummary(qdrant.ScrollPoint{
 		ID:      "1",
 		Payload: map[string]interface{}{"recall_count": 27},
 	})
 
-	if node["text"] != "" {
-		t.Fatalf("text = %q, want empty text", node["text"])
-	}
-	keys, ok := node["payload_keys"].([]string)
-	if !ok {
-		t.Fatalf("payload_keys has type %T, want []string", node["payload_keys"])
-	}
-	if len(keys) != 1 || keys[0] != "recall_count" {
-		t.Fatalf("payload_keys = %#v, want [recall_count]", keys)
+	if node.Text != "" {
+		t.Fatalf("text = %q, want empty text", node.Text)
 	}
 }
 
-func TestPointToNode_DoesNotTreatRecoveryDiagnosticsAsFactText(t *testing.T) {
-	node := pointToNode(qdrant.ScrollPoint{
+func TestPointToSummary_DoesNotTreatRecoveryDiagnosticsAsFactText(t *testing.T) {
+	node := pointToSummary(qdrant.ScrollPoint{
 		ID: "1",
 		Payload: map[string]interface{}{
 			"recovery_status": "lost_text",
@@ -525,10 +1210,10 @@ func TestPointToNode_DoesNotTreatRecoveryDiagnosticsAsFactText(t *testing.T) {
 		},
 	})
 
-	if node["text"] != "" {
-		t.Fatalf("text = %q, want empty text for recovery diagnostics", node["text"])
+	if node.Text != "" {
+		t.Fatalf("text = %q, want empty text for recovery diagnostics", node.Text)
 	}
-	if node["text_missing"] != true {
-		t.Fatalf("text_missing = %#v, want true", node["text_missing"])
+	if !node.TextMissing {
+		t.Fatalf("text_missing = %#v, want true", node.TextMissing)
 	}
 }
