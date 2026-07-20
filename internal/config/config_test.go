@@ -227,6 +227,76 @@ func TestLoadIndexerStrictlyValidatesIndexerSettings(t *testing.T) {
 	}
 }
 
+func TestLoadEmbeddingIdentityDefaults(t *testing.T) {
+	setSecureTestEnv(t)
+	t.Setenv("EMBED_MODEL", "")
+	t.Setenv("EMBED_MODEL_REVISION", "")
+	t.Setenv("ADOPT_EXISTING_EMBEDDING_IDENTITY", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.EmbedModelID != defaultEmbedModelID {
+		t.Fatalf("EmbedModelID = %q, want %q", cfg.EmbedModelID, defaultEmbedModelID)
+	}
+	if cfg.EmbedModelRevision != defaultEmbedModelRevision {
+		t.Fatalf("EmbedModelRevision = %q, want %q", cfg.EmbedModelRevision, defaultEmbedModelRevision)
+	}
+	if cfg.AdoptExistingEmbeddingIdentity {
+		t.Fatal("AdoptExistingEmbeddingIdentity must default to false")
+	}
+}
+
+func TestLoadRejectsMutableOrMalformedEmbeddingRevision(t *testing.T) {
+	tests := []string{"main", "latest", "614241f", strings.Repeat("z", 40), strings.Repeat("a", 39), strings.Repeat("a", 41)}
+	for _, revision := range tests {
+		t.Run(revision, func(t *testing.T) {
+			setSecureTestEnv(t)
+			t.Setenv("EMBED_MODEL_REVISION", revision)
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), "EMBED_MODEL_REVISION") {
+				t.Fatalf("Load() error = %v, want EMBED_MODEL_REVISION validation error", err)
+			}
+		})
+	}
+}
+
+func TestLoadEmbeddingIdentityAdoptionFlag(t *testing.T) {
+	setSecureTestEnv(t)
+	t.Setenv("ADOPT_EXISTING_EMBEDDING_IDENTITY", "true")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.AdoptExistingEmbeddingIdentity {
+		t.Fatal("AdoptExistingEmbeddingIdentity = false, want true")
+	}
+
+	t.Setenv("ADOPT_EXISTING_EMBEDDING_IDENTITY", "sometimes")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "ADOPT_EXISTING_EMBEDDING_IDENTITY") {
+		t.Fatalf("Load() error = %v, want adoption flag validation error", err)
+	}
+}
+
+func TestLoadIndexerIncludesEmbeddingIdentityContract(t *testing.T) {
+	t.Setenv("ENABLE_RAG", "true")
+	t.Setenv("EMBED_MODEL", "example/model")
+	t.Setenv("EMBED_MODEL_REVISION", strings.Repeat("b", 40))
+	t.Setenv("ADOPT_EXISTING_EMBEDDING_IDENTITY", "true")
+
+	cfg, err := LoadIndexer()
+	if err != nil {
+		t.Fatalf("LoadIndexer() error = %v", err)
+	}
+	if cfg.EmbedModelID != "example/model" || cfg.EmbedModelRevision != strings.Repeat("b", 40) {
+		t.Fatalf("unexpected embedding identity config: %#v", cfg)
+	}
+	if !cfg.AdoptExistingEmbeddingIdentity {
+		t.Fatal("standalone indexer did not load adoption flag")
+	}
+}
+
 func TestEnvCSVEmpty(t *testing.T) {
 	key := "TEST_EMPTY_CSV"
 	_ = os.Unsetenv(key)
@@ -249,4 +319,7 @@ func setSecureTestEnv(t *testing.T) {
 	t.Setenv("OAUTH_AUDIENCE", "")
 	t.Setenv("OAUTH_JWKS_URL", "")
 	t.Setenv("OAUTH_AUTHORIZATION_SERVERS", "")
+	t.Setenv("EMBED_MODEL", defaultEmbedModelID)
+	t.Setenv("EMBED_MODEL_REVISION", defaultEmbedModelRevision)
+	t.Setenv("ADOPT_EXISTING_EMBEDDING_IDENTITY", "false")
 }

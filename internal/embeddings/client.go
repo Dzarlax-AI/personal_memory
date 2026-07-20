@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -16,6 +17,22 @@ const defaultBatchSize = 32
 
 const defaultHTTPTimeout = 30 * time.Second
 const maxResponseBodyBytes int64 = 8 << 20
+const maxInfoResponseBodyBytes int64 = 64 << 10
+
+// ModelInfo describes the vector-space contract reported by TEI's /info
+// endpoint. Runtime version is diagnostic; the remaining fields participate in
+// the persisted collection identity.
+type ModelInfo struct {
+	ModelID    string `json:"model_id"`
+	ModelSHA   string `json:"model_sha"`
+	ModelDType string `json:"model_dtype"`
+	ModelType  struct {
+		Embedding struct {
+			Pooling string `json:"pooling"`
+		} `json:"embedding"`
+	} `json:"model_type"`
+	Version string `json:"version"`
+}
 
 type Client struct {
 	url        string
@@ -27,6 +44,51 @@ func NewClient(url string) *Client {
 		url:        url,
 		httpClient: &http.Client{Timeout: defaultHTTPTimeout},
 	}
+}
+
+// Info returns the model identity served by TEI.
+func (c *Client) Info(ctx context.Context) (ModelInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url+"/info", nil)
+	if err != nil {
+		return ModelInfo{}, fmt.Errorf("create info request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return ModelInfo{}, fmt.Errorf("info request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := readLimitedBody(resp.Body, maxInfoResponseBodyBytes)
+	if err != nil {
+		return ModelInfo{}, fmt.Errorf("read info response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return ModelInfo{}, fmt.Errorf("info failed (status %d): %s", resp.StatusCode, string(responseBody))
+	}
+
+	var info ModelInfo
+	if err := json.Unmarshal(responseBody, &info); err != nil {
+		return ModelInfo{}, fmt.Errorf("decode info response: %w", err)
+	}
+	info.ModelID = strings.TrimSpace(info.ModelID)
+	info.ModelSHA = strings.TrimSpace(info.ModelSHA)
+	info.ModelDType = strings.TrimSpace(info.ModelDType)
+	info.ModelType.Embedding.Pooling = strings.TrimSpace(info.ModelType.Embedding.Pooling)
+	info.Version = strings.TrimSpace(info.Version)
+	if info.ModelID == "" {
+		return ModelInfo{}, fmt.Errorf("decode info response: model_id is required")
+	}
+	if info.ModelSHA == "" {
+		return ModelInfo{}, fmt.Errorf("decode info response: model_sha is required")
+	}
+	if info.ModelDType == "" {
+		return ModelInfo{}, fmt.Errorf("decode info response: model_dtype is required")
+	}
+	if info.ModelType.Embedding.Pooling == "" {
+		return ModelInfo{}, fmt.Errorf("decode info response: embedding pooling is required")
+	}
+	return info, nil
 }
 
 func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {

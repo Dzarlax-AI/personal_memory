@@ -51,22 +51,9 @@ func NewServer(lifeCtx context.Context, chunks, folders *qdrant.Client, embed *e
 	}
 }
 
-// EnsureCollections creates both Qdrant collections and their payload indexes.
-// Safe to call on every boot — EnsureCollection/CreateFieldIndex are idempotent in Qdrant.
-func EnsureCollections(ctx context.Context, chunks, folders *qdrant.Client, embed *embeddings.Client) error {
-	vec, err := embed.Embed(ctx, "init")
-	if err != nil {
-		return fmt.Errorf("embed init: %w", err)
-	}
-	size := len(vec)
-
-	if err := chunks.EnsureCollection(ctx, size); err != nil {
-		return fmt.Errorf("ensure chunks collection: %w", err)
-	}
-	if err := folders.EnsureCollection(ctx, size); err != nil {
-		return fmt.Errorf("ensure folders collection: %w", err)
-	}
-
+// EnsureIndexes creates the payload indexes used by RAG. Collection creation
+// and vector-space validation are owned by embeddingidentity before this runs.
+func EnsureIndexes(ctx context.Context, chunks, folders *qdrant.Client) error {
 	// Payload indexes for fast filtering.
 	for _, field := range []string{"file_path", "folder_path"} {
 		if err := chunks.CreateFieldIndex(ctx, field, "keyword"); err != nil {
@@ -80,9 +67,9 @@ func EnsureCollections(ctx context.Context, chunks, folders *qdrant.Client, embe
 	return nil
 }
 
-// EnsureCollections is the method form, delegating to the package helper.
-func (s *Server) EnsureCollections(ctx context.Context) error {
-	return EnsureCollections(ctx, s.chunks, s.folders, s.embed)
+// EnsureIndexes is the method form, delegating to the package helper.
+func (s *Server) EnsureIndexes(ctx context.Context) error {
+	return EnsureIndexes(ctx, s.chunks, s.folders)
 }
 
 func (s *Server) RegisterTools(mcpSrv *server.MCPServer) {

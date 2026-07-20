@@ -96,15 +96,6 @@ func NewServer(qc *qdrant.Client, ec *embeddings.Client, cache *Cache, user stri
 	}
 }
 
-// InitCollection creates the Qdrant collection if missing.
-func (s *Server) InitCollection(ctx context.Context) error {
-	vec, err := s.embed.Embed(ctx, "init")
-	if err != nil {
-		return fmt.Errorf("init embed: %w", err)
-	}
-	return s.qdrant.EnsureCollection(ctx, len(vec))
-}
-
 // RegisterTools registers all memory MCP tools on the given MCP server.
 func (s *Server) RegisterTools(srv *server.MCPServer) {
 	srv.AddTool(mcp.NewTool("store_fact",

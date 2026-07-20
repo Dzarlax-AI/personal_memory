@@ -21,12 +21,26 @@ type Client struct {
 	httpClient *http.Client
 }
 
+// CollectionInfo describes the collection properties used to validate that a
+// configured embedding model is compatible with data already stored in Qdrant.
+type CollectionInfo struct {
+	Exists     bool
+	Points     uint64
+	VectorSize int
+	Metadata   map[string]any
+}
+
 func NewClient(url, collection string) *Client {
 	return &Client{
 		url:        url,
 		collection: collection,
 		httpClient: &http.Client{Timeout: defaultHTTPTimeout},
 	}
+}
+
+// CollectionName returns the collection targeted by this client.
+func (c *Client) CollectionName() string {
+	return c.collection
 }
 
 // Point represents a Qdrant point with vector and payload.
@@ -120,39 +134,152 @@ func (c *Client) Get(ctx context.Context, id string) (Point, bool, error) {
 	return Point{ID: parsePointID(result.Result.ID), Vector: result.Result.Vector, Payload: result.Result.Payload}, true, nil
 }
 
-// EnsureCollection creates the collection if it doesn't exist.
-func (c *Client) EnsureCollection(ctx context.Context, vectorSize int) error {
-	// Check if collection exists.
-	url := fmt.Sprintf("%s/collections/%s", c.url, c.collection)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// CollectionInfo returns the collection's point count, vector size, and
+// collection metadata. A missing collection is represented by Exists=false.
+func (c *Client) CollectionInfo(ctx context.Context) (CollectionInfo, error) {
+	requestURL := fmt.Sprintf("%s/collections/%s", c.url, c.collection)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
-		return err
+		return CollectionInfo{}, err
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("check collection: %w", err)
+		return CollectionInfo{}, fmt.Errorf("get collection info: %w", err)
 	}
-	checkBody, readErr := readLimitedBody(resp.Body, maxResponseBodyBytes)
-	resp.Body.Close()
-	if readErr != nil {
-		return fmt.Errorf("read collection check response: %w", readErr)
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return CollectionInfo{Exists: false}, nil
+	}
+	body, err := readLimitedBody(resp.Body, maxResponseBodyBytes)
+	if err != nil {
+		return CollectionInfo{}, fmt.Errorf("read collection info response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return CollectionInfo{}, fmt.Errorf("GET %s failed (status %d): %s", requestURL, resp.StatusCode, string(body))
 	}
 
-	if resp.StatusCode == http.StatusOK {
-		return nil // already exists
+	var response struct {
+		Result struct {
+			Points *uint64 `json:"points_count"`
+			Config struct {
+				Params struct {
+					Vectors json.RawMessage `json:"vectors"`
+				} `json:"params"`
+				Metadata map[string]any `json:"metadata"`
+			} `json:"config"`
+			// Accept top-level metadata as well to remain compatible with Qdrant
+			// response variants while preferring the canonical config location.
+			Metadata map[string]any `json:"metadata"`
+		} `json:"result"`
 	}
-	if resp.StatusCode != http.StatusNotFound {
-		return fmt.Errorf("GET %s failed (status %d): %s", url, resp.StatusCode, string(checkBody))
+	if err := json.Unmarshal(body, &response); err != nil {
+		return CollectionInfo{}, fmt.Errorf("decode collection info response: %w", err)
+	}
+	if response.Result.Points == nil {
+		return CollectionInfo{}, fmt.Errorf("decode collection info response: points_count is required")
+	}
+	vectorSize, err := collectionVectorSize(response.Result.Config.Params.Vectors)
+	if err != nil {
+		return CollectionInfo{}, fmt.Errorf("decode collection vector configuration: %w", err)
+	}
+	metadata := response.Result.Config.Metadata
+	if metadata == nil {
+		metadata = response.Result.Metadata
+	}
+	return CollectionInfo{
+		Exists:     true,
+		Points:     *response.Result.Points,
+		VectorSize: vectorSize,
+		Metadata:   metadata,
+	}, nil
+}
+
+// ExactCount returns the exact number of points currently stored in the
+// collection. CollectionInfo's points_count may be approximate, so callers
+// must use this method for safety decisions that distinguish empty from
+// non-empty collections.
+func (c *Client) ExactCount(ctx context.Context) (uint64, error) {
+	requestURL := fmt.Sprintf("%s/collections/%s/points/count", c.url, c.collection)
+	responseBody, err := c.postJSON(ctx, requestURL, map[string]any{"exact": true})
+	if err != nil {
+		return 0, fmt.Errorf("count collection points: %w", err)
+	}
+	var response struct {
+		Result struct {
+			Count *uint64 `json:"count"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(responseBody, &response); err != nil {
+		return 0, fmt.Errorf("decode exact count response: %w", err)
+	}
+	if response.Result.Count == nil {
+		return 0, fmt.Errorf("decode exact count response: count is required")
+	}
+	return *response.Result.Count, nil
+}
+
+func collectionVectorSize(raw json.RawMessage) (int, error) {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return 0, nil
+	}
+	var unnamed struct {
+		Size int `json:"size"`
+	}
+	if err := json.Unmarshal(raw, &unnamed); err != nil {
+		return 0, err
+	}
+	if unnamed.Size > 0 {
+		return unnamed.Size, nil
 	}
 
-	// Create collection.
+	var named map[string]struct {
+		Size int `json:"size"`
+	}
+	if err := json.Unmarshal(raw, &named); err != nil {
+		return 0, err
+	}
+	if len(named) == 1 {
+		for _, vector := range named {
+			return vector.Size, nil
+		}
+	}
+	return 0, nil
+}
+
+// CreateCollection creates the target collection with cosine distance and
+// optional collection-level metadata.
+func (c *Client) CreateCollection(ctx context.Context, vectorSize int, metadata map[string]any) error {
+	requestURL := fmt.Sprintf("%s/collections/%s", c.url, c.collection)
 	body := map[string]interface{}{
 		"vectors": map[string]interface{}{
 			"size":     vectorSize,
 			"distance": "Cosine",
 		},
 	}
-	return c.mutate(ctx, http.MethodPut, url, body, false)
+	if metadata != nil {
+		body["metadata"] = metadata
+	}
+	return c.mutate(ctx, http.MethodPut, requestURL, body, false)
+}
+
+// UpdateCollectionMetadata merges collection-level metadata. Qdrant treats an
+// empty object as a request to clear the metadata.
+func (c *Client) UpdateCollectionMetadata(ctx context.Context, metadata map[string]any) error {
+	requestURL := fmt.Sprintf("%s/collections/%s", c.url, c.collection)
+	body := map[string]interface{}{"metadata": metadata}
+	return c.mutate(ctx, http.MethodPatch, requestURL, body, false)
+}
+
+// EnsureCollection creates the collection if it doesn't exist.
+func (c *Client) EnsureCollection(ctx context.Context, vectorSize int) error {
+	info, err := c.CollectionInfo(ctx)
+	if err != nil {
+		return err
+	}
+	if info.Exists {
+		return nil
+	}
+	return c.CreateCollection(ctx, vectorSize, nil)
 }
 
 // Upsert inserts or updates a point.

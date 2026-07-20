@@ -32,6 +32,9 @@ services:
       - MCP_PORT=8000
       - QDRANT_URL=http://memory-qdrant:6333
       - EMBED_URL=http://memory-embeddings:80
+      - EMBED_MODEL=${EMBED_MODEL:-intfloat/multilingual-e5-small}
+      - EMBED_MODEL_REVISION=${EMBED_MODEL_REVISION:-614241f622f53c4eeff9890bdc4f31cfecc418b3}
+      - ADOPT_EXISTING_EMBEDDING_IDENTITY=${ADOPT_EXISTING_EMBEDDING_IDENTITY:-false}
       - ENABLE_TODOIST=${ENABLE_TODOIST:-false}
       - ENABLE_VIZ=${ENABLE_VIZ:-false}
     volumes:

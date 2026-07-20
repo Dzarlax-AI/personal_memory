@@ -69,7 +69,7 @@ The Go server exposes two independent MCP endpoints:
 - `/memory` contains semantic memory and, when enabled, document-search tools;
 - `/todoist` exists only when Todoist integration is enabled.
 
-TEI converts text into vectors. Qdrant stores those vectors and their metadata. The application performs retrieval, validation, deduplication, mutation safety checks, caching, backup scheduling, and graceful shutdown.
+TEI converts text into vectors. Qdrant stores those vectors and their metadata. Before opening its HTTP listener, the application verifies that TEI's exact model revision, dtype, pooling strategy, and vector size match the embedding identity bound to every active Qdrant collection. This prevents a model update from silently mixing incompatible vectors.
 
 ## Quick Start
 
@@ -78,6 +78,7 @@ TEI converts text into vectors. Qdrant stores those vectors and their metadata. 
 The repository Compose file starts three services: Personal Memory, TEI, and Qdrant. It is a deployment baseline rather than a standalone local sandbox. Before starting it, provide:
 
 - Docker Engine and Docker Compose;
+- Qdrant 1.16 or newer when using an external Qdrant service, because embedding identity is stored as collection metadata;
 - a DNS record for `mcp.<your-domain>`;
 - an existing external Docker network named `traefik`;
 - Traefik v3 on that network with an `https` entrypoint and `letsEncrypt` certificate resolver;
@@ -411,6 +412,7 @@ internal/
   backup/                 Qdrant snapshot loop
   config/                 environment loading and validation
   embeddings/             bounded TEI HTTP client
+  embeddingidentity/      fail-closed model and collection identity guard
   memory/                 memory tools, cache, IDs, recall counter
   memorymigration/        dry-run/apply migration logic
   middleware/             authentication and request limits
@@ -436,6 +438,9 @@ Configuration is read from environment variables and validated at startup. Inval
 | `MEMORY_USER` | `claude` | User label stored in fact metadata. |
 | `QDRANT_URL` | `http://memory-qdrant:6333` | Qdrant base URL. |
 | `EMBED_URL` | `http://memory-embeddings:80` | TEI base URL. |
+| `EMBED_MODEL` | `intfloat/multilingual-e5-small` | Expected TEI model ID; passed to both TEI and the application by Compose. |
+| `EMBED_MODEL_REVISION` | pinned commit | Expected immutable 40-character Hub commit; mutable branches such as `main` are rejected. |
+| `ADOPT_EXISTING_EMBEDDING_IDENTITY` | `false` | One-start bootstrap for verified non-empty collections that predate identity metadata. Never overrides a mismatch. |
 
 ### Memory behavior
 
@@ -482,14 +487,12 @@ Configuration is read from environment variables and validated at startup. Inval
 | `RAG_COLLECTION_FOLDERS` | `doc_folders` | Qdrant folder-summary collection. |
 | `RAG_REINDEX_INTERVAL_MINUTES` | `0` | Automatic reindex interval; zero disables scheduling. |
 
-### Backups and Compose-only embedding settings
+### Backups
 
 | Variable | Default | Description |
 |---|---:|---|
 | `BACKUP_INTERVAL_HOURS` | `24` | Snapshot interval. Must be positive. |
 | `KEEP_SNAPSHOTS` | `7` | Number of snapshots retained. Must be at least one. |
-| `EMBED_MODEL` | `intfloat/multilingual-e5-small` | TEI model selected by Compose. |
-| `EMBED_MODEL_REVISION` | pinned commit | Immutable model revision selected by Compose. |
 
 ## Security
 
@@ -512,6 +515,44 @@ The dashboard is intended to sit behind Authentik ForwardAuth. After authenticat
 - use immutable application image tags or digests for production deployments.
 
 ## Operations
+
+### Embedding identity and controlled model changes
+
+The service stores this canonical contract in Qdrant collection metadata under `personal_memory.embedding`:
+
+- model ID and immutable Hub commit;
+- model dtype and embedding pooling strategy;
+- vector dimension;
+- metadata schema version.
+
+The contract is checked for `memory` and, when RAG is enabled, `doc_chunks` and `doc_folders`. Startup fails before HTTP, backup, recall, or indexing workers begin when TEI differs from stored metadata. `ADOPT_EXISTING_EMBEDDING_IDENTITY=true` does not bypass a stored mismatch.
+
+#### First upgrade of existing collections
+
+Collections created before this guard have no identity metadata. Bind them once only after proving that the pinned model is the model that created their vectors:
+
+1. Verify TEI `/info` reports the configured model ID and full immutable `EMBED_MODEL_REVISION`, not `main` or another branch name.
+2. Create and verify snapshots of every active collection.
+3. Record collection point counts and stop other writers or standalone indexers.
+4. Set `ADOPT_EXISTING_EMBEDDING_IDENTITY=true` and start the new application image.
+5. Confirm the log reports `embedding identity verified` and that collection counts are unchanged.
+6. Set the flag back to `false`, restart only the application, and verify normal strict startup.
+
+If any collection already contains different or malformed identity metadata, stop. Restore the matching model or perform a controlled re-embedding; never edit the metadata to make the error disappear.
+
+#### Changing the embedding model
+
+Changing a model ID, revision, dtype, pooling strategy, or vector dimension requires new vectors. There is intentionally no in-place automatic migration:
+
+1. Export facts while the old model is still running and snapshot all old collections.
+2. Stop application and indexer writes.
+3. Prepare a separate empty Qdrant data set; do not delete or overwrite the old collections.
+4. Start pinned TEI and the application against the empty data set so new collections receive the new identity atomically.
+5. Import the fact export and run a full document index under the new model.
+6. Verify counts, representative searches, authentication, and health before cutting traffic over.
+7. Keep the old Qdrant data and application configuration intact until the rollback window closes.
+
+Restoring the previous model and old Qdrant data is the rollback. Reusing old vectors with a new identity is not supported.
 
 ### Document indexing
 

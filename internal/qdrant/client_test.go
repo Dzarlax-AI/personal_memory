@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -45,6 +46,223 @@ func TestNewClientHasBoundedHTTPTimeout(t *testing.T) {
 	client := NewClient("http://example.test", "memory")
 	if client.httpClient.Timeout != defaultHTTPTimeout || client.httpClient.Timeout <= 0 {
 		t.Fatalf("HTTP timeout = %s, want %s", client.httpClient.Timeout, defaultHTTPTimeout)
+	}
+}
+
+func TestCollectionName(t *testing.T) {
+	if got := NewClient("http://example.test", "doc_chunks").CollectionName(); got != "doc_chunks" {
+		t.Fatalf("CollectionName() = %q, want doc_chunks", got)
+	}
+}
+
+func TestCollectionInfoExisting(t *testing.T) {
+	const points = uint64(18446744073709551615)
+	wantMetadata := map[string]any{
+		"embedding": map[string]any{
+			"model":    "BAAI/bge-small-en-v1.5",
+			"revision": "abc123",
+		},
+		"dimensions": float64(384),
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/collections/memory" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"status":"ok",
+			"result":{
+				"points_count":18446744073709551615,
+				"config":{
+					"params":{"vectors":{"size":384,"distance":"Cosine"}},
+					"metadata":{"embedding":{"model":"BAAI/bge-small-en-v1.5","revision":"abc123"},"dimensions":384}
+				}
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	info, err := NewClient(server.URL, "memory").CollectionInfo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Exists || info.Points != points || info.VectorSize != 384 {
+		t.Fatalf("CollectionInfo() = %#v", info)
+	}
+	if !reflect.DeepEqual(info.Metadata, wantMetadata) {
+		t.Fatalf("metadata = %#v, want %#v", info.Metadata, wantMetadata)
+	}
+}
+
+func TestCollectionInfoMissing(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+
+	info, err := NewClient(server.URL, "missing").CollectionInfo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Exists || info.Points != 0 || info.VectorSize != 0 || info.Metadata != nil {
+		t.Fatalf("missing CollectionInfo() = %#v", info)
+	}
+}
+
+func TestCollectionInfoErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		want       string
+	}{
+		{name: "HTTP error", statusCode: http.StatusBadGateway, body: `{"status":"error"}`, want: "status 502"},
+		{name: "malformed response", statusCode: http.StatusOK, body: `{"result":{"points_count":"many"}}`, want: "decode collection info"},
+		{name: "missing point count", statusCode: http.StatusOK, body: `{"result":{"config":{"params":{"vectors":{"size":384}}}}}`, want: "points_count is required"},
+		{name: "null point count", statusCode: http.StatusOK, body: `{"result":{"points_count":null,"config":{"params":{"vectors":{"size":384}}}}}`, want: "points_count is required"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			_, err := NewClient(server.URL, "memory").CollectionInfo(context.Background())
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("CollectionInfo() error = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestExactCount(t *testing.T) {
+	const points = uint64(18446744073709551615)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/collections/memory/points/count" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if exact, ok := body["exact"].(bool); !ok || !exact || len(body) != 1 {
+			t.Fatalf("request body = %#v", body)
+		}
+		_, _ = w.Write([]byte(`{"status":"ok","result":{"count":18446744073709551615}}`))
+	}))
+	defer server.Close()
+
+	got, err := NewClient(server.URL, "memory").ExactCount(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != points {
+		t.Fatalf("ExactCount() = %d, want %d", got, points)
+	}
+}
+
+func TestExactCountErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		want       string
+	}{
+		{name: "HTTP error", statusCode: http.StatusBadGateway, body: `{"status":"error"}`, want: "count collection points"},
+		{name: "malformed response", statusCode: http.StatusOK, body: `{"result":{"count":"many"}}`, want: "decode exact count response"},
+		{name: "missing count", statusCode: http.StatusOK, body: `{"result":{}}`, want: "count is required"},
+		{name: "null count", statusCode: http.StatusOK, body: `{"result":{"count":null}}`, want: "count is required"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			_, err := NewClient(server.URL, "memory").ExactCount(context.Background())
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("ExactCount() error = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestCreateAndUpdateCollectionMetadataContracts(t *testing.T) {
+	metadata := map[string]any{
+		"embedding": map[string]any{"model": "model-id", "revision": "revision-id"},
+	}
+	type request struct {
+		method string
+		body   map[string]any
+	}
+	var requests []request
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		requests = append(requests, request{method: r.Method, body: body})
+		if r.URL.Path != "/collections/memory" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"status":"ok","result":true}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "memory")
+	if err := client.CreateCollection(context.Background(), 384, metadata); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.UpdateCollectionMetadata(context.Background(), metadata); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(requests))
+	}
+	if requests[0].method != http.MethodPut {
+		t.Fatalf("create method = %s, want PUT", requests[0].method)
+	}
+	vectors, ok := requests[0].body["vectors"].(map[string]any)
+	if !ok || vectors["size"] != float64(384) || vectors["distance"] != "Cosine" {
+		t.Fatalf("create vectors = %#v", requests[0].body["vectors"])
+	}
+	if !reflect.DeepEqual(requests[0].body["metadata"], metadata) {
+		t.Fatalf("create metadata = %#v, want %#v", requests[0].body["metadata"], metadata)
+	}
+	if requests[1].method != http.MethodPatch {
+		t.Fatalf("metadata update method = %s, want PATCH", requests[1].method)
+	}
+	if len(requests[1].body) != 1 || !reflect.DeepEqual(requests[1].body["metadata"], metadata) {
+		t.Fatalf("metadata update body = %#v", requests[1].body)
+	}
+}
+
+func TestCollectionMutationErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+	}{
+		{name: "HTTP error", statusCode: http.StatusInternalServerError, body: `{"status":"error"}`},
+		{name: "Qdrant error", statusCode: http.StatusOK, body: `{"status":"error","result":true}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+			client := NewClient(server.URL, "memory")
+			if err := client.CreateCollection(context.Background(), 384, nil); err == nil {
+				t.Fatal("CreateCollection() expected error")
+			}
+			if err := client.UpdateCollectionMetadata(context.Background(), map[string]any{"model": "id"}); err == nil {
+				t.Fatal("UpdateCollectionMetadata() expected error")
+			}
+		})
 	}
 }
 
