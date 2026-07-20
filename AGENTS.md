@@ -125,6 +125,9 @@ The Qdrant client unmarshals `id` into `interface{}` and converts to string with
 | `MEMORY_DOMAIN` | required | Domain — MCP at `mcp.<domain>` (used by Traefik labels in deploy) |
 | `QDRANT_URL` | `http://memory-qdrant:6333` | Qdrant endpoint. In production: `http://infra-qdrant:6333` |
 | `EMBED_URL` | `http://memory-embeddings:80` | TEI endpoint |
+| `EMBED_MODEL` | `intfloat/multilingual-e5-small` | Expected TEI model ID |
+| `EMBED_MODEL_REVISION` | pinned commit | Immutable 40-character model commit |
+| `ADOPT_EXISTING_EMBEDDING_IDENTITY` | `false` | One-start binding for verified legacy collections without identity metadata; never overrides mismatch |
 | `ENABLE_TODOIST` | `false` | Enable Todoist MCP server |
 | `ENABLE_VIZ` | `false` | Enable visualization dashboard |
 | `TODOIST_TOKEN` | — | Todoist API token (only when `ENABLE_TODOIST=true`) |
@@ -150,7 +153,7 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 ## Key Implementation Details
 
 ### memory/server.go
-- `InitCollection` runs at startup — embeds "init" to get vector size, creates collection if missing
+- Collection creation and model compatibility are verified by `internal/embeddingidentity` before memory workers start
 - `cache.Invalidate()` is called after any write operation (store, delete, update, import, forget_old)
 - Recall events, including cache hits, are queued to a bounded worker that batches atomic Qdrant increments and drains during graceful shutdown; metrics remain best-effort under hard kills
 - `forget_old` defaults to `dry_run=true` — safe by default
@@ -164,6 +167,12 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - Scroll uses `interface{}` for offset to handle both string and numeric next_page_offset
 - `CreateFieldIndex(field, schema)` creates payload indexes (used by RAG for fast `file_path` / `folder_path` filtering)
 - Supports snapshot create/list/delete for the backup loop
+- Reads and updates Qdrant 1.16+ collection metadata used by the embedding identity guard
+
+### embeddingidentity/identity.go
+- Verifies configured model ID/revision against TEI `/info`, including dtype, pooling, and probe vector size
+- Preflights every active collection before any metadata write; non-empty legacy collections require one-shot explicit adoption
+- Stored mismatches always fail startup and cannot be overridden by the adoption flag
 
 ### rag/indexer.go
 - Single `ScrollAll` at the start of `Run` snapshots every file's hash + expected chunk count; per-file hash checks are in-memory afterwards (no N+1 round-trips)
@@ -174,7 +183,7 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - Walk skips hidden dirs (`.git`, `.sync`, `.trash`, …) except for the root
 
 ### rag/server.go
-- `Server.EnsureCollections` / package-level `rag.EnsureCollections` — create collections + payload indexes; shared between server and standalone indexer binary
+- `Server.EnsureIndexes` / package-level `rag.EnsureIndexes` create payload indexes after the shared embedding identity guard has created and verified collections
 - `reindex_documents` is mutex-guarded (`sync.Mutex.TryLock`) and runs on the server-lifetime context so graceful shutdown cancels in-flight reindexing
 - `search_documents` accepts only `mode=hierarchical|flat`, caps integer `limit` at 100, and returns paths relative to `RAG_DOCUMENTS_DIR`
 

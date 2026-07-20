@@ -13,6 +13,7 @@ import (
 
 	"github.com/Dzarlax-AI/personal-memory/internal/backup"
 	"github.com/Dzarlax-AI/personal-memory/internal/config"
+	"github.com/Dzarlax-AI/personal-memory/internal/embeddingidentity"
 	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
 	"github.com/Dzarlax-AI/personal-memory/internal/memory"
 	"github.com/Dzarlax-AI/personal-memory/internal/middleware"
@@ -47,27 +48,39 @@ func main() {
 		"viz", cfg.EnableViz,
 	)
 
-	// Init clients.
-	qc := qdrant.NewClient(cfg.QdrantURL, "memory")
+	// Init dependency clients and the complete set of collections that share the
+	// active embedding model.
+	qc, qcChunks, qcFolders, embeddingCollections := newEmbeddingCollections(cfg)
 	ec := embeddings.NewClient(cfg.EmbedURL)
-
-	// Init memory server.
-	cache := memory.NewCache(cfg.CacheTTL)
-	memSrv := memory.NewServer(qc, ec, cache, cfg.MemoryUser, cfg.DedupThreshold, cfg.ContradictionLow, cfg.MutationMatchThreshold)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	identity, err := embeddingidentity.Ensure(ctx, ec, embeddingCollections, embeddingidentity.Expected{
+		ModelID:       cfg.EmbedModelID,
+		ModelRevision: cfg.EmbedModelRevision,
+	}, cfg.AdoptExistingEmbeddingIdentity)
+	if err != nil {
+		slog.Error("embedding identity verification failed", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("embedding identity verified",
+		"model", identity.ModelID,
+		"revision", identity.ModelRevision,
+		"dtype", identity.ModelDType,
+		"pooling", identity.Pooling,
+		"vector_size", identity.VectorSize,
+		"collections", collectionNames(embeddingCollections),
+	)
+
+	// Init memory server only after the persistent vector-space contract is
+	// verified. A failed identity check starts no workers and opens no listener.
+	cache := memory.NewCache(cfg.CacheTTL)
+	memSrv := memory.NewServer(qc, ec, cache, cfg.MemoryUser, cfg.DedupThreshold, cfg.ContradictionLow, cfg.MutationMatchThreshold)
 	// The recall worker outlives the signal context so active HTTP requests can
 	// finish recording recalls during graceful shutdown. It is stopped explicitly
 	// after srv.Shutdown has drained handlers.
 	memSrv.Start(context.Background())
-
-	// Init Qdrant collection.
-	if err := memSrv.InitCollection(ctx); err != nil {
-		slog.Error("failed to init collection", "error", err)
-		os.Exit(1)
-	}
-	slog.Info("qdrant collection ready")
 
 	// Create MCP server for memory.
 	mcpMemory := server.NewMCPServer("personal-memory", "1.0.0",
@@ -121,11 +134,9 @@ func main() {
 	// RAG MCP (optional).
 	var ragSrv *rag.Server
 	if cfg.EnableRAG {
-		qcChunks := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionChunks)
-		qcFolders := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionFolders)
 		ragSrv = rag.NewServer(ctx, qcChunks, qcFolders, ec, cfg)
-		if err := ragSrv.EnsureCollections(ctx); err != nil {
-			slog.Error("failed to init RAG collections", "error", err)
+		if err := ragSrv.EnsureIndexes(ctx); err != nil {
+			slog.Error("failed to init RAG indexes", "error", err)
 			os.Exit(1)
 		}
 		ragSrv.RegisterTools(mcpMemory)
@@ -257,6 +268,25 @@ func main() {
 	if serveErr != nil && serveErr != http.ErrServerClosed {
 		os.Exit(1)
 	}
+}
+
+func newEmbeddingCollections(cfg *config.Config) (memoryClient, chunksClient, foldersClient *qdrant.Client, all []*qdrant.Client) {
+	memoryClient = qdrant.NewClient(cfg.QdrantURL, "memory")
+	all = []*qdrant.Client{memoryClient}
+	if cfg.EnableRAG {
+		chunksClient = qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionChunks)
+		foldersClient = qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionFolders)
+		all = append(all, chunksClient, foldersClient)
+	}
+	return memoryClient, chunksClient, foldersClient, all
+}
+
+func collectionNames(collections []*qdrant.Client) []string {
+	names := make([]string, len(collections))
+	for i, collection := range collections {
+		names[i] = collection.CollectionName()
+	}
+	return names
 }
 
 func memoryAuthRequired(apiKey string, oauthEnabled, allowInsecure bool) bool {

@@ -5,10 +5,18 @@ import (
 	"math"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
+
+const (
+	defaultEmbedModelID       = "intfloat/multilingual-e5-small"
+	defaultEmbedModelRevision = "614241f622f53c4eeff9890bdc4f31cfecc418b3"
+)
+
+var immutableModelRevisionPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 
 type Config struct {
 	// Server
@@ -22,7 +30,10 @@ type Config struct {
 	QdrantURL string
 
 	// Embeddings
-	EmbedURL string
+	EmbedURL                       string
+	EmbedModelID                   string
+	EmbedModelRevision             string
+	AdoptExistingEmbeddingIdentity bool
 
 	// Memory
 	MemoryUser             string
@@ -114,6 +125,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	adoptExistingEmbeddingIdentity, err := envBool("ADOPT_EXISTING_EMBEDDING_IDENTITY")
+	if err != nil {
+		return nil, err
+	}
 	ragChunkMaxBytes, err := envInt("RAG_CHUNK_MAX_BYTES", 1500)
 	if err != nil {
 		return nil, err
@@ -136,8 +151,11 @@ func Load() (*Config, error) {
 		APIKey:            os.Getenv("API_KEY"),
 		AllowInsecureAuth: allowInsecureAuth,
 
-		QdrantURL: envOrDefault("QDRANT_URL", "http://memory-qdrant:6333"),
-		EmbedURL:  envOrDefault("EMBED_URL", "http://memory-embeddings:80"),
+		QdrantURL:                      envOrDefault("QDRANT_URL", "http://memory-qdrant:6333"),
+		EmbedURL:                       envOrDefault("EMBED_URL", "http://memory-embeddings:80"),
+		EmbedModelID:                   envOrDefault("EMBED_MODEL", defaultEmbedModelID),
+		EmbedModelRevision:             envOrDefault("EMBED_MODEL_REVISION", defaultEmbedModelRevision),
+		AdoptExistingEmbeddingIdentity: adoptExistingEmbeddingIdentity,
 
 		MemoryUser:             envOrDefault("MEMORY_USER", "claude"),
 		CacheTTL:               cacheTTL,
@@ -185,6 +203,10 @@ func LoadIndexer() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	adoptExistingEmbeddingIdentity, err := envBool("ADOPT_EXISTING_EMBEDDING_IDENTITY")
+	if err != nil {
+		return nil, err
+	}
 	ragChunkMaxBytes, err := envInt("RAG_CHUNK_MAX_BYTES", 1500)
 	if err != nil {
 		return nil, err
@@ -203,16 +225,19 @@ func LoadIndexer() (*Config, error) {
 	}
 
 	cfg := &Config{
-		QdrantURL:            envOrDefault("QDRANT_URL", "http://memory-qdrant:6333"),
-		EmbedURL:             envOrDefault("EMBED_URL", "http://memory-embeddings:80"),
-		EnableRAG:            enableRAG,
-		RAGDocumentsDir:      envOrDefault("RAG_DOCUMENTS_DIR", "/root/documents/personal"),
-		RAGChunkMaxBytes:     ragChunkMaxBytes,
-		RAGFolderTopK:        ragFolderTopK,
-		RAGFolderThreshold:   ragFolderThreshold,
-		RAGCollectionChunks:  envOrDefault("RAG_COLLECTION_CHUNKS", "doc_chunks"),
-		RAGCollectionFolders: envOrDefault("RAG_COLLECTION_FOLDERS", "doc_folders"),
-		RAGReindexInterval:   ragReindexInterval,
+		QdrantURL:                      envOrDefault("QDRANT_URL", "http://memory-qdrant:6333"),
+		EmbedURL:                       envOrDefault("EMBED_URL", "http://memory-embeddings:80"),
+		EmbedModelID:                   envOrDefault("EMBED_MODEL", defaultEmbedModelID),
+		EmbedModelRevision:             envOrDefault("EMBED_MODEL_REVISION", defaultEmbedModelRevision),
+		AdoptExistingEmbeddingIdentity: adoptExistingEmbeddingIdentity,
+		EnableRAG:                      enableRAG,
+		RAGDocumentsDir:                envOrDefault("RAG_DOCUMENTS_DIR", "/root/documents/personal"),
+		RAGChunkMaxBytes:               ragChunkMaxBytes,
+		RAGFolderTopK:                  ragFolderTopK,
+		RAGFolderThreshold:             ragFolderThreshold,
+		RAGCollectionChunks:            envOrDefault("RAG_COLLECTION_CHUNKS", "doc_chunks"),
+		RAGCollectionFolders:           envOrDefault("RAG_COLLECTION_FOLDERS", "doc_folders"),
+		RAGReindexInterval:             ragReindexInterval,
 	}
 	if err := cfg.ValidateIndexer(); err != nil {
 		return nil, err
@@ -341,6 +366,12 @@ func (c *Config) validateIndexerSettings(requireEnabled bool) error {
 		if err := validateHTTPURL(name, raw); err != nil {
 			return err
 		}
+	}
+	if strings.TrimSpace(c.EmbedModelID) == "" {
+		return fmt.Errorf("EMBED_MODEL cannot be empty")
+	}
+	if !immutableModelRevisionPattern.MatchString(c.EmbedModelRevision) {
+		return fmt.Errorf("EMBED_MODEL_REVISION must be an immutable 40-character hexadecimal commit")
 	}
 	if requireEnabled && !c.EnableRAG {
 		return fmt.Errorf("ENABLE_RAG must be true for the standalone indexer")

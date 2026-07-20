@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>План реализации: fail-closed embedding model identity</title>
+  <style>
+    :root { --bg:#f4f6f8; --panel:#fff; --text:#18212f; --muted:#5e6878; --line:#d9dee7; --code:#eef1f5; --accent:#175cd3; --warn:#b54708; --ok:#067647; --risk:#b42318; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); line-height:1.55; }
+    main { max-width:1160px; margin:0 auto; padding:32px 24px 64px; }
+    section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:22px; margin:16px 0; }
+    h1,h2,h3 { line-height:1.25; margin-top:0; } h1 { margin-bottom:8px; } h2 { font-size:21px; } h3 { font-size:16px; margin-top:22px; }
+    p { margin:8px 0; } ul,ol { padding-left:25px; } li { margin:7px 0; }
+    code { background:var(--code); padding:2px 5px; border-radius:4px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.93em; }
+    pre { padding:14px; border-radius:8px; overflow-x:auto; background:#111827; color:#f9fafb; } pre code { padding:0; background:transparent; color:inherit; }
+    table { width:100%; border-collapse:collapse; margin-top:12px; } th,td { border:1px solid var(--line); padding:9px; text-align:left; vertical-align:top; } th { background:#f1f3f6; }
+    .meta,.small { color:var(--muted); } .small { font-size:.92em; }
+    .badge { display:inline-block; padding:4px 10px; margin-right:6px; border-radius:999px; font-size:12px; font-weight:700; background:#fef0c7; color:var(--warn); }
+    .callout { border-left:4px solid var(--accent); } .risk { border-left:4px solid var(--risk); } .approval { border-left:4px solid var(--warn); } .done { border-left:4px solid var(--ok); }
+    .checklist { list-style:none; padding-left:0; } .checklist li::before { content:"☐"; margin-right:8px; color:var(--accent); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Fail-closed embedding model identity</h1>
+  <p><span class="badge" style="background:#d1fadf;color:#067647">Реализовано локально</span> Issue #15 · один план, без отдельной спецификации</p>
+  <p class="meta">Создано 2026-07-20. План основан на <code>origin/main@20e06ee</code> и read-only проверке production.</p>
+
+  <section>
+    <h2>1. Цель и границы</h2>
+    <p><strong>Цель:</strong> перед обслуживанием MCP-запросов доказать, что TEI использует тот же immutable model identity, которым были созданы vectors в каждой Qdrant collection.</p>
+    <p><strong>Архитектура:</strong> сервер получает фактический identity через TEI <code>/info</code>, сверяет его с закреплёнными <code>EMBED_MODEL</code>/<code>EMBED_MODEL_REVISION</code>, затем сравнивает canonical identity с metadata collections <code>memory</code>, <code>doc_chunks</code> и <code>doc_folders</code>. Проверка выполняется до HTTP listener, recall worker и RAG scheduler.</p>
+    <p><strong>Стек:</strong> Go, TEI HTTP API, Qdrant REST collection metadata (Qdrant 1.16+), Docker Compose.</p>
+    <h3>В scope</h3>
+    <ul>
+      <li>TEI <code>/info</code> client и strict expected-identity validation.</li>
+      <li>Чтение, создание и patch Qdrant collection metadata.</li>
+      <li>Двухфазная проверка всех активных collections до любых metadata writes.</li>
+      <li>Явная одноразовая adoption существующих non-empty collections.</li>
+      <li>Server и standalone indexer startup guard.</li>
+      <li>README, Compose, unit/HTTP-contract tests, controlled production rollout и rollback.</li>
+    </ul>
+    <h3>Вне scope</h3>
+    <ul>
+      <li>Автоматический re-embedding при mismatch.</li>
+      <li>Смена embedding-модели, pooling, dtype или vector dimension.</li>
+      <li>Изменение пользовательских point payloads или IDs.</li>
+      <li>Рестарт shared Qdrant/Traefik/Authentik.</li>
+    </ul>
+  </section>
+
+  <section class="done">
+    <h2>2. Проверенное production-состояние</h2>
+    <table>
+      <thead><tr><th>Проверка</th><th>Результат</th><th>Вывод</th></tr></thead>
+      <tbody>
+        <tr><td>Application</td><td><code>sha-20e06ee</code>, up 9h, restart count 0, health <code>ok</code></td><td>Текущий deploy стабилен.</td></tr>
+        <tr><td>RAG</td><td>Первый проход завершил 1 990 файлов; 12 последующих runs завершились с <code>dirty_folders=0</code></td><td>Длительная индексация после deploy закончена.</td></tr>
+        <tr><td>Qdrant</td><td>1.17.0; <code>memory=556</code>, <code>doc_chunks=78064</code>; collections green</td><td>Native collection metadata доступна.</td></tr>
+        <tr><td>TEI image</td><td>Текущий mutable tag уже разрешается в закреплённый repo digest <code>492506e6…</code></td><td>Замена tag на digest не меняет image bytes.</td></tr>
+        <tr><td>Model cache</td><td><code>refs/main → 614241f622f53c4eeff9890bdc4f31cfecc418b3</code></td><td>Совпадает с закреплённым revision в Compose; re-embedding не нужен.</td></tr>
+        <tr><td>TEI API</td><td><code>model_id=intfloat/multilingual-e5-small</code>, но <code>model_sha=main</code></td><td>Перед adoption TEI надо перезапустить с exact revision, иначе guard обязан отказать.</td></tr>
+      </tbody>
+    </table>
+    <p class="small">Одна строка попала в широкий grep из-за текста document path, но имела level INFO; фактических WARN/ERROR после завершения RAG не обнаружено.</p>
+  </section>
+
+  <section>
+    <h2>3. Текущее и целевое поведение</h2>
+    <table>
+      <thead><tr><th>Сценарий</th><th>Сейчас</th><th>После изменения</th></tr></thead>
+      <tbody>
+        <tr><td>TEI revision изменился, dimension прежний</td><td>Сервис стартует и смешивает несовместимые vectors.</td><td>Startup завершается ошибкой до listener и background workers.</td></tr>
+        <tr><td>Новая empty collection</td><td>Создаётся только с dimension/distance.</td><td>Создаётся атомарно с canonical embedding metadata.</td></tr>
+        <tr><td>Existing non-empty collection без metadata</td><td>Никакой проверки.</td><td>Fail closed; запись разрешена только одноразовым explicit adoption flag.</td></tr>
+        <tr><td>Existing collection с другим identity</td><td>Никакой проверки.</td><td>Всегда fail closed; adoption flag mismatch не обходит.</td></tr>
+        <tr><td>Standalone indexer</td><td>Может писать vectors независимо от server startup.</td><td>Использует тот же identity guard.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="callout">
+    <h2>4. Canonical identity и metadata contract</h2>
+    <p>В metadata каждой collection хранится один namespaced ключ <code>personal_memory.embedding</code>:</p>
+    <pre><code>{
+  "schema_version": 1,
+  "provider": "tei",
+  "model_id": "intfloat/multilingual-e5-small",
+  "model_revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+  "model_dtype": "float32",
+  "pooling": "mean",
+  "vector_size": 384
+}</code></pre>
+    <ul>
+      <li><code>EMBED_MODEL</code> обязателен после defaulting и должен точно совпасть с TEI <code>model_id</code>.</li>
+      <li><code>EMBED_MODEL_REVISION</code> должен быть 40-символьным hexadecimal Hub commit и точно совпасть с TEI <code>model_sha</code>.</li>
+      <li><code>model_dtype</code>, <code>pooling</code> и фактический <code>vector_size</code> входят в equality contract.</li>
+      <li>TEI build version остаётся diagnostic field в логах, но не входит в vector-space identity: обновление runtime допустимо только если model contract неизменен.</li>
+      <li>Metadata не добавляется в пользовательские points и поэтому не влияет на search, scroll, export или visualization.</li>
+    </ul>
+    <p>Qdrant официально поддерживает collection metadata начиная с 1.16; production работает на 1.17.0. Код возвращает понятную compatibility error, если metadata API недоступна.</p>
+  </section>
+
+  <section>
+    <h2>5. Файловая карта</h2>
+    <table>
+      <thead><tr><th>Файл</th><th>Ответственность изменения</th></tr></thead>
+      <tbody>
+        <tr><td><code>internal/embeddings/client.go</code>, <code>client_test.go</code></td><td>Typed <code>/info</code> contract, bounded response/status/JSON validation.</td></tr>
+        <tr><td><code>internal/qdrant/client.go</code>, <code>client_test.go</code></td><td>Collection inspection, approximate statistics, exact point count, vector size/metadata, create-with-metadata и metadata patch.</td></tr>
+        <tr><td><code>internal/embeddingidentity/identity.go</code></td><td>Canonical record, TEI verification, двухфазный collection preflight/adoption.</td></tr>
+        <tr><td><code>internal/embeddingidentity/identity_test.go</code></td><td>Fail-closed matrix и отсутствие partial writes при preflight failure.</td></tr>
+        <tr><td><code>internal/config/config.go</code>, <code>config_test.go</code></td><td>Expected model/revision и explicit adoption flag в server/indexer contracts.</td></tr>
+        <tr><td><code>cmd/server/main.go</code>, <code>main_test.go</code></td><td>Guard до workers/listener; один target list для enabled collections.</td></tr>
+        <tr><td><code>cmd/indexer/main.go</code></td><td>Тот же guard до RAG writes.</td></tr>
+        <tr><td><code>internal/memory/server.go</code></td><td>Удалить старый <code>InitCollection</code>, который проверяет только dimension.</td></tr>
+        <tr><td><code>internal/rag/server.go</code>, tests</td><td>Оставить создание payload indexes; collection lifecycle переносится в identity guard.</td></tr>
+        <tr><td><code>docker-compose.yml</code>, <code>.env.example</code></td><td>Передать один expected identity обоим контейнерам и добавить default-false adoption flag.</td></tr>
+        <tr><td><code>README.md</code></td><td>Identity contract, bootstrap, mismatch, controlled model upgrade и Qdrant 1.16+.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>6. Последовательный TDD-план</h2>
+
+    <h3>Task 1 — TEI identity API</h3>
+    <ol class="checklist">
+      <li>Добавить failing HTTP tests: 200 response, non-2xx, oversized body, malformed JSON и пустые identity fields.</li>
+      <li>Реализовать typed response:</li>
+    </ol>
+    <pre><code>type ModelInfo struct {
+    ModelID    string `json:"model_id"`
+    ModelSHA   string `json:"model_sha"`
+    ModelDType string `json:"model_dtype"`
+    ModelType  struct {
+        Embedding struct { Pooling string `json:"pooling"` } `json:"embedding"`
+    } `json:"model_type"`
+    Version string `json:"version"`
+}
+
+func (c *Client) Info(ctx context.Context) (ModelInfo, error)</code></pre>
+    <ol class="checklist" start="3">
+      <li>Запустить <code>go test ./internal/embeddings -count=1</code>; ожидается PASS.</li>
+    </ol>
+
+    <h3>Task 2 — Qdrant collection metadata client</h3>
+    <ol class="checklist">
+      <li>Добавить tests для existing/missing collection, exact <code>uint64</code> points count, unnamed dense vector size, nested metadata, create body и PATCH body.</li>
+      <li>Реализовать API без изменения point APIs:</li>
+    </ol>
+    <pre><code>type CollectionInfo struct {
+    Exists     bool
+    Points     uint64
+    VectorSize int
+    Metadata   map[string]any
+}
+
+func (c *Client) CollectionInfo(ctx context.Context) (CollectionInfo, error)
+func (c *Client) ExactCount(ctx context.Context) (uint64, error)
+func (c *Client) CreateCollection(ctx context.Context, vectorSize int, metadata map[string]any) error
+func (c *Client) UpdateCollectionMetadata(ctx context.Context, metadata map[string]any) error
+func (c *Client) CollectionName() string</code></pre>
+    <ol class="checklist" start="3">
+      <li><code>CreateCollection</code> отправляет metadata в <code>PUT /collections/{name}</code>; update отправляет namespaced key в <code>PATCH /collections/{name}</code>.</li>
+      <li>Запустить <code>go test ./internal/qdrant -count=1</code>; ожидается PASS.</li>
+    </ol>
+
+    <h3>Task 3 — Fail-closed identity coordinator</h3>
+    <ol class="checklist">
+      <li>Создать table-driven tests для: new collection; empty legacy collection; non-empty missing metadata без/с adoption; exact match; model/revision/dtype/pooling/size mismatch; malformed metadata; второй target failure без writes в первый.</li>
+      <li>Реализовать canonical types и API:</li>
+    </ol>
+    <pre><code>const MetadataKey = "personal_memory.embedding"
+
+type Expected struct { ModelID, ModelRevision string }
+type Record struct {
+    SchemaVersion int    `json:"schema_version"`
+    Provider      string `json:"provider"`
+    ModelID       string `json:"model_id"`
+    ModelRevision string `json:"model_revision"`
+    ModelDType    string `json:"model_dtype"`
+    Pooling       string `json:"pooling"`
+    VectorSize    int    `json:"vector_size"`
+}
+
+func Ensure(ctx context.Context, embed *embeddings.Client,
+    collections []*qdrant.Client, expected Expected, adoptExisting bool) (Record, error)</code></pre>
+    <ol class="checklist" start="3">
+      <li>Phase A не пишет: TEI info → exact expected comparison → probe embed → inspect всех targets → exact count для legacy collection без metadata → validate sizes/metadata/adoption eligibility.</li>
+      <li>Phase B выполняется только после успешного полного preflight: создаёт missing collections с metadata; empty legacy обновляет автоматически; non-empty legacy обновляет только при <code>adoptExisting=true</code>.</li>
+      <li>Любой existing metadata mismatch возвращает collection name, stored/active identity и инструкцию восстановить прежний model revision либо re-embed в новые collections; adoption flag игнорируется.</li>
+      <li>Запустить <code>go test ./internal/embeddingidentity -count=1</code>; ожидается PASS.</li>
+    </ol>
+
+    <h3>Task 4 — Configuration contract</h3>
+    <ol class="checklist">
+      <li>Добавить <code>EmbedModelID</code>, <code>EmbedModelRevision</code>, <code>AdoptExistingEmbeddingIdentity</code> в <code>Config</code>.</li>
+      <li>Default model/revision совпадает с checked-in Compose; revision validation: <code>^[0-9a-fA-F]{40}$</code>.</li>
+      <li><code>LoadIndexer</code> читает только embedding/RAG settings и adoption flag, продолжая игнорировать auth/Todoist/Viz.</li>
+      <li>Tests: missing/blank ID, <code>main</code>, short/non-hex revision, malformed flag, valid pinned revision.</li>
+      <li>Запустить <code>go test ./internal/config -count=1</code>; ожидается PASS.</li>
+    </ol>
+
+    <h3>Task 5 — Startup integration</h3>
+    <ol class="checklist">
+      <li>В server сначала создать clients и target list: всегда <code>memory</code>, плюс chunk/folder collections только при <code>ENABLE_RAG=true</code>.</li>
+      <li>Вызвать <code>embeddingidentity.Ensure</code> до <code>memSrv.Start</code>, MCP registration, RAG scheduler, backup loop и <code>ListenAndServe</code>.</li>
+      <li>Удалить <code>memory.Server.InitCollection</code>; в RAG заменить <code>EnsureCollections</code> на <code>EnsureIndexes</code>, чтобы lifecycle collection имел одного владельца.</li>
+      <li>Standalone indexer вызывает тот же coordinator до payload indexes и index writes.</li>
+      <li>Добавить startup-order unit test через extracted <code>embeddingCollections(cfg)</code> и coordinator fakes.</li>
+      <li>Запустить <code>go test ./cmd/server ./internal/memory ./internal/rag ./cmd/indexer -count=1</code>; ожидается PASS.</li>
+    </ol>
+
+    <h3>Task 6 — Compose и документация</h3>
+    <ol class="checklist">
+      <li>Передать одинаковые значения TEI и app:</li>
+    </ol>
+    <pre><code>memory-embeddings:
+  command: --model-id ${EMBED_MODEL:-intfloat/multilingual-e5-small}
+           --revision ${EMBED_MODEL_REVISION:-614241f622f53c4eeff9890bdc4f31cfecc418b3}
+
+memory-mcp:
+  environment:
+    - EMBED_MODEL=${EMBED_MODEL:-intfloat/multilingual-e5-small}
+    - EMBED_MODEL_REVISION=${EMBED_MODEL_REVISION:-614241f622f53c4eeff9890bdc4f31cfecc418b3}
+    - ADOPT_EXISTING_EMBEDDING_IDENTITY=${ADOPT_EXISTING_EMBEDDING_IDENTITY:-false}</code></pre>
+    <ol class="checklist" start="2">
+      <li>README описывает Qdrant 1.16+, first adoption, normal startup, mismatch recovery и правило: никогда не использовать adoption для mismatch.</li>
+      <li>Controlled model upgrade: snapshot/export → новые/re-embedded collections → переключение конфигурации → verification; существующие vectors не переиспользуются.</li>
+      <li>Проверить <code>docker compose config --quiet</code> с безопасными dummy env values.</li>
+    </ol>
+
+    <h3>Task 7 — Полная verification</h3>
+    <ol class="checklist">
+      <li><code>gofmt</code> всех изменённых Go-файлов.</li>
+      <li><code>git diff --check</code>.</li>
+      <li><code>go test ./...</code>.</li>
+      <li><code>go test -race ./...</code>.</li>
+      <li><code>make test</code> для asset checksums, vet, tests и трёх binaries.</li>
+      <li>Просмотреть diff на случай обходного startup path и mutable <code>main</code> в runtime Compose.</li>
+    </ol>
+  </section>
+
+  <section class="risk">
+    <h2>7. Риски и меры</h2>
+    <table>
+      <thead><tr><th>Риск</th><th>Мера</th></tr></thead>
+      <tbody>
+        <tr><td>Partial adoption нескольких collections</td><td>Полный read-only preflight до первой записи; повтор после сетевого сбоя идемпотентен.</td></tr>
+        <tr><td>Оператор привязал existing vectors к неправильной модели</td><td>Flag работает только при missing metadata; rollout дополнительно сравнивает текущий cache commit, image digest и TEI probe до/после restart.</td></tr>
+        <tr><td>Старый Qdrant не поддерживает metadata</td><td>Явное требование 1.16+ и понятная startup error; production уже 1.17.</td></tr>
+        <tr><td>Новый guard создаёт outage</td><td>Сначала pin TEI без смены bytes/revision, затем one-shot adoption; старый app image и configs сохраняются заранее.</td></tr>
+        <tr><td>Standalone indexer обходит guard</td><td>Он использует тот же package и expected identity config.</td></tr>
+        <tr><td>Будущий model upgrade блокирует сервис</td><td>Это намеренное fail-closed поведение; документация требует re-embedding, а не override metadata.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>8. Production rollout после merge</h2>
+    <ol>
+      <li>Проверить успешный CI image с immutable <code>sha-&lt;commit&gt;</code>.</li>
+      <li>Снять counts/status и snapshots отдельно для <code>memory</code>, <code>doc_chunks</code>, <code>doc_folders</code>; сохранить текущие app/compose/env rollback copies.</li>
+      <li>Хешировать deterministic TEI probe response; подтвердить current image digest <code>492506e6…</code> и cache commit <code>614241f…</code>.</li>
+      <li>Обновить production Compose: заменить TEI tag на уже используемый exact digest и <code>main</code> на уже загруженный exact commit; app пока не менять.</li>
+      <li>Пересоздать только TEI, проверить <code>/info</code> и exact probe hash. При любом отличии вернуть старую command и остановить rollout.</li>
+      <li>Добавить <code>ADOPT_EXISTING_EMBEDDING_IDENTITY=true</code>, запустить новый app image, проверить логи успешной привязки всех трёх collections.</li>
+      <li>Проверить health, unauth/auth MCP, Viz proxy boundary, fact/document search, counts, restart count и WARN/ERROR.</li>
+      <li>Удалить one-shot flag либо поставить <code>false</code>, пересоздать только app и убедиться, что обычная strict verification проходит.</li>
+      <li>Закрыть issue #15 только после production-проверки и обновить её ссылкой на PR/deploy result.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>9. Rollback</h2>
+    <ul>
+      <li>Вернуть предыдущий immutable app image и сохранённый Compose; metadata безопасно оставить — старый app её игнорирует.</li>
+      <li>Если TEI probe изменился, вернуть прежнюю command <code>revision main</code> и тот же cached ref; не запускать writes новым app.</li>
+      <li>Collection metadata update не меняет points/vectors. Snapshots нужны как дополнительная страховка, restore выполняется только при доказанном повреждении данных и отдельном разрешении.</li>
+      <li>Не удалять collections, volumes, snapshots и не запускать reindex автоматически при rollback.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>10. Manual QA checklist</h2>
+    <ul class="checklist">
+      <li>Exact identity: server/indexer стартуют.</li>
+      <li>Изменённый model revision: server не открывает порт и называет проблемную collection.</li>
+      <li>Missing metadata + non-empty + flag false: fail closed без metadata writes.</li>
+      <li>Missing metadata + non-empty + flag true: все collections получают одинаковый record.</li>
+      <li>Повторный старт flag false: strict match проходит.</li>
+      <li>Mismatch + flag true: всё равно fail closed.</li>
+      <li>RAG disabled: проверяется только <code>memory</code>.</li>
+      <li>Todoist disabled: identity change не регистрирует Todoist route.</li>
+      <li>Facts/chunks counts не меняются от adoption.</li>
+      <li>Direct Viz без proxy secret остаётся 401.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>11. Допущения и открытые вопросы</h2>
+    <ul>
+      <li>Выбрано: Qdrant collection metadata, а не служебные points или отдельная metadata collection.</li>
+      <li>Выбрано: Hub commit строго 40 hex; mutable branch/tag не поддерживается для persistent vector collections.</li>
+      <li>Выбрано: one-shot adoption — единственный override и только для отсутствующей metadata; mismatch не overrideable.</li>
+      <li>Открытых продуктовых решений, блокирующих реализацию, нет.</li>
+    </ul>
+  </section>
+
+  <section class="approval">
+    <h2>12. Approval gate</h2>
+    <p><strong>Одобрено пользователем 2026-07-20; локальная реализация завершена в ветке <code>codex/embedding-model-identity</code>.</strong></p>
+    <p>Commit/push/PR выполняются после выбора способа завершения ветки. Production rollout остаётся отдельным шагом после merge.</p>
+  </section>
+
+  <section class="done">
+    <h2>13. Фактическая реализация и проверки</h2>
+    <h3>Что изменено</h3>
+    <ul>
+      <li>Добавлены strict configuration defaults и validation для immutable model ID/revision и one-shot adoption flag.</li>
+      <li>TEI client читает bounded typed <code>/info</code>; startup сверяет model ID, exact revision, dtype, pooling и размер probe vector.</li>
+      <li>Qdrant client поддерживает collection metadata и отдельный <code>POST /points/count</code> с <code>exact=true</code>. При legacy adoption approximate <code>points_count</code> не используется как safety signal.</li>
+      <li>Новый coordinator сначала полностью проверяет все активные collections без записей, затем создаёт или привязывает metadata и повторно читает её для подтверждения persistence.</li>
+      <li>Server и standalone indexer используют один guard; прежние независимые paths создания collections удалены, RAG оставляет только payload indexes.</li>
+      <li>Compose, example env, README и maintainer docs обновлены под новый operational contract.</li>
+    </ul>
+    <h3>Выполненные проверки</h3>
+    <ul>
+      <li><code>go test ./... -count=1</code> — PASS.</li>
+      <li><code>go test -race ./... -count=1</code> — PASS.</li>
+      <li><code>make test</code> — PASS: vendor asset checksums, <code>go vet</code>, tests и сборка трёх binaries.</li>
+      <li><code>docker compose config --quiet</code> с temporary dummy env — PASS.</li>
+      <li><code>git diff --check</code> — PASS.</li>
+      <li>Два независимых финальных review не нашли других P0/P1/P2; найденный P1 про approximate point count исправлен exact count и regression test.</li>
+    </ul>
+    <h3>Ограничения и дальнейшие действия</h3>
+    <ul>
+      <li>Production пока не изменялся; issue закрывается только после merge и controlled rollout из раздела 8.</li>
+      <li>Первый production startup нового image намеренно потребует одноразовый adoption flag для уже заполненных collections.</li>
+      <li>Автоматический re-embedding остаётся вне scope: любой настоящий identity mismatch блокирует startup.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

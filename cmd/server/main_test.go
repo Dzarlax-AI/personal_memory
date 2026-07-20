@@ -5,9 +5,46 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
+
+	"github.com/Dzarlax-AI/personal-memory/internal/config"
 )
+
+func TestNewEmbeddingCollectionsFollowsRAGFeatureGate(t *testing.T) {
+	tests := []struct {
+		name      string
+		enableRAG bool
+		want      []string
+	}{
+		{name: "memory only", want: []string{"memory"}},
+		{name: "memory and RAG", enableRAG: true, want: []string{"memory", "custom_chunks", "custom_folders"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				QdrantURL:            "http://qdrant.test",
+				EnableRAG:            tt.enableRAG,
+				RAGCollectionChunks:  "custom_chunks",
+				RAGCollectionFolders: "custom_folders",
+			}
+			memoryClient, chunksClient, foldersClient, all := newEmbeddingCollections(cfg)
+			if memoryClient == nil {
+				t.Fatal("memory client is nil")
+			}
+			if !tt.enableRAG && (chunksClient != nil || foldersClient != nil) {
+				t.Fatal("disabled RAG created document collection clients")
+			}
+			if tt.enableRAG && (chunksClient == nil || foldersClient == nil) {
+				t.Fatal("enabled RAG did not create document collection clients")
+			}
+			if got := collectionNames(all); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("collection names = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestShutdownHTTPServerWaitsForActiveRequest(t *testing.T) {
 	started := make(chan struct{})
