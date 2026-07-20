@@ -556,6 +556,64 @@ func TestDocumentRefreshWaiterHonorsCancellation(t *testing.T) {
 	}
 }
 
+func TestDocumentRefreshOwnerCancellationDoesNotPoisonWaiter(t *testing.T) {
+	var scanCalls atomic.Int32
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scanCalls.Add(1)
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		mustWriteTestResponse(t, w, `{"result":{"points":[],"next_page_offset":null}}`)
+	}))
+	defer backend.Close()
+
+	h := NewHandler(nil, 0.65).WithDocumentRAG(qdrant.NewClient(backend.URL, "doc_chunks"), "/srv/documents")
+	ownerCtx, cancelOwner := context.WithCancel(context.Background())
+	ownerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		rr := httptest.NewRecorder()
+		h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/documents", nil).WithContext(ownerCtx))
+		ownerDone <- rr
+	}()
+	<-started
+
+	waiterDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		rr := httptest.NewRecorder()
+		h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/documents", nil))
+		waiterDone <- rr
+	}()
+	cancelOwner()
+	select {
+	case owner := <-ownerDone:
+		if owner.Code != http.StatusRequestTimeout {
+			t.Fatalf("canceled owner status = %d (%s), want 408", owner.Code, owner.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled refresh owner did not return promptly")
+	}
+
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case waiter := <-waiterDone:
+		if waiter.Code != http.StatusOK {
+			t.Fatalf("live waiter status = %d (%s), want 200", waiter.Code, waiter.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("live waiter did not receive the shared refresh")
+	}
+	if got := scanCalls.Load(); got != 1 {
+		t.Fatalf("document scans = %d, want one shared scan", got)
+	}
+}
+
 func TestBackendErrorsAreGeneric(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "GET http://qdrant.private:6333 failed: internal storage detail", http.StatusInternalServerError)
@@ -944,6 +1002,10 @@ func TestStaticUIContractsForLazyLoadingAccessibilityAndResilience(t *testing.T)
 	require(t, graph, "pendingTagSaves")
 	require(t, graph, "pendingTagSaves.has(fact.id)")
 	require(t, graph, "saveFailureMessage")
+	require(t, graph, "syncCachedFactTags")
+	require(t, graph, "(factsData?.nodes || []).forEach(update)")
+	require(t, graph, "(graphDataCache?.nodes || []).forEach(update)")
+	require(t, graph, "id === 'tag-filter' ? 'input' : 'change'")
 	require(t, graph, "graphAbortController")
 	require(t, graph, "graphAbortController.abort()")
 	require(t, graph, "request !== graphRequest")
@@ -1001,6 +1063,7 @@ func TestStaticUIContractsForLazyLoadingAccessibilityAndResilience(t *testing.T)
 	css := read(t, "assets/styles.css")
 	require(t, css, "@media (max-width: 390px)")
 	require(t, css, ":focus-visible")
+	require(t, css, "clip-path: inset(50%)")
 	require(t, css, "prefers-reduced-motion")
 	require(t, css, "#graph-view { overflow-y: auto; }")
 	require(t, css, "grid-template-rows: repeat(7, 16px)")

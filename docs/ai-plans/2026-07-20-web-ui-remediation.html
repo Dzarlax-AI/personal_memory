@@ -207,6 +207,7 @@
       <li>Tabs, labels, headings, treemap controls, folder expanders, live regions, focus behavior, and legacy-tag filter mapping were made semantic and keyboard operable.</li>
       <li>Responsive rules now prevent page-level horizontal overflow at 390 px. Mobile cards stack, Graph remains scrollable, long paths wrap, and Timeline receives an internal scroll surface.</li>
       <li>The Activity visualization is a full-width, UTC-aligned seven-row calendar heatmap with complete weeks and accessible daily labels.</li>
+      <li>PR review follow-up detached shared document scans from an individual request, synchronized fact-summary caches after tag edits, made tag search react to typing, and modernized the screen-reader-only clipping utility.</li>
     </ul>
   </section>
 
@@ -222,6 +223,7 @@
       <li>Independent backend and frontend quality reviews — passed with no remaining P0–P3 findings.</li>
       <li>Local browser QA at 1280×720 and 390×844 covered Overview, Activity, Graph, graph detail, Documents, lazy folder expansion, responsive containment, DOM bounds, and console output.</li>
       <li>The final mobile Documents check confirmed 312 items, 50 bounded folder controls, zero eagerly rendered file rows, a 390 px page width with no horizontal overflow, a working forced refresh, and no browser warnings or errors.</li>
+      <li>Review follow-up verification repeated the owner-cancellation regression 20 times, reran the full Go suite and race detector, rebuilt all binaries, checked every dashboard script, and confirmed a clean diff.</li>
     </ul>
   </section>
 

@@ -898,6 +898,10 @@ func (h *Handler) apiDocuments(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "RAG not enabled", http.StatusNotFound)
 		return
 	}
+	if err := r.Context().Err(); err != nil {
+		writeDocumentsError(w, err)
+		return
+	}
 	// refresh=1 explicitly bypasses a fresh inventory cache. Forced refreshes
 	// still join any scan already in flight and replace the cache only after a
 	// successful, non-canceled scan.
@@ -936,19 +940,31 @@ func (h *Handler) apiDocuments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.buildDocumentsResponse(r.Context())
-	if err != nil {
-		h.finishDocumentsRefresh(refresh, nil, err)
-		writeDocumentsError(w, err)
-		return
+	// The inventory belongs to the shared refresh, not to whichever request won
+	// ownership. Keep request values for tracing, but detach cancellation so one
+	// disconnected owner cannot poison every coalesced waiter. Each caller still
+	// waits using its own request context below, while the scan remains bounded.
+	scanCtx, cancelScan := context.WithTimeout(context.WithoutCancel(r.Context()), vizComputationTimeout)
+	go func() {
+		defer cancelScan()
+		resp, err := h.buildDocumentsResponse(scanCtx)
+		h.finishDocumentsRefresh(refresh, resp, err)
+	}()
+
+	select {
+	case <-refresh.done:
+		if refresh.err != nil {
+			writeDocumentsError(w, refresh.err)
+			return
+		}
+		if cached, ok := h.cachedDocuments(); ok {
+			writeJSON(w, cached)
+			return
+		}
+		writeInternalError(w, "unable to load documents")
+	case <-r.Context().Done():
+		writeDocumentsError(w, r.Context().Err())
 	}
-	if err := r.Context().Err(); err != nil {
-		h.finishDocumentsRefresh(refresh, nil, err)
-		writeDocumentsError(w, err)
-		return
-	}
-	published := h.finishDocumentsRefresh(refresh, resp, nil)
-	writeJSON(w, published)
 }
 
 func (h *Handler) buildDocumentsResponse(ctx context.Context) (*documentsResponse, error) {

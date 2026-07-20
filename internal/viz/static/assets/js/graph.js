@@ -228,6 +228,25 @@ function renderDetail(fact) {
   payloadDetails.style.display = keys.length ? '' : 'none';
 }
 
+function syncCachedFactTags(id, tags, primaryTagValue) {
+  const factID = String(id);
+  const update = node => {
+    if (String(node.id) !== factID) return;
+    node.tags = [...tags];
+    node.primary_tag = primaryTagValue;
+  };
+  (factsData?.nodes || []).forEach(update);
+  (graphDataCache?.nodes || []).forEach(update);
+
+  if (factsData?.nodes) renderTreemap(factsData.nodes);
+  if (graphDataCache?.nodes) {
+    const namespace = document.getElementById('ns-filter').value;
+    const selectedTag = graphFilter.projectTag || originalTagFilter(document.getElementById('tag-filter'));
+    populateTagFilter(factsData?.nodes || graphDataCache.nodes, namespace, selectedTag);
+    renderGraphVis(graphDataCache);
+  }
+}
+
 function hideDetail() {
   const panel = document.getElementById('detail-panel');
   if (!panel.classList.contains('visible')) return;
@@ -254,8 +273,11 @@ async function saveSelectedTags() {
     if (!res.ok) throw new Error(await responseMessage(res));
     const data = await res.json();
     saveSucceeded = true;
+    const savedTags = data.tags || tags;
+    const savedPrimaryTag = data.primary_tag || '';
+    syncCachedFactTags(factID, savedTags, savedPrimaryTag);
     if (selectedFact !== factAtSave || detailRequest !== detailAtSave) return;
-    factAtSave.tags = data.tags || tags; factAtSave.primary_tag = data.primary_tag || '';
+    factAtSave.tags = savedTags; factAtSave.primary_tag = savedPrimaryTag;
     renderDetail(factAtSave); status.textContent = 'Saved.';
   } catch (error) {
     saveFailureMessage = error.message || String(error);
@@ -280,4 +302,4 @@ document.getElementById('graph-results-more').addEventListener('click', () => { 
 document.getElementById('reset-graph-filters').addEventListener('click', () => { graphFilter = { namespace: '', projectTag: '', primaryTag: '', text: '' }; document.getElementById('ns-filter').value = ''; document.getElementById('tag-filter').value = ''; document.getElementById('text-filter').value = ''; document.getElementById('threshold').value = '0.85'; document.getElementById('threshold-val').textContent = '0.85'; graphLoaded = false; loadGraph(); });
 document.getElementById('threshold').addEventListener('input', event => { document.getElementById('threshold-val').textContent = event.target.value; });
 document.getElementById('threshold').addEventListener('change', () => { graphLoaded = false; loadGraph(); });
-['ns-filter', 'tag-filter', 'text-filter'].forEach(id => document.getElementById(id).addEventListener(id === 'tag-filter' ? 'change' : 'change', () => { graphFilter = { namespace: document.getElementById('ns-filter').value, projectTag: originalTagFilter(document.getElementById('tag-filter')), primaryTag: '', text: document.getElementById('text-filter').value }; graphLoaded = false; loadGraph(); }));
+['ns-filter', 'tag-filter', 'text-filter'].forEach(id => document.getElementById(id).addEventListener(id === 'tag-filter' ? 'input' : 'change', () => { graphFilter = { namespace: document.getElementById('ns-filter').value, projectTag: originalTagFilter(document.getElementById('tag-filter')), primaryTag: '', text: document.getElementById('text-filter').value }; graphLoaded = false; loadGraph(); }));
