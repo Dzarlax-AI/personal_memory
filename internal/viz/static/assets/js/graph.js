@@ -1,287 +1,305 @@
-// Graph tab: force-directed network of facts with similarity edges.
+// Graph tab: summaries drive the graph; selected details are fetched separately.
 
 let selectedFact = null;
+let graphLoaded = false;
+let graphPromise = null;
+let graphResultsShown = 50;
+let detailRequest = 0;
+let detailReturnFocus = null;
+const pendingTagSaves = new Set();
+let graphAbortController = null;
+let graphRequest = 0;
 
-async function loadGraph() {
-  const threshold = document.getElementById('threshold').value;
-  const selectedNamespace = graphFilter.namespace || document.getElementById('ns-filter').value;
-  const selectedTag = graphFilter.projectTag || document.getElementById('tag-filter').value;
-  const selectedPrimaryTag = graphFilter.primaryTag || '';
-  const selectedText = graphFilter.text || document.getElementById('text-filter').value;
-  try {
-    await loadFacts();
-  } catch (e) {
-    // The graph endpoint can still render without the lightweight filter source.
-  }
-  const params = new URLSearchParams({ threshold });
-  if (selectedNamespace) params.set('namespace', selectedNamespace);
-  if (selectedPrimaryTag) params.set('primary_tag', selectedPrimaryTag);
-  else if (selectedTag) params.set('tag', selectedTag);
-  if (selectedText) params.set('text', selectedText);
-  const res = await fetch(`${BASE}/api/graph?${params.toString()}`);
-  graphDataCache = await res.json();
+function resetGraphNetwork() {
+  if (network) network.destroy();
+  network = null;
+}
 
-  const filterNodes = factsData?.nodes || graphDataCache.nodes;
-  populateNsFilter(filterNodes, selectedNamespace);
-  populateTagFilter(filterNodes, selectedNamespace, selectedTag);
-  const tagLabel = document.getElementById('tag-filter-label');
-  if (selectedPrimaryTag) {
-    graphFilter.projectTag = '';
-    tagLabel.textContent = `primary: ${selectedPrimaryTag}`;
-    tagLabel.style.display = '';
-  } else if (selectedTag) {
-    graphFilter.projectTag = selectedTag;
-    tagLabel.textContent = `#${selectedTag}`;
-    tagLabel.style.display = '';
-  } else {
-    graphFilter.projectTag = '';
-    tagLabel.style.display = 'none';
-  }
-  graphFilter.text = selectedText;
-  renderGraphVis(graphDataCache);
+async function loadGraph(maxNodes = 1000) {
+  const request = ++graphRequest;
+  if (graphAbortController) graphAbortController.abort();
+  graphAbortController = new AbortController();
+  graphLoaded = false;
+  const requestFilter = { ...graphFilter };
+  const status = document.getElementById('graph-status');
+  const container = document.getElementById('graph-container');
+  resetGraphNetwork();
+  status.textContent = 'Loading graph…';
+  container.innerHTML = '<div class="loading"><div class="spinner"></div>Loading graph…</div>';
+  graphPromise = (async () => {
+    const threshold = document.getElementById('threshold').value;
+    const selectedNamespace = requestFilter.namespace || document.getElementById('ns-filter').value;
+    const selectedTag = requestFilter.projectTag || originalTagFilter(document.getElementById('tag-filter'));
+    const selectedPrimaryTag = requestFilter.primaryTag || '';
+    const selectedText = requestFilter.text || document.getElementById('text-filter').value;
+    try { await loadFacts(); } catch (_) { /* graph can still supply filters */ }
+    if (request !== graphRequest) return null;
+    const params = new URLSearchParams({ threshold, max_nodes: String(maxNodes) });
+    if (selectedNamespace) params.set('namespace', selectedNamespace);
+    if (selectedPrimaryTag) params.set('primary_tag', selectedPrimaryTag);
+    else if (selectedTag) params.set('tag', selectedTag);
+    if (selectedText) params.set('text', selectedText);
+    const res = await fetch(`${BASE}/api/graph?${params}`, { signal: graphAbortController.signal });
+    if (!res.ok) {
+      const error = new Error(await responseMessage(res));
+      error.status = res.status;
+      throw error;
+    }
+    const graphData = await res.json();
+    if (request !== graphRequest) return null;
+    graphDataCache = graphData;
+    const filterNodes = factsData?.nodes || graphDataCache.nodes || [];
+    populateNsFilter(filterNodes, selectedNamespace);
+    populateTagFilter(filterNodes, selectedNamespace, selectedTag);
+    const tagLabel = document.getElementById('tag-filter-label');
+    if (selectedPrimaryTag) {
+      graphFilter.projectTag = '';
+      tagLabel.textContent = `primary: ${normalizeTagDisplay(selectedPrimaryTag)}`;
+      tagLabel.style.display = '';
+    } else if (selectedTag) {
+      graphFilter.projectTag = selectedTag;
+      tagLabel.textContent = `#${normalizeTagDisplay(selectedTag)}`;
+      tagLabel.style.display = '';
+    } else {
+      graphFilter.projectTag = '';
+      tagLabel.style.display = 'none';
+    }
+    graphFilter.text = selectedText;
+    graphResultsShown = 50;
+    graphLoaded = true;
+    renderGraphVis(graphDataCache, request);
+    return graphDataCache;
+  })().catch(error => {
+    if (request !== graphRequest || error.name === 'AbortError') return null;
+    graphLoaded = false;
+    status.textContent = '';
+    const retryLimit = error.status === 422 && maxNodes < 5000 ? 5000 : maxNodes;
+    renderRetry(container, `Graph could not load: ${error.message || error}`, () => loadGraph(retryLimit));
+    if (retryLimit === 5000 && maxNodes !== 5000) container.querySelector('button').textContent = 'Retry with up to 5,000 nodes';
+    renderGraphResults([]);
+    return null;
+  }).finally(() => {
+    if (request === graphRequest) {
+      graphPromise = null;
+      graphAbortController = null;
+    }
+  });
+  return graphPromise;
 }
 
 function populateNsFilter(nodes, selectedNamespace = '') {
   const sel = document.getElementById('ns-filter');
-  const namespaces = [...new Set(nodes.map(n => normalizeNamespace(n.namespace)))].sort();
+  const namespaces = [...new Set(nodes.map(node => normalizeNamespace(node.namespace)))].sort();
   sel.innerHTML = '<option value="">All</option>';
   namespaces.forEach(ns => {
     const opt = document.createElement('option');
     opt.value = graphNamespaceFilter(ns); opt.textContent = ns;
     sel.appendChild(opt);
   });
-  if (selectedNamespace) sel.value = selectedNamespace;
+  sel.value = selectedNamespace || '';
 }
 
 function populateTagFilter(nodes, selectedNamespace = '', selectedTag = '') {
-  const sel = document.getElementById('tag-filter');
-  const scoped = selectedNamespace
-    ? nodes.filter(n => matchesNamespaceFilter(n.namespace, selectedNamespace))
-    : nodes;
-  const tags = [...new Set(scoped.flatMap(n => tagsList(n.tags)))].sort();
-  sel.innerHTML = '<option value="">All</option>';
-  tags.forEach(tag => {
-    const opt = document.createElement('option');
-    opt.value = tag; opt.textContent = tag;
-    sel.appendChild(opt);
-  });
-  if (selectedTag) sel.value = selectedTag;
+  const scoped = selectedNamespace ? nodes.filter(node => matchesNamespaceFilter(node.namespace, selectedNamespace)) : nodes;
+  setTagDatalist('tag-filter', 'tag-filter-options', tagOptions(scoped), selectedTag);
 }
 
-function renderGraphVis(graphData) {
+function graphFilteredNodes(graphData) {
   const nsVal = document.getElementById('ns-filter').value;
-  let filtered = graphData.nodes;
-  if (nsVal) filtered = filtered.filter(n => matchesNamespaceFilter(n.namespace, nsVal));
-  if (graphFilter.primaryTag) {
-    filtered = filtered.filter(n => primaryTag(n) === graphFilter.primaryTag);
-  } else if (graphFilter.projectTag) {
-    filtered = filtered.filter(n => tagsList(n.tags).includes(graphFilter.projectTag));
-  }
-  if (graphFilter.text === 'missing') {
-    filtered = filtered.filter(n => n.text_missing);
-  } else if (graphFilter.text === 'present') {
-    filtered = filtered.filter(n => !n.text_missing);
-  }
-  const filteredIds = new Set(filtered.map(n => n.id));
+  let filtered = graphData.nodes || [];
+  if (nsVal) filtered = filtered.filter(node => matchesNamespaceFilter(node.namespace, nsVal));
+  if (graphFilter.primaryTag) filtered = filtered.filter(node => primaryTag(node) === graphFilter.primaryTag);
+  else if (graphFilter.projectTag) filtered = filtered.filter(node => tagsList(node.tags).includes(graphFilter.projectTag));
+  if (graphFilter.text === 'missing') filtered = filtered.filter(node => node.text_missing);
+  if (graphFilter.text === 'present') filtered = filtered.filter(node => !node.text_missing);
+  return filtered;
+}
 
-  const namespaces = [...new Set(filtered.map(n => normalizeNamespace(n.namespace)))];
+function renderGraphVis(graphData, request = graphRequest) {
+  if (request !== graphRequest) return;
+  const filtered = graphFilteredNodes(graphData);
+  const status = document.getElementById('graph-status');
+  const container = document.getElementById('graph-container');
+  renderGraphResults(filtered);
+  if (filtered.length === 0) {
+    resetGraphNetwork();
+    container.innerHTML = '<div class="empty-state">No facts match the current graph filters.</div>';
+    document.getElementById('legend').replaceChildren();
+    status.textContent = 'No graph results.';
+    return;
+  }
+  status.textContent = `${filtered.length} facts and ${(graphData.edges || []).length} candidate relationships loaded.`;
+  const filteredIds = new Set(filtered.map(node => node.id));
+  const namespaces = [...new Set(filtered.map(node => normalizeNamespace(node.namespace)))];
   const clusterRadius = 300 + filtered.length * 2;
   const nsPositions = {};
-  namespaces.forEach((ns, i) => {
-    const angle = (2 * Math.PI * i) / namespaces.length - Math.PI / 2;
+  namespaces.forEach((ns, index) => {
+    const angle = (2 * Math.PI * index) / namespaces.length - Math.PI / 2;
     nsPositions[ns] = { x: Math.cos(angle) * clusterRadius, y: Math.sin(angle) * clusterRadius };
   });
-
-  const visNodes = filtered.map(n => {
-    const ns = normalizeNamespace(n.namespace);
+  const perNamespace = Object.fromEntries(namespaces.map(ns => [ns, filtered.filter(node => normalizeNamespace(node.namespace) === ns).length]));
+  const visNodes = filtered.map(node => {
+    const ns = normalizeNamespace(node.namespace);
     const center = nsPositions[ns];
-    const spread = 60 + Math.sqrt(filtered.filter(f => normalizeNamespace(f.namespace) === ns).length) * 12;
-    const text = factText(n);
-    return {
-      id: n.id, label: '', title: escapeHtml(text),
-      x: center.x + (Math.random() - 0.5) * spread,
-      y: center.y + (Math.random() - 0.5) * spread,
-      color: { background: nsColor(ns), border: nsColor(ns),
-        highlight: { background: '#fff', border: nsColor(ns) },
-        hover: { background: '#fff', border: nsColor(ns) } },
-      font: { color: '#e6edf3', size: 12, strokeWidth: 3, strokeColor: '#0d1117' },
-      size: 8 + Math.min(n.recall_count, 15),
-      borderWidth: n.permanent ? 3 : 1, shape: 'dot', _data: n,
-    };
+    const spread = 60 + Math.sqrt(perNamespace[ns]) * 12;
+    return { id: node.id, label: '', title: escapeHtml(factText(node)), x: center.x + (Math.random() - 0.5) * spread, y: center.y + (Math.random() - 0.5) * spread,
+      color: { background: nsColor(ns), border: nsColor(ns), highlight: { background: '#fff', border: nsColor(ns) }, hover: { background: '#fff', border: nsColor(ns) } },
+      font: { color: '#e6edf3', size: 12, strokeWidth: 3, strokeColor: '#0d1117' }, size: 8 + Math.min(node.recall_count, 15), borderWidth: node.permanent ? 3 : 1, shape: 'dot', _data: node };
   });
-
-  namespaces.forEach(ns => {
-    const center = nsPositions[ns];
-    const count = filtered.filter(n => normalizeNamespace(n.namespace) === ns).length;
-    visNodes.push({
-      id: '__label__' + ns, label: `${ns} (${count})`,
-      x: center.x, y: center.y - 50 - Math.sqrt(count) * 8,
-      fixed: true, shape: 'text', physics: false,
-      font: { color: nsColor(ns), size: 16, bold: true, strokeWidth: 4, strokeColor: '#0d1117' },
-      size: 0, _data: null,
-    });
-  });
-
-  const visEdges = graphData.edges.filter(e => filteredIds.has(e.from) && filteredIds.has(e.to))
-    .map(e => ({ from: e.from, to: e.to, value: e.similarity,
-      color: { color: 'rgba(88,166,255,0.12)', highlight: 'rgba(88,166,255,0.4)' } }));
-
-  const container = document.getElementById('graph-container');
+  namespaces.forEach(ns => visNodes.push({ id: '__label__' + ns, label: `${ns} (${perNamespace[ns]})`, x: nsPositions[ns].x, y: nsPositions[ns].y - 50 - Math.sqrt(perNamespace[ns]) * 8, fixed: true, shape: 'text', physics: false, font: { color: nsColor(ns), size: 16, bold: true, strokeWidth: 4, strokeColor: '#0d1117' }, size: 0 }));
+  const visEdges = (graphData.edges || []).filter(edge => filteredIds.has(edge.from) && filteredIds.has(edge.to)).map(edge => ({ from: edge.from, to: edge.to, value: edge.similarity, color: { color: 'rgba(88,166,255,0.12)', highlight: 'rgba(88,166,255,0.4)' } }));
   const data = { nodes: new vis.DataSet(visNodes), edges: new vis.DataSet(visEdges) };
-
-  if (network) network.destroy();
-  network = new vis.Network(container, data, {
-    layout: { improvedLayout: false },
-    physics: { enabled: true, solver: 'barnesHut',
-      barnesHut: { gravitationalConstant: -3000, centralGravity: 0.5, springLength: 120, springConstant: 0.02, damping: 0.3 },
-      stabilization: { iterations: 100, updateInterval: 50 } },
-    interaction: { hover: true, tooltipDelay: 200, zoomView: true, dragView: true },
-    nodes: { borderWidth: 1, shadow: false },
-    edges: { smooth: false, scaling: { min: 0.5, max: 2 } },
-  });
-
-  network.once('stabilizationIterationsDone', () => {
-    network.setOptions({ physics: false });
-    network.fit({ animation: false });
-    const nsCounts = {};
-    filtered.forEach(n => {
-      const ns = normalizeNamespace(n.namespace);
-      nsCounts[ns] = (nsCounts[ns] || 0) + 1;
-    });
-    document.getElementById('legend').innerHTML = Object.entries(nsCounts)
-      .sort((a, b) => b[1] - a[1])
-      .map(([ns, c]) => `<div class="legend-item"><span class="legend-dot" style="background:${nsColor(ns)}"></span>${escapeHtml(ns)} ${c}</div>`)
-      .join('');
-  });
-
-  network.on('hoverNode', p => {
-    const node = visNodes.find(n => n.id === p.node);
-    if (node && node._data) {
-      const text = factText(node._data);
-      const short = text.length > 60 ? text.slice(0, 60) + '...' : text;
-      data.nodes.update({ id: p.node, label: short });
-    }
-  });
-  network.on('blurNode', p => { data.nodes.update({ id: p.node, label: '' }); });
-
-  network.on('click', p => {
-    if (p.nodes.length > 0 && !String(p.nodes[0]).startsWith('__label__')) {
-      const node = visNodes.find(n => n.id === p.nodes[0]);
-      if (node && node._data) showDetail(node._data);
-    } else { hideDetail(); }
+  resetGraphNetwork();
+  network = new vis.Network(container, data, { layout: { improvedLayout: false }, physics: { enabled: true, solver: 'barnesHut', barnesHut: { gravitationalConstant: -3000, centralGravity: 0.5, springLength: 120, springConstant: 0.02, damping: 0.3 }, stabilization: { iterations: 100, updateInterval: 50 } }, interaction: { hover: true, tooltipDelay: 200, zoomView: true, dragView: true }, nodes: { borderWidth: 1, shadow: false }, edges: { smooth: false, scaling: { min: 0.5, max: 2 } } });
+  const activeNetwork = network;
+  network.once('stabilizationIterationsDone', () => { if (network !== activeNetwork || request !== graphRequest) return; network.setOptions({ physics: false }); network.fit({ animation: false }); renderLegend(perNamespace); });
+  network.on('hoverNode', point => { const node = visNodes.find(item => item.id === point.node); if (node?._data) { const text = factText(node._data); data.nodes.update({ id: point.node, label: text.length > 60 ? text.slice(0, 60) + '...' : text }); } });
+  network.on('blurNode', point => data.nodes.update({ id: point.node, label: '' }));
+  network.on('click', point => {
+    if (point.nodes.length > 0 && !String(point.nodes[0]).startsWith('__label__')) showDetail(point.nodes[0], container);
+    else hideDetail();
   });
 }
 
-function showDetail(fact) {
-  selectedFact = fact;
-  const detailText = document.getElementById('detail-text');
-  detailText.textContent = factText(fact);
-  detailText.classList.toggle('missing-text', Boolean(fact.text_missing));
-  const id = fact.id || '';
-  const keys = Array.isArray(fact.payload_keys) ? fact.payload_keys : [];
-  document.getElementById('detail-meta').innerHTML = `
-    <span>ID: ${escapeHtml(id.slice(0, 12))}${id.length > 12 ? '...' : ''}</span><br>
-    <span style="color:${nsColor(fact.namespace)}">${escapeHtml(normalizeNamespace(fact.namespace))}</span>
-    ${primaryTag(fact) ? `<span class="tag-chip">primary: ${escapeHtml(primaryTag(fact))}</span>` : ''}
-    ${tagsList(fact.tags).map(t => `<span class="tag-chip">#${escapeHtml(t)}</span>`).join('')}<br>
-    <span>Created: ${escapeHtml((fact.created_at || '').slice(0, 10))}</span>
-    <span>Recalls: ${Number(fact.recall_count || 0)}</span>
-    ${fact.permanent ? '<span style="color:var(--orange)">Permanent</span>' : ''}
-  `;
+function renderLegend(counts) {
+  document.getElementById('legend').innerHTML = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([ns, count]) => `<div class="legend-item"><span class="legend-dot" style="background:${nsColor(ns)}"></span>${escapeHtml(ns)} ${count}</div>`).join('');
+}
+
+function renderGraphResults(nodes) {
+  const list = document.getElementById('graph-results-list');
+  const more = document.getElementById('graph-results-more');
+  document.getElementById('graph-results-count').textContent = nodes.length ? `${nodes.length} facts match the graph filters.` : '';
+  list.replaceChildren();
+  nodes.slice(0, graphResultsShown).forEach(node => {
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'graph-result';
+    button.textContent = `${normalizeNamespace(node.namespace)} · ${factText(node).slice(0, 110)}${factText(node).length > 110 ? '…' : ''}`;
+    button.addEventListener('click', () => showDetail(node.id, button));
+    list.appendChild(button);
+  });
+  more.hidden = graphResultsShown >= nodes.length;
+  more.textContent = `Show ${Math.min(50, nodes.length - graphResultsShown)} more (${nodes.length - graphResultsShown} remaining)`;
+}
+
+async function showDetail(id, opener) {
+  detailReturnFocus = opener || document.activeElement;
+  const panel = document.getElementById('detail-panel');
+  const state = document.getElementById('detail-state');
+  const content = document.getElementById('detail-content');
+  const save = document.getElementById('save-tags');
+  const request = ++detailRequest;
+  selectedFact = null;
+  content.hidden = true; save.disabled = true;
+  state.textContent = 'Loading fact details…';
+  panel.classList.add('visible'); panel.focus();
+  try {
+    const res = await fetch(`${BASE}/api/facts/${encodeURIComponent(id)}`);
+    if (!res.ok) throw new Error(await responseMessage(res));
+    const fact = await res.json();
+    if (request !== detailRequest) return;
+    selectedFact = fact;
+    renderDetail(fact);
+    state.textContent = '';
+    content.hidden = false;
+    save.disabled = pendingTagSaves.has(fact.id);
+    if (save.disabled) document.getElementById('tag-save-status').textContent = 'Saving changes…';
+  } catch (error) {
+    if (request !== detailRequest) return;
+    state.textContent = `Could not load fact details: ${error.message || error}`;
+    const retry = document.createElement('button');
+    retry.type = 'button'; retry.className = 'toolbar-btn'; retry.textContent = 'Retry';
+    retry.addEventListener('click', () => showDetail(id, detailReturnFocus));
+    state.appendChild(document.createTextNode(' ')); state.appendChild(retry);
+  }
+}
+
+function renderDetail(fact) {
+  const id = String(fact.id || '');
+  document.getElementById('detail-text').textContent = factText(fact);
+  document.getElementById('detail-text').classList.toggle('missing-text', Boolean(fact.text_missing));
+  document.getElementById('detail-meta').innerHTML = `<span>ID: ${escapeHtml(id.slice(0, 12))}${id.length > 12 ? '...' : ''}</span><br><span style="color:${nsColor(fact.namespace)}">${escapeHtml(normalizeNamespace(fact.namespace))}</span>${primaryTag(fact) ? `<span class="tag-chip">primary: ${escapeHtml(normalizeTagDisplay(primaryTag(fact)))}</span>` : ''}${tagOptions([fact]).map(tag => `<span class="tag-chip">#${escapeHtml(tag.display)}</span>`).join('')}<br><span>Created: ${escapeHtml((fact.created_at || '').slice(0, 10))}</span><span>Recalls: ${Number(fact.recall_count || 0)}</span>${fact.permanent ? '<span style="color:var(--orange)">Permanent</span>' : ''}`;
   document.getElementById('detail-tags').value = tagsList(fact.tags).join(', ');
   document.getElementById('detail-primary-tag').value = primaryTag(fact) || '';
   document.getElementById('tag-save-status').textContent = '';
   const payloadDetails = document.getElementById('payload-details');
-  const payloadKeys = document.getElementById('payload-keys');
-  const payloadJSON = document.getElementById('payload-json');
-  if (keys.length > 0) {
-    payloadKeys.textContent = keys.join(', ');
-    payloadJSON.textContent = JSON.stringify(fact.payload || {}, null, 2);
-    payloadDetails.style.display = '';
-  } else {
-    payloadKeys.textContent = '';
-    payloadJSON.textContent = '';
-    payloadDetails.style.display = 'none';
-  }
-  document.getElementById('detail-panel').classList.add('visible');
+  const keys = Array.isArray(fact.payload_keys) ? fact.payload_keys : [];
+  document.getElementById('payload-keys').textContent = keys.join(', ');
+  document.getElementById('payload-json').textContent = JSON.stringify(fact.payload || {}, null, 2);
+  payloadDetails.style.display = keys.length ? '' : 'none';
 }
+
+function syncCachedFactTags(id, tags, primaryTagValue) {
+  const factID = String(id);
+  const update = node => {
+    if (String(node.id) !== factID) return;
+    node.tags = [...tags];
+    node.primary_tag = primaryTagValue;
+  };
+  (factsData?.nodes || []).forEach(update);
+  (graphDataCache?.nodes || []).forEach(update);
+
+  if (factsData?.nodes) renderTreemap(factsData.nodes);
+  if (graphDataCache?.nodes) {
+    const namespace = document.getElementById('ns-filter').value;
+    const selectedTag = graphFilter.projectTag || originalTagFilter(document.getElementById('tag-filter'));
+    populateTagFilter(factsData?.nodes || graphDataCache.nodes, namespace, selectedTag);
+    renderGraphVis(graphDataCache);
+  }
+}
+
 function hideDetail() {
+  const panel = document.getElementById('detail-panel');
+  if (!panel.classList.contains('visible')) return;
+  detailRequest++;
   selectedFact = null;
-  document.getElementById('detail-panel').classList.remove('visible');
+  panel.classList.remove('visible');
+  if (detailReturnFocus?.focus) detailReturnFocus.focus();
 }
 
 async function saveSelectedTags() {
-  if (!selectedFact || !selectedFact.id) return;
+  if (!selectedFact?.id || pendingTagSaves.has(selectedFact.id)) return;
   const status = document.getElementById('tag-save-status');
-  const tags = document.getElementById('detail-tags').value
-    .split(',')
-    .map(t => t.trim())
-    .filter(Boolean);
+  const save = document.getElementById('save-tags');
+  const factAtSave = selectedFact;
+  const detailAtSave = detailRequest;
+  const factID = factAtSave.id;
+  const tags = document.getElementById('detail-tags').value.split(',').map(tag => tag.trim()).filter(Boolean);
   const primary_tag = document.getElementById('detail-primary-tag').value.trim();
-  status.textContent = 'Saving...';
+  let saveSucceeded = false;
+  let saveFailureMessage = '';
+  pendingTagSaves.add(factID); save.disabled = true; status.textContent = 'Saving…';
   try {
-    const res = await fetch(`${BASE}/api/facts/${encodeURIComponent(selectedFact.id)}/tags`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Viz-Action': 'update-tags',
-      },
-      body: JSON.stringify({ tags, primary_tag }),
-    });
-    if (!res.ok) throw new Error(await res.text());
+    const res = await fetch(`${BASE}/api/facts/${encodeURIComponent(factID)}/tags`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-Viz-Action': 'update-tags' }, body: JSON.stringify({ tags, primary_tag }) });
+    if (!res.ok) throw new Error(await responseMessage(res));
     const data = await res.json();
-    selectedFact.tags = data.tags || tags;
-    selectedFact.primary_tag = data.primary_tag || '';
-    status.textContent = 'Saved';
-    showDetail(selectedFact);
-  } catch (err) {
-    status.textContent = `Error: ${err.message || err}`;
+    saveSucceeded = true;
+    const savedTags = data.tags || tags;
+    const savedPrimaryTag = data.primary_tag || '';
+    syncCachedFactTags(factID, savedTags, savedPrimaryTag);
+    if (selectedFact !== factAtSave || detailRequest !== detailAtSave) return;
+    factAtSave.tags = savedTags; factAtSave.primary_tag = savedPrimaryTag;
+    renderDetail(factAtSave); status.textContent = 'Saved.';
+  } catch (error) {
+    saveFailureMessage = error.message || String(error);
+    if (selectedFact !== factAtSave || detailRequest !== detailAtSave) return;
+    status.textContent = `Save failed: ${saveFailureMessage}`;
+  } finally {
+    pendingTagSaves.delete(factID);
+    if (selectedFact === factAtSave && detailRequest === detailAtSave) save.disabled = false;
+    if (selectedFact?.id === factID && selectedFact !== factAtSave) {
+      save.disabled = false;
+      status.textContent = saveSucceeded
+        ? 'Saved. Reopen details to refresh tags.'
+        : `Save failed: ${saveFailureMessage || 'unknown error'}`;
+    }
   }
 }
 
-// Graph-specific control listeners. Registered once the script loads — the
-// elements exist in the initial DOM so there's no timing issue.
 document.getElementById('detail-close').addEventListener('click', hideDetail);
 document.getElementById('save-tags').addEventListener('click', saveSelectedTags);
-
-document.getElementById('reset-graph-filters').addEventListener('click', () => {
-  graphFilter = { namespace: '', projectTag: '', primaryTag: '', text: '' };
-  document.getElementById('ns-filter').value = '';
-  document.getElementById('tag-filter').value = '';
-  document.getElementById('text-filter').value = '';
-  document.getElementById('threshold').value = '0.85';
-  document.getElementById('threshold-val').textContent = '0.85';
-  loadGraph();
-});
-
-document.getElementById('threshold').addEventListener('input', e => {
-  document.getElementById('threshold-val').textContent = e.target.value;
-});
-document.getElementById('threshold').addEventListener('change', loadGraph);
-document.getElementById('ns-filter').addEventListener('change', () => {
-  graphFilter = {
-    namespace: document.getElementById('ns-filter').value,
-    projectTag: document.getElementById('tag-filter').value,
-    primaryTag: '',
-    text: document.getElementById('text-filter').value,
-  };
-  loadGraph();
-});
-document.getElementById('tag-filter').addEventListener('change', () => {
-  graphFilter = {
-    namespace: document.getElementById('ns-filter').value,
-    projectTag: document.getElementById('tag-filter').value,
-    primaryTag: '',
-    text: document.getElementById('text-filter').value,
-  };
-  loadGraph();
-});
-document.getElementById('text-filter').addEventListener('change', () => {
-  graphFilter = {
-    namespace: document.getElementById('ns-filter').value,
-    projectTag: document.getElementById('tag-filter').value,
-    primaryTag: '',
-    text: document.getElementById('text-filter').value,
-  };
-  loadGraph();
-});
+document.addEventListener('keydown', event => { if (event.key === 'Escape') hideDetail(); });
+document.getElementById('graph-results-more').addEventListener('click', () => { graphResultsShown += 50; renderGraphResults(graphFilteredNodes(graphDataCache)); });
+document.getElementById('reset-graph-filters').addEventListener('click', () => { graphFilter = { namespace: '', projectTag: '', primaryTag: '', text: '' }; document.getElementById('ns-filter').value = ''; document.getElementById('tag-filter').value = ''; document.getElementById('text-filter').value = ''; document.getElementById('threshold').value = '0.85'; document.getElementById('threshold-val').textContent = '0.85'; graphLoaded = false; loadGraph(); });
+document.getElementById('threshold').addEventListener('input', event => { document.getElementById('threshold-val').textContent = event.target.value; });
+document.getElementById('threshold').addEventListener('change', () => { graphLoaded = false; loadGraph(); });
+['ns-filter', 'tag-filter', 'text-filter'].forEach(id => document.getElementById(id).addEventListener(id === 'tag-filter' ? 'input' : 'change', () => { graphFilter = { namespace: document.getElementById('ns-filter').value, projectTag: originalTagFilter(document.getElementById('tag-filter')), primaryTag: '', text: document.getElementById('text-filter').value }; graphLoaded = false; loadGraph(); }));

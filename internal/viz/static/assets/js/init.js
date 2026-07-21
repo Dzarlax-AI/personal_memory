@@ -18,17 +18,27 @@ function isTabAvailable(name) {
 function activateTab(name, pushHistory = true) {
   if (!isTabAvailable(name)) name = 'overview';
 
-  document.querySelectorAll('.tab-nav-item').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-nav-item').forEach(t => {
+    t.classList.remove('active');
+    t.removeAttribute('aria-current');
+  });
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   const tab = document.querySelector(`.tab-nav-item[data-view="${name}"]`);
-  if (tab) tab.classList.add('active');
+  if (tab) {
+    tab.classList.add('active');
+    tab.setAttribute('aria-current', 'page');
+  }
   const view = document.getElementById(name + '-view');
   if (view) view.classList.add('active');
 
   // Lazy-load per-tab heavy content once.
-  if (name === 'duplicates' && !document.querySelector('.dup-pair')) loadDuplicates();
-  if (name === 'timeline' && !timeline) loadTimeline();
-  if (name === 'graph' && !network) loadGraph();
+  if (name === 'duplicates' && !duplicatesLoaded && !duplicatesPromise) loadDuplicates();
+  if (name === 'forgotten' && !factsData) loadForgotten();
+  if (name === 'timeline' && !timeline && !timelinePromise) loadTimeline();
+  if (name === 'graph' && !graphLoaded && !graphPromise) loadGraph();
+  if (name === 'documents' && !documentsPromise && (!documentsData || documentsAreStale())) {
+    loadDocuments(Boolean(documentsData && documentsAreStale()));
+  }
 
   if (pushHistory) {
     const targetPath = `${BASE}/${name}`;
@@ -57,4 +67,4 @@ window.addEventListener('popstate', () => activateTab(parseTabFromPath(), false)
 // as they resolve.
 activateTab(parseTabFromPath(), false);
 initFacts();
-loadDocuments();
+loadDocumentStatus().catch(() => {});

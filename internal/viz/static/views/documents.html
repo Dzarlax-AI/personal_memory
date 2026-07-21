@@ -1,11 +1,12 @@
   <div class="view" id="documents-view">
-    <div class="section-title">Indexed Documents</div>
-    <div class="section-sub" id="docs-summary">Loading...</div>
+    <h2 class="section-title">Indexed Documents</h2>
+    <div class="section-sub" id="docs-summary" aria-live="polite">Select this tab to load the indexed document inventory.</div>
     <div class="filter-toolbar">
-      <label>Search:
-        <input type="search" id="docs-search" placeholder="Path or heading">
-      </label>
-      <span class="toolbar-count" id="docs-health"></span>
+      <label for="docs-search">Search</label>
+      <input type="search" id="docs-search" placeholder="Path or heading">
+      <button id="docs-refresh" class="toolbar-btn" type="button">Refresh</button>
+      <span class="toolbar-count" id="docs-health" aria-live="polite"></span>
     </div>
-    <div id="docs-content"><div class="loading"><div class="spinner"></div>Loading indexed documents...</div></div>
+    <div id="docs-content"><div class="empty-state">Select this tab to load documents.</div></div>
+    <button id="docs-more" class="toolbar-btn load-more" type="button" hidden>Show more folders</button>
   </div>

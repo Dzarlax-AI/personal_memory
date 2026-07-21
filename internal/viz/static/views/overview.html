@@ -1,5 +1,14 @@
   <div class="view" id="overview-view">
-    <div class="section-title">Knowledge Map</div>
+    <h2 class="section-title">Knowledge Map</h2>
     <div class="section-sub">Size reflects fact count. Color = namespace.</div>
     <div class="treemap" id="treemap"></div>
+    <section class="activity-section" id="activity-section" aria-labelledby="activity-heading" hidden>
+      <div class="activity-heading-row">
+        <h2 class="section-title" id="activity-heading">Activity</h2>
+        <span class="heatmap-legend" id="heatmap-legend">Each cell is one day; brighter cells have more facts.</span>
+      </div>
+      <div class="heatmap-scroll">
+        <div class="heatmap-grid" id="heatmap-grid" role="list" aria-describedby="heatmap-legend" aria-label="Facts added by day"></div>
+      </div>
+    </section>
   </div>
