@@ -53,6 +53,8 @@ internal/
   memory/
     server.go              — 11 memory MCP tools
     cache.go               — in-memory cache with TTL + invalidation
+    lifecycle/             — normalized lifecycle model, validation, authority ranking
+    lifecycle_adapter.go   — memory read-path filters, formatting, and lifecycle counts
   rag/
     chunker.go             — markdown-aware chunking (heading → paragraph → sentence)
     summarizer.go          — folder summaries (filenames + first H1/H2/H3)
@@ -105,7 +107,15 @@ updated_at        string    — ISO datetime (set on update)
 recall_count      int       — times returned by recall_facts
 last_recalled_at  string    — ISO datetime
 user              string    — from MEMORY_USER env var
+lifecycle_state   string    — current, historical, superseded, or disputed; no lifecycle fields means legacy current
+canonical         bool      — explicit current-only authority hint; not globally unique
+provenance        object    — origin source and optional reference; not a trust score
+verified_at       string    — optional RFC3339 verification timestamp
+supersedes        []string  — normalized IDs replaced by this fact
+superseded_by     []string  — normalized IDs replacing this fact; required for superseded state
 ```
+
+The normative lifecycle contract, including visibility and rollout behavior, is in `docs/lifecycle.md`.
 
 ### Point IDs
 
@@ -158,6 +168,13 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - `forget_old` defaults to `dry_run=true` — safe by default
 - New point IDs are deterministic from namespace + exact text; legacy numeric/text-only IDs are handled on read and by the standalone migration
 - TEI and Qdrant accessed via Docker network (no auth needed)
+- `recall_facts` and operational context admit only valid, non-expired current facts; payloads with no lifecycle fields are legacy current. Canonical current facts rank first without changing vector scores.
+- `find_related`, `list_facts`, `export_facts`, `get_stats`, and Viz retain history-inspection visibility as defined in `docs/lifecycle.md`; malformed explicit lifecycle metadata remains inspectable but is never current truth.
+- Lifecycle rollout is read-only and performs no startup migration or payload backfill. Mutation tools and migrations are deferred to issue #22; do not add lifecycle write inputs as part of read-path work.
+
+### memory/lifecycle and lifecycle_adapter.go
+- `lifecycle.Parse(payload, pointID)` is the single normalization and validation boundary. Only a payload with no lifecycle fields is treated as legacy current; malformed explicit metadata returns a non-sensitive invalid view and must not panic.
+- Lifecycle transitions are explicit, reversible, and idempotent when target invariants pass. `permanent` controls retention only, while expired `valid_until` excludes even current facts from current-context flows.
 
 ### qdrant/client.go
 - Collection name is a struct field — `NewClient(url, collection string)` — one client per collection

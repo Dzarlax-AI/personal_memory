@@ -15,6 +15,7 @@ Personal Memory stores facts as semantic memory, retrieves the context relevant 
 - [Connect an MCP Client](#connect-an-mcp-client)
 - [Using Personal Memory](#using-personal-memory)
 - [Core Concepts](#core-concepts)
+- [Fact Lifecycle](#fact-lifecycle)
 - [Tool Reference](#tool-reference)
 - [Developer and Operator Guide](#developer-and-operator-guide)
 - [Configuration Reference](#configuration-reference)
@@ -234,7 +235,7 @@ The client should call `store_fact`. Personal Memory embeds the fact, checks for
 
 > Before changing the database layer, recall my relevant PostgreSQL and migration preferences.
 
-The client should call `recall_facts` with a natural-language query. Retrieval is semantic, so the stored wording does not need to match the query.
+The client should call `recall_facts` with a natural-language query. Retrieval is semantic, so the stored wording does not need to match the query. Default recall returns only valid, non-expired current facts; facts without lifecycle metadata remain compatible as legacy current facts.
 
 ### Store a project decision
 
@@ -256,7 +257,7 @@ With RAG enabled, the client calls `search_documents`. Hierarchical mode first i
 
 ### Load operational context at session start
 
-`get_operational_context` returns permanent facts plus the most frequently recalled non-permanent facts. Automation that needs plain text can call the authenticated endpoint:
+`get_operational_context` includes all valid, non-expired current permanent facts plus a bounded set of non-permanent current facts. Canonical facts rank first, then recall count; `permanent` affects inclusion and retention, not authority ordering. Automation that needs plain text can call the authenticated endpoint:
 
 ```text
 GET /memory/operational?namespace=projects
@@ -282,9 +283,17 @@ The MCP schema accepts tags as one comma-separated string, for example `tags="po
 
 ### Lifetime
 
-- `permanent=true` prevents `forget_old` from deleting a fact.
-- `valid_until=YYYY-MM-DD` excludes an expired fact from semantic recall.
+- `permanent=true` prevents `forget_old` from deleting a fact; it does not make the fact current or authoritative.
+- `valid_until=YYYY-MM-DD` excludes an expired fact from current-context flows.
 - `recall_count` and `last_recalled_at` record how often stored context is used.
+
+## Fact Lifecycle
+
+Facts normalize to one of four states: `current`, `historical`, `superseded`, or `disputed`. Payloads that predate lifecycle support and contain none of the lifecycle fields are treated as legacy current facts. Once any lifecycle field is present, malformed explicit metadata is visible for inspection but is never accepted as legacy or current truth.
+
+Default `recall_facts` and operational-context reads return only valid, non-expired current facts. `find_related` is the semantic history-inspection path and can return all lifecycle states with normalized lifecycle labels; list, export, stats, and Viz remain inventory surfaces across states. Canonical, provenance, verification, relationship, transition, retention, expiry, visibility, rollout, and rollback semantics are defined in the normative [Fact Lifecycle Contract](docs/lifecycle.md).
+
+The rollout is read-only: startup performs no lifecycle migration, and the current write tools do not expose lifecycle mutation inputs.
 
 ### Similarity and mutations
 
@@ -312,13 +321,13 @@ The RAG index is separate from the fact collection. Documents are split along Ma
 
 | Tool | Purpose |
 |---|---|
-| `recall_facts(query, namespace?, limit=5)` | Return semantically relevant, non-expired facts and increment recall counts. |
-| `find_related(query, namespace?, limit=5)` | Return related facts below the duplicate threshold. |
-| `list_facts(namespace?)` | List facts and metadata. |
-| `get_stats()` | Summarize namespaces, tags, counts, and most-recalled facts. |
+| `recall_facts(query, namespace?, limit=5)` | Return semantically relevant valid, non-expired current facts and increment recall counts. |
+| `find_related(query, namespace?, limit=5)` | Inspect related non-expired facts across lifecycle states below the duplicate threshold. |
+| `list_facts(namespace?)` | List facts and normalized lifecycle metadata across states. |
+| `get_stats()` | Summarize namespaces, tags, lifecycle counts, and most-recalled facts. |
 | `list_tags(namespace?)` | List tags and their usage counts. |
 | `export_facts(namespace?)` | Export facts as JSON. |
-| `get_operational_context(namespace?, top_recalled=10)` | Return permanent and frequently recalled context. |
+| `get_operational_context(namespace?, top_recalled=10)` | Return valid, non-expired current permanent and frequently recalled context. |
 
 ### Document RAG
 
