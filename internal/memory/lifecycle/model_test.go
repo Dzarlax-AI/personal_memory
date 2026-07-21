@@ -75,14 +75,17 @@ func TestParseNormalizesMetadata(t *testing.T) {
 
 func TestParseRejectsMalformedMetadata(t *testing.T) {
 	tests := []struct {
-		name    string
-		payload map[string]interface{}
-		pointID string
-		want    string
+		name           string
+		payload        map[string]interface{}
+		pointID        string
+		want           string
+		wantState      State
+		checkWantState bool
 	}{
-		{name: "unknown state", payload: map[string]interface{}{"lifecycle_state": "unknown"}, want: "lifecycle_state"},
-		{name: "null state", payload: map[string]interface{}{"lifecycle_state": nil}, want: "lifecycle_state"},
-		{name: "non-string state", payload: map[string]interface{}{"lifecycle_state": 1}, want: "lifecycle_state"},
+		{name: "unknown state", payload: map[string]interface{}{"lifecycle_state": "unknown"}, want: "lifecycle_state", wantState: "unknown", checkWantState: true},
+		{name: "whitespace state", payload: map[string]interface{}{"lifecycle_state": " current "}, want: "lifecycle_state", wantState: " current ", checkWantState: true},
+		{name: "null state", payload: map[string]interface{}{"lifecycle_state": nil}, want: "lifecycle_state", checkWantState: true},
+		{name: "non-string state", payload: map[string]interface{}{"lifecycle_state": 1}, want: "lifecycle_state", checkWantState: true},
 		{name: "null canonical", payload: map[string]interface{}{"canonical": nil}, want: "boolean"},
 		{name: "canonical type", payload: map[string]interface{}{"canonical": "true"}, want: "boolean"},
 		{name: "canonical historical", payload: map[string]interface{}{"lifecycle_state": "historical", "canonical": true}, want: "must be current"},
@@ -117,6 +120,9 @@ func TestParseRejectsMalformedMetadata(t *testing.T) {
 			}
 			if view.Legacy {
 				t.Fatalf("explicit malformed lifecycle metadata was marked legacy: %#v", view)
+			}
+			if test.checkWantState && view.State != test.wantState {
+				t.Fatalf("invalid state = %q, want %q", view.State, test.wantState)
 			}
 		})
 	}

@@ -11,6 +11,18 @@ import (
 
 const lifecycleCacheScope = "lifecycle-current-v1"
 
+const maxLifecycleCandidateLimit = maxSearchLimit * 4
+
+type lifecycleSearchPoint struct {
+	point qdrant.Point
+	view  lifecycle.View
+}
+
+type lifecycleOperationalPoint struct {
+	point qdrant.ScrollPoint
+	view  lifecycle.View
+}
+
 func currentLifecycleFilters(base map[string]interface{}) map[string]interface{} {
 	lifecycleShould := []map[string]interface{}{
 		{"key": "lifecycle_state", "match": map[string]interface{}{"value": string(lifecycle.Current)}},
@@ -36,8 +48,8 @@ func lifecycleCandidateLimit(limit int) int {
 	if candidateLimit < minimumHeadroom {
 		candidateLimit = minimumHeadroom
 	}
-	if candidateLimit > maxSearchLimit {
-		candidateLimit = maxSearchLimit
+	if candidateLimit > maxLifecycleCandidateLimit {
+		candidateLimit = maxLifecycleCandidateLimit
 	}
 	return candidateLimit
 }
@@ -98,35 +110,35 @@ func lifecycleSummaryFromHit(hit map[string]interface{}) string {
 	return ""
 }
 
-func currentSearchPoints(points []qdrant.Point) []qdrant.Point {
-	byID := make(map[string]qdrant.Point, len(points))
+func currentSearchPoints(points []qdrant.Point) []lifecycleSearchPoint {
+	byID := make(map[string]lifecycleSearchPoint, len(points))
 	candidates := make([]lifecycle.Candidate, 0, len(points))
 	for _, point := range points {
 		view := lifecycleView(point.ID, point.Payload)
 		if !lifecycle.IsCurrentTruth(view, isExpired(point.Payload)) {
 			continue
 		}
-		byID[point.ID] = point
+		byID[point.ID] = lifecycleSearchPoint{point: point, view: view}
 		candidates = append(candidates, lifecycle.Candidate{PointID: point.ID, Score: point.Score, View: view})
 	}
 	lifecycle.SortCandidates(candidates)
-	result := make([]qdrant.Point, 0, len(candidates))
+	result := make([]lifecycleSearchPoint, 0, len(candidates))
 	for _, candidate := range candidates {
 		result = append(result, byID[candidate.PointID])
 	}
 	return result
 }
 
-func relatedSearchPoints(points []qdrant.Point) []qdrant.Point {
-	byID := make(map[string]qdrant.Point, len(points))
+func relatedSearchPoints(points []qdrant.Point) []lifecycleSearchPoint {
+	byID := make(map[string]lifecycleSearchPoint, len(points))
 	candidates := make([]lifecycle.Candidate, 0, len(points))
 	for _, point := range points {
 		view := lifecycleView(point.ID, point.Payload)
-		byID[point.ID] = point
+		byID[point.ID] = lifecycleSearchPoint{point: point, view: view}
 		candidates = append(candidates, lifecycle.Candidate{PointID: point.ID, Score: point.Score, View: view})
 	}
 	lifecycle.SortCandidates(candidates)
-	result := make([]qdrant.Point, 0, len(candidates))
+	result := make([]lifecycleSearchPoint, 0, len(candidates))
 	for _, candidate := range candidates {
 		result = append(result, byID[candidate.PointID])
 	}
@@ -160,18 +172,18 @@ func lifecycleCounts(points []qdrant.ScrollPoint) (map[lifecycle.State]int, int,
 	return counts, legacy, invalid
 }
 
-func sortOperationalPoints(points []qdrant.ScrollPoint) {
+func sortOperationalPoints(points []lifecycleOperationalPoint) {
 	sort.SliceStable(points, func(i, j int) bool {
-		left := lifecycleView(points[i].ID, points[i].Payload)
-		right := lifecycleView(points[j].ID, points[j].Payload)
+		left := points[i].view
+		right := points[j].view
 		if left.Canonical != right.Canonical {
 			return left.Canonical
 		}
-		ri, _ := points[i].Payload["recall_count"].(float64)
-		rj, _ := points[j].Payload["recall_count"].(float64)
+		ri, _ := points[i].point.Payload["recall_count"].(float64)
+		rj, _ := points[j].point.Payload["recall_count"].(float64)
 		if ri != rj {
 			return ri > rj
 		}
-		return points[i].ID < points[j].ID
+		return points[i].point.ID < points[j].point.ID
 	})
 }

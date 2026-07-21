@@ -65,7 +65,7 @@ A payload with none of the lifecycle fields is normalized as `current` with `leg
 }
 ```
 
-This is the only legacy-current rule. Once any lifecycle field is present, the payload is no longer classified as legacy, even when `lifecycle_state` is omitted. An explicit unknown state or any malformed explicit lifecycle field has `valid=false` and a metadata-only `invalid_reason`. Invalid metadata must never cause a panic or leak fact text into the reason.
+This is the only legacy-current rule. Once any lifecycle field is present, the payload is no longer classified as legacy, even when `lifecycle_state` is omitted. An explicit unknown state or any malformed explicit lifecycle field has `valid=false` and a metadata-only `invalid_reason`. Invalid string states remain visible verbatim in inspection views; a non-string state is represented as an empty state rather than being mislabeled as `current`. Invalid metadata must never cause a panic or leak fact text into the reason.
 
 The normalized view returned by read surfaces contains `state`, `legacy`, `canonical`, optional `provenance`, optional `verified_at`, `supersedes`, `superseded_by`, `valid`, and optional `invalid_reason`.
 

@@ -618,8 +618,8 @@ func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	}
 
 	var hits []map[string]interface{}
-	for _, p := range currentSearchPoints(results) {
-		view := lifecycleView(p.ID, p.Payload)
+	for _, lifecyclePoint := range currentSearchPoints(results) {
+		p := lifecyclePoint.point
 		hit := map[string]interface{}{
 			"_point_id":    p.ID,
 			"text":         p.Payload["text"],
@@ -629,7 +629,7 @@ func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			"namespace":    p.Payload["namespace"],
 			"recall_count": p.Payload["recall_count"],
 		}
-		addLifecycleMetadata(hit, view)
+		addLifecycleMetadata(hit, lifecyclePoint.view)
 		hits = append(hits, hit)
 
 		if len(hits) >= limit {
@@ -931,7 +931,8 @@ func (s *Server) findRelated(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	}
 
 	var hits []map[string]interface{}
-	for _, p := range relatedSearchPoints(eligible) {
+	for _, lifecyclePoint := range relatedSearchPoints(eligible) {
+		p := lifecyclePoint.point
 		hit := map[string]interface{}{
 			"text":        p.Payload["text"],
 			"score":       p.Score,
@@ -939,7 +940,7 @@ func (s *Server) findRelated(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			"primary_tag": p.Payload["primary_tag"],
 			"namespace":   p.Payload["namespace"],
 		}
-		addLifecycleMetadata(hit, lifecycleView(p.ID, p.Payload))
+		addLifecycleMetadata(hit, lifecyclePoint.view)
 		hits = append(hits, hit)
 		if len(hits) >= limit {
 			break
@@ -1141,7 +1142,7 @@ func (s *Server) exportFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	return mcp.NewToolResultText(string(b)), nil
 }
 
-func (s *Server) getOperationalFacts(ctx context.Context, namespace string, topRecalled int) ([]qdrant.ScrollPoint, error) {
+func (s *Server) getOperationalFacts(ctx context.Context, namespace string, topRecalled int) ([]lifecycleOperationalPoint, error) {
 	filters := currentLifecycleFilters(s.buildFilters(nil, namespace))
 
 	points, err := s.qdrant.ScrollAll(ctx, filters, false)
@@ -1150,34 +1151,35 @@ func (s *Server) getOperationalFacts(ctx context.Context, namespace string, topR
 	}
 
 	seen := make(map[string]bool)
-	var permanent []qdrant.ScrollPoint
-	var nonPermanent []qdrant.ScrollPoint
+	var permanent []lifecycleOperationalPoint
+	var nonPermanent []lifecycleOperationalPoint
 
 	for _, p := range points {
 		view := lifecycleView(p.ID, p.Payload)
 		if !lifecycle.IsCurrentTruth(view, isExpired(p.Payload)) {
 			continue
 		}
+		lifecyclePoint := lifecycleOperationalPoint{point: p, view: view}
 		if v, ok := p.Payload["permanent"].(bool); ok && v {
-			permanent = append(permanent, p)
+			permanent = append(permanent, lifecyclePoint)
 			seen[p.ID] = true
 		} else {
-			nonPermanent = append(nonPermanent, p)
+			nonPermanent = append(nonPermanent, lifecyclePoint)
 		}
 	}
 	// Rank non-permanent facts by canonical authority, then recall count, and take top N.
 	sort.Slice(nonPermanent, func(i, j int) bool {
-		left := lifecycleView(nonPermanent[i].ID, nonPermanent[i].Payload)
-		right := lifecycleView(nonPermanent[j].ID, nonPermanent[j].Payload)
+		left := nonPermanent[i].view
+		right := nonPermanent[j].view
 		if left.Canonical != right.Canonical {
 			return left.Canonical
 		}
-		ri, _ := nonPermanent[i].Payload["recall_count"].(float64)
-		rj, _ := nonPermanent[j].Payload["recall_count"].(float64)
+		ri, _ := nonPermanent[i].point.Payload["recall_count"].(float64)
+		rj, _ := nonPermanent[j].point.Payload["recall_count"].(float64)
 		if ri != rj {
 			return ri > rj
 		}
-		return nonPermanent[i].ID < nonPermanent[j].ID
+		return nonPermanent[i].point.ID < nonPermanent[j].point.ID
 	})
 
 	result := permanent
@@ -1186,11 +1188,11 @@ func (s *Server) getOperationalFacts(ctx context.Context, namespace string, topR
 		if added >= topRecalled {
 			break
 		}
-		rc, _ := p.Payload["recall_count"].(float64)
+		rc, _ := p.point.Payload["recall_count"].(float64)
 		if rc == 0 {
 			continue // never-recalled facts do not consume the bounded selection
 		}
-		if !seen[p.ID] {
+		if !seen[p.point.ID] {
 			result = append(result, p)
 			added++
 		}
@@ -1225,7 +1227,8 @@ func (s *Server) getOperationalContext(ctx context.Context, req mcp.CallToolRequ
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# Operational Context (%d facts)\n\n", len(points))
-	for _, p := range points {
+	for _, lifecyclePoint := range points {
+		p := lifecyclePoint.point
 		text, _ := p.Payload["text"].(string)
 		ns, _ := p.Payload["namespace"].(string)
 		perm := ""
@@ -1238,7 +1241,7 @@ func (s *Server) getOperationalContext(ctx context.Context, req mcp.CallToolRequ
 		}
 		tagsList := formatTagsList(p.Payload["tags"])
 		primary := formatPrimaryTag(p.Payload["primary_tag"])
-		lifecycleSummary := formatLifecycleView(lifecycleView(p.ID, p.Payload))
+		lifecycleSummary := formatLifecycleView(lifecyclePoint.view)
 		fmt.Fprintf(&sb, "- %s%s ns:%s%s recalls:%d %s %s\n", tagsList, primary, ns, perm, rc, lifecycleSummary, text)
 	}
 	return mcp.NewToolResultText(sb.String()), nil
@@ -1264,10 +1267,11 @@ func (s *Server) OperationalContextHandler() http.HandlerFunc {
 		}
 		var sb strings.Builder
 		sb.WriteString("# Operational Context\n\n")
-		for _, p := range points {
+		for _, lifecyclePoint := range points {
+			p := lifecyclePoint.point
 			text, _ := p.Payload["text"].(string)
 			ns, _ := p.Payload["namespace"].(string)
-			lifecycleSummary := formatLifecycleView(lifecycleView(p.ID, p.Payload))
+			lifecycleSummary := formatLifecycleView(lifecyclePoint.view)
 			fmt.Fprintf(&sb, "- [%s] %s %s\n", ns, lifecycleSummary, text)
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")

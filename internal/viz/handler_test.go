@@ -177,6 +177,16 @@ func TestFactSummaryNormalizesLifecycleMetadata(t *testing.T) {
 				"invalid_reason": "canonical must be a boolean",
 			},
 		},
+		{
+			name:    "unknown explicit state",
+			id:      "unknown-state-id",
+			payload: map[string]interface{}{"lifecycle_state": "unknown"},
+			want: map[string]interface{}{
+				"state": "unknown", "legacy": false, "canonical": false,
+				"supersedes": []interface{}{}, "superseded_by": []interface{}{}, "valid": false,
+				"invalid_reason": "lifecycle_state must be current, historical, superseded, or disputed",
+			},
+		},
 	}
 
 	for _, test := range tests {

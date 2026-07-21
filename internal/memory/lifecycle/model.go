@@ -78,11 +78,14 @@ func Parse(payload map[string]interface{}, pointID string) (View, error) {
 	}
 
 	if raw, exists := payload["lifecycle_state"]; exists {
+		view.State = ""
 		state, ok := raw.(string)
+		if ok {
+			view.State = State(state)
+		}
 		if !ok || strings.TrimSpace(state) != state || !State(state).Valid() {
 			return invalid(view, "lifecycle_state must be current, historical, superseded, or disputed")
 		}
-		view.State = State(state)
 	}
 
 	if raw, exists := payload["canonical"]; exists {

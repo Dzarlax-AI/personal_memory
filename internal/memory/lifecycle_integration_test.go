@@ -48,7 +48,7 @@ func TestCurrentLifecycleFiltersPreserveExistingConditions(t *testing.T) {
 }
 
 func TestLifecycleCandidateLimitAddsBoundedHeadroom(t *testing.T) {
-	tests := map[int]int{1: 20, 5: 20, 10: 40, 25: 100, 100: 100}
+	tests := map[int]int{1: 20, 5: 20, 10: 40, 25: 100, 50: 200, 100: 400}
 	for limit, want := range tests {
 		if got := lifecycleCandidateLimit(limit); got != want {
 			t.Fatalf("lifecycleCandidateLimit(%d) = %d, want %d", limit, got, want)
@@ -136,7 +136,7 @@ func TestRecallFactsAppliesLifecycleVisibilityRankingAndFilter(t *testing.T) {
 	canonicalAt := strings.Index(text, "canonical")
 	ordinaryAt := strings.Index(text, "ordinary")
 	legacyAt := strings.Index(text, "legacy")
-	if canonicalAt < 0 || ordinaryAt < 0 || legacyAt < 0 || !(canonicalAt < ordinaryAt && ordinaryAt < legacyAt) {
+	if canonicalAt < 0 || ordinaryAt < 0 || legacyAt < 0 || canonicalAt >= ordinaryAt || ordinaryAt >= legacyAt {
 		t.Fatalf("unexpected lifecycle order: %s", text)
 	}
 	for _, marker := range []string{"[0.700]", "[0.900]", "[0.800]", "state:current", "canonical", "legacy", "source:user", "reference:decision-7"} {
@@ -213,7 +213,7 @@ func TestFindRelatedKeepsHistoryInspectableAndLifecycleOrdered(t *testing.T) {
 	historicalAt := strings.Index(text, "historical related")
 	supersededAt := strings.Index(text, "superseded related")
 	invalidAt := strings.Index(text, "invalid related")
-	if currentAt < 0 || historicalAt < 0 || supersededAt < 0 || invalidAt < 0 || !(currentAt < historicalAt && historicalAt < supersededAt && supersededAt < invalidAt) {
+	if currentAt < 0 || historicalAt < 0 || supersededAt < 0 || invalidAt < 0 || currentAt >= historicalAt || historicalAt >= supersededAt || supersededAt >= invalidAt {
 		t.Fatalf("unexpected inspection order: %s", text)
 	}
 	for _, marker := range []string{"canonical", "state:historical", "verified:2026-07-21T08:30:00Z", "state:superseded", "superseded-by:1", "invalid:lifecycle_state"} {
@@ -266,7 +266,7 @@ func TestOperationalContextExcludesNonCurrentEvenWhenPermanent(t *testing.T) {
 	canonicalLowAt := strings.Index(text, "canonical low recall")
 	canonicalPermanentAt := strings.Index(text, "canonical current")
 	legacyAt := strings.Index(text, "legacy current")
-	if !(canonicalLowAt < canonicalPermanentAt && canonicalPermanentAt < legacyAt) {
+	if canonicalLowAt >= canonicalPermanentAt || canonicalPermanentAt >= legacyAt {
 		t.Fatalf("operational context is not ordered by authority then recall count: %s", text)
 	}
 	if filter == nil || filter["should"] == nil {
