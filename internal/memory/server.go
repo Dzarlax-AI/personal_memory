@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
+	"github.com/Dzarlax-AI/personal-memory/internal/memory/lifecycle"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -597,7 +598,7 @@ func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError(validationError), nil
 	}
 
-	cacheKey := fmt.Sprintf("%s|%s|%v|%d", query, namespace, tags, limit)
+	cacheKey := fmt.Sprintf("%s|%s|%v|%d|%s", query, namespace, tags, limit, lifecycleCacheScope)
 	if cached, ok := s.cache.Get(cacheKey); ok {
 		if err := s.countRecalls(ctx, cached); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("record recall failed: %v", err)), nil
@@ -611,16 +612,14 @@ func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError(fmt.Sprintf("embedding failed: %v", err)), nil
 	}
 
-	results, err := s.qdrant.Search(ctx, vec, limit*2, s.buildFilters(tags, namespace), nil)
+	results, err := s.qdrant.Search(ctx, vec, lifecycleCandidateLimit(limit), currentLifecycleFilters(s.buildFilters(tags, namespace)), nil)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
 	}
 
 	var hits []map[string]interface{}
-	for _, p := range results {
-		if isExpired(p.Payload) {
-			continue
-		}
+	for _, p := range currentSearchPoints(results) {
+		view := lifecycleView(p.ID, p.Payload)
 		hit := map[string]interface{}{
 			"_point_id":    p.ID,
 			"text":         p.Payload["text"],
@@ -630,6 +629,7 @@ func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			"namespace":    p.Payload["namespace"],
 			"recall_count": p.Payload["recall_count"],
 		}
+		addLifecycleMetadata(hit, view)
 		hits = append(hits, hit)
 
 		if len(hits) >= limit {
@@ -919,7 +919,7 @@ func (s *Server) findRelated(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
 	}
 
-	var hits []map[string]interface{}
+	eligible := make([]qdrant.Point, 0, len(results))
 	for _, p := range results {
 		if p.Score >= s.dedupThreshold {
 			continue // skip near-duplicates
@@ -927,13 +927,20 @@ func (s *Server) findRelated(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		if isExpired(p.Payload) {
 			continue
 		}
-		hits = append(hits, map[string]interface{}{
+		eligible = append(eligible, p)
+	}
+
+	var hits []map[string]interface{}
+	for _, p := range relatedSearchPoints(eligible) {
+		hit := map[string]interface{}{
 			"text":        p.Payload["text"],
 			"score":       p.Score,
 			"tags":        p.Payload["tags"],
 			"primary_tag": p.Payload["primary_tag"],
 			"namespace":   p.Payload["namespace"],
-		})
+		}
+		addLifecycleMetadata(hit, lifecycleView(p.ID, p.Payload))
+		hits = append(hits, hit)
 		if len(hits) >= limit {
 			break
 		}
@@ -971,7 +978,8 @@ func (s *Server) listFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		}
 		tagsList := formatTagsList(p.Payload["tags"])
 		primary := formatPrimaryTag(p.Payload["primary_tag"])
-		lines = append(lines, fmt.Sprintf("- [%s] %s%s ns:%s%s recalls:%d %s", createdAt, tagsList, primary, ns, perm, rc, text))
+		lifecycleSummary := formatLifecycleView(lifecycleView(p.ID, p.Payload))
+		lines = append(lines, fmt.Sprintf("- [%s] %s%s ns:%s%s recalls:%d %s %s", createdAt, tagsList, primary, ns, perm, rc, lifecycleSummary, text))
 	}
 
 	if len(lines) == 0 {
@@ -989,6 +997,7 @@ func (s *Server) getStats(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	total := len(points)
 	permanent := 0
 	expired := 0
+	lifecycleStateCounts, legacyLifecycle, invalidLifecycle := lifecycleCounts(points)
 	namespaces := make(map[string]int)
 	tags := make(map[string]int)
 	primaryTags := make(map[string]int)
@@ -1024,6 +1033,12 @@ func (s *Server) getStats(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	fmt.Fprintf(&sb, "Total facts: %d\n", total)
 	fmt.Fprintf(&sb, "Permanent: %d\n", permanent)
 	fmt.Fprintf(&sb, "Expired: %d\n", expired)
+	sb.WriteString("\nLifecycle states:\n")
+	for _, line := range sortLifecycleCounts(lifecycleStateCounts) {
+		sb.WriteString(line + "\n")
+	}
+	fmt.Fprintf(&sb, "  legacy (no lifecycle fields): %d\n", legacyLifecycle)
+	fmt.Fprintf(&sb, "  invalid explicit metadata: %d\n", invalidLifecycle)
 
 	sb.WriteString("\nNamespaces:\n")
 	for ns, count := range namespaces {
@@ -1127,7 +1142,7 @@ func (s *Server) exportFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 }
 
 func (s *Server) getOperationalFacts(ctx context.Context, namespace string, topRecalled int) ([]qdrant.ScrollPoint, error) {
-	filters := s.buildFilters(nil, namespace)
+	filters := currentLifecycleFilters(s.buildFilters(nil, namespace))
 
 	points, err := s.qdrant.ScrollAll(ctx, filters, false)
 	if err != nil {
@@ -1139,7 +1154,8 @@ func (s *Server) getOperationalFacts(ctx context.Context, namespace string, topR
 	var nonPermanent []qdrant.ScrollPoint
 
 	for _, p := range points {
-		if isExpired(p.Payload) {
+		view := lifecycleView(p.ID, p.Payload)
+		if !lifecycle.IsCurrentTruth(view, isExpired(p.Payload)) {
 			continue
 		}
 		if v, ok := p.Payload["permanent"].(bool); ok && v {
@@ -1149,12 +1165,19 @@ func (s *Server) getOperationalFacts(ctx context.Context, namespace string, topR
 			nonPermanent = append(nonPermanent, p)
 		}
 	}
-
-	// Sort non-permanent by recall_count desc, take top N.
+	// Rank non-permanent facts by canonical authority, then recall count, and take top N.
 	sort.Slice(nonPermanent, func(i, j int) bool {
+		left := lifecycleView(nonPermanent[i].ID, nonPermanent[i].Payload)
+		right := lifecycleView(nonPermanent[j].ID, nonPermanent[j].Payload)
+		if left.Canonical != right.Canonical {
+			return left.Canonical
+		}
 		ri, _ := nonPermanent[i].Payload["recall_count"].(float64)
 		rj, _ := nonPermanent[j].Payload["recall_count"].(float64)
-		return ri > rj
+		if ri != rj {
+			return ri > rj
+		}
+		return nonPermanent[i].ID < nonPermanent[j].ID
 	})
 
 	result := permanent
@@ -1165,13 +1188,14 @@ func (s *Server) getOperationalFacts(ctx context.Context, namespace string, topR
 		}
 		rc, _ := p.Payload["recall_count"].(float64)
 		if rc == 0 {
-			break // no point including never-recalled facts
+			continue // never-recalled facts do not consume the bounded selection
 		}
 		if !seen[p.ID] {
 			result = append(result, p)
 			added++
 		}
 	}
+	sortOperationalPoints(result)
 
 	return result, nil
 }
@@ -1214,7 +1238,8 @@ func (s *Server) getOperationalContext(ctx context.Context, req mcp.CallToolRequ
 		}
 		tagsList := formatTagsList(p.Payload["tags"])
 		primary := formatPrimaryTag(p.Payload["primary_tag"])
-		fmt.Fprintf(&sb, "- %s%s ns:%s%s recalls:%d %s\n", tagsList, primary, ns, perm, rc, text)
+		lifecycleSummary := formatLifecycleView(lifecycleView(p.ID, p.Payload))
+		fmt.Fprintf(&sb, "- %s%s ns:%s%s recalls:%d %s %s\n", tagsList, primary, ns, perm, rc, lifecycleSummary, text)
 	}
 	return mcp.NewToolResultText(sb.String()), nil
 }
@@ -1242,7 +1267,8 @@ func (s *Server) OperationalContextHandler() http.HandlerFunc {
 		for _, p := range points {
 			text, _ := p.Payload["text"].(string)
 			ns, _ := p.Payload["namespace"].(string)
-			fmt.Fprintf(&sb, "- [%s] %s\n", ns, text)
+			lifecycleSummary := formatLifecycleView(lifecycleView(p.ID, p.Payload))
+			fmt.Fprintf(&sb, "- [%s] %s %s\n", ns, lifecycleSummary, text)
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write([]byte(sb.String()))
@@ -1261,10 +1287,11 @@ func formatFacts(hits []map[string]interface{}) string {
 		ns, _ := h["namespace"].(string)
 		tagsList := formatTagsList(h["tags"])
 		primary := formatPrimaryTag(h["primary_tag"])
+		lifecycleSummary := lifecycleSummaryFromHit(h)
 
-		line := fmt.Sprintf("- [%.3f] %s%s ns:%s %s", h["score"], tagsList, primary, ns, text)
+		line := fmt.Sprintf("- [%.3f] %s%s ns:%s %s %s", h["score"], tagsList, primary, ns, lifecycleSummary, text)
 		if rc := payloadInt(h["recall_count"]); rc > 0 {
-			line = fmt.Sprintf("- [%.3f] %s%s ns:%s recalls:%d %s", h["score"], tagsList, primary, ns, rc, text)
+			line = fmt.Sprintf("- [%.3f] %s%s ns:%s recalls:%d %s %s", h["score"], tagsList, primary, ns, rc, lifecycleSummary, text)
 		}
 		lines = append(lines, line)
 	}

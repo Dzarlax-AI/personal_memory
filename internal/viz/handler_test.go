@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -90,6 +91,7 @@ func TestFactListGraphAndDuplicateSummariesHidePayload(t *testing.T) {
 			t.Fatalf("GET %s: got %d (%s), want 200", target, rr.Code, rr.Body.String())
 		}
 		assertJSONOmitsKeys(t, rr.Body.Bytes(), "payload", "payload_keys", "text_source", "secret")
+		assertJSONFactSummariesHaveLegacyLifecycle(t, rr.Body.Bytes(), target)
 	}
 }
 
@@ -108,8 +110,8 @@ func TestFactSummaryAndDetailJSONContracts(t *testing.T) {
 	if err := json.Unmarshal(summaryBody, &summary); err != nil {
 		t.Fatalf("decode summary: %v", err)
 	}
-	if len(summary) != 9 {
-		t.Fatalf("summary keys = %#v, want exactly the 9 approved fields", summary)
+	if len(summary) != 10 {
+		t.Fatalf("summary keys = %#v, want exactly the 10 approved fields", summary)
 	}
 
 	detailBody, err := json.Marshal(pointToDetail(qdrant.Point{ID: "fact-1", Payload: payload}))
@@ -125,6 +127,102 @@ func TestFactSummaryAndDetailJSONContracts(t *testing.T) {
 	}
 	if _, ok := detail["payload_keys"].([]interface{}); !ok {
 		t.Fatalf("detail payload_keys = %#v, want array", detail["payload_keys"])
+	}
+	if lifecycleView, ok := detail["lifecycle"].(map[string]interface{}); !ok || lifecycleView["state"] != "current" || lifecycleView["legacy"] != true {
+		t.Fatalf("detail lifecycle = %#v, want normalized legacy current", detail["lifecycle"])
+	}
+}
+
+func TestFactSummaryNormalizesLifecycleMetadata(t *testing.T) {
+	tests := []struct {
+		name    string
+		id      string
+		payload map[string]interface{}
+		want    map[string]interface{}
+	}{
+		{
+			name:    "legacy missing state",
+			id:      "legacy-id",
+			payload: map[string]interface{}{"text": "legacy"},
+			want: map[string]interface{}{
+				"state": "current", "legacy": true, "canonical": false,
+				"supersedes": []interface{}{}, "superseded_by": []interface{}{}, "valid": true,
+			},
+		},
+		{
+			name: "explicit canonical current",
+			id:   "current-id",
+			payload: map[string]interface{}{
+				"lifecycle_state": "current", "canonical": true,
+				"provenance":  map[string]interface{}{"source": "user", "reference": "decision-7"},
+				"verified_at": "2026-07-21T08:30:00Z",
+				"supersedes":  []interface{}{"old-id", float64(42)},
+			},
+			want: map[string]interface{}{
+				"state": "current", "legacy": false, "canonical": true,
+				"provenance":  map[string]interface{}{"source": "user", "reference": "decision-7"},
+				"verified_at": "2026-07-21T08:30:00Z", "supersedes": []interface{}{"old-id", "42"},
+				"superseded_by": []interface{}{}, "valid": true,
+			},
+		},
+		{
+			name: "malformed explicit metadata",
+			id:   "invalid-id",
+			payload: map[string]interface{}{
+				"text": "private fact text must not appear in reason", "lifecycle_state": "current", "canonical": "yes",
+			},
+			want: map[string]interface{}{
+				"state": "current", "legacy": false, "canonical": false,
+				"supersedes": []interface{}{}, "superseded_by": []interface{}{}, "valid": false,
+				"invalid_reason": "canonical must be a boolean",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body, err := json.Marshal(pointToSummary(qdrant.ScrollPoint{ID: test.id, Payload: test.payload}))
+			if err != nil {
+				t.Fatalf("marshal summary: %v", err)
+			}
+			var summary map[string]interface{}
+			if err := json.Unmarshal(body, &summary); err != nil {
+				t.Fatalf("decode summary: %v", err)
+			}
+			if got := summary["lifecycle"]; !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("lifecycle = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestFactDetailAddsLifecycleWithoutMutatingRawPayload(t *testing.T) {
+	payload := map[string]interface{}{
+		"text": "selected detail", "lifecycle_state": "current", "canonical": true,
+		"provenance": map[string]interface{}{"source": "import"}, "secret": "detail only",
+	}
+	wantPayload, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal input payload: %v", err)
+	}
+
+	body, err := json.Marshal(pointToDetail(qdrant.Point{ID: "fact-id", Payload: payload}))
+	if err != nil {
+		t.Fatalf("marshal detail: %v", err)
+	}
+	var detail map[string]interface{}
+	if err := json.Unmarshal(body, &detail); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	gotPayload, err := json.Marshal(detail["payload"])
+	if err != nil {
+		t.Fatalf("marshal returned payload: %v", err)
+	}
+	if string(gotPayload) != string(wantPayload) {
+		t.Fatalf("raw payload changed: got %s, want %s", gotPayload, wantPayload)
+	}
+	if lifecycleView, ok := detail["lifecycle"].(map[string]interface{}); !ok || lifecycleView["valid"] != true {
+		t.Fatalf("detail lifecycle = %#v, want valid normalized block", detail["lifecycle"])
 	}
 }
 
@@ -643,6 +741,41 @@ func assertJSONOmitsKeys(t *testing.T, body []byte, forbidden ...string) {
 		if jsonContainsKey(value, key) {
 			t.Fatalf("response contains forbidden key %q: %s", key, body)
 		}
+	}
+}
+
+func assertJSONFactSummariesHaveLegacyLifecycle(t *testing.T, body []byte, target string) {
+	t.Helper()
+	var value interface{}
+	if err := json.Unmarshal(body, &value); err != nil {
+		t.Fatalf("decode JSON: %v", err)
+	}
+	found := 0
+	var inspect func(interface{})
+	inspect = func(node interface{}) {
+		switch typed := node.(type) {
+		case map[string]interface{}:
+			if _, hasID := typed["id"]; hasID {
+				if _, hasText := typed["text"]; hasText {
+					found++
+					view, ok := typed["lifecycle"].(map[string]interface{})
+					if !ok || view["state"] != "current" || view["legacy"] != true || view["valid"] != true {
+						t.Errorf("GET %s lifecycle = %#v, want valid legacy current", target, typed["lifecycle"])
+					}
+				}
+			}
+			for _, child := range typed {
+				inspect(child)
+			}
+		case []interface{}:
+			for _, child := range typed {
+				inspect(child)
+			}
+		}
+	}
+	inspect(value)
+	if found == 0 {
+		t.Fatalf("GET %s returned no fact summaries: %s", target, body)
 	}
 }
 

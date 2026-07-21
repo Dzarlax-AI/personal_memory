@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Dzarlax-AI/personal-memory/internal/memory/lifecycle"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 	"github.com/go-chi/chi/v5"
 )
@@ -510,18 +511,19 @@ func strongestDuplicates(ctx context.Context, points []qdrant.ScrollPoint, thres
 }
 
 // factSummary is the only fact shape returned by collection/list endpoints.
-// Keep it intentionally small: adding raw payload or diagnostic metadata here
-// would expose every fact's internal fields to dashboard bootstrap requests.
+// Keep it intentionally small: lifecycle is normalized metadata, while raw
+// payload and unrelated diagnostics stay limited to explicit detail requests.
 type factSummary struct {
-	ID          string   `json:"id"`
-	Text        string   `json:"text"`
-	TextMissing bool     `json:"text_missing"`
-	Namespace   string   `json:"namespace"`
-	Tags        []string `json:"tags"`
-	PrimaryTag  string   `json:"primary_tag"`
-	CreatedAt   string   `json:"created_at"`
-	Permanent   bool     `json:"permanent"`
-	RecallCount int      `json:"recall_count"`
+	ID          string         `json:"id"`
+	Text        string         `json:"text"`
+	TextMissing bool           `json:"text_missing"`
+	Namespace   string         `json:"namespace"`
+	Tags        []string       `json:"tags"`
+	PrimaryTag  string         `json:"primary_tag"`
+	CreatedAt   string         `json:"created_at"`
+	Permanent   bool           `json:"permanent"`
+	RecallCount int            `json:"recall_count"`
+	Lifecycle   lifecycle.View `json:"lifecycle"`
 }
 
 // factDetail extends the privacy-safe summary with the complete payload for
@@ -535,6 +537,7 @@ type factDetail struct {
 
 func pointToSummary(p qdrant.ScrollPoint) factSummary {
 	text, _ := payloadText(p.Payload)
+	lifecycleView, _ := lifecycle.Parse(p.Payload, p.ID)
 	return factSummary{
 		ID:          p.ID,
 		Text:        text,
@@ -545,6 +548,7 @@ func pointToSummary(p qdrant.ScrollPoint) factSummary {
 		CreatedAt:   payloadStringValue(p.Payload, "created_at", "created", "timestamp", "date"),
 		Permanent:   payloadBool(p.Payload["permanent"]),
 		RecallCount: payloadInt(p.Payload["recall_count"]),
+		Lifecycle:   lifecycleView,
 	}
 }
 

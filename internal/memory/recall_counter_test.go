@@ -42,7 +42,7 @@ func newRecallCounterTestServer(t *testing.T, initial int) (*Server, func() int)
 	t.Cleanup(qs.Close)
 
 	cache := NewCache(time.Minute)
-	cache.Set("query||[]|1", []map[string]interface{}{{
+	cache.Set("query||[]|1|"+lifecycleCacheScope, []map[string]interface{}{{
 		"_point_id": "fact-id", "text": "cached fact", "score": 0.99,
 		"namespace": "personal", "recall_count": float64(initial),
 	}})
