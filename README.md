@@ -229,7 +229,7 @@ Normal usage happens through an MCP client. The exact phrasing is up to the clie
 
 > Remember that I prefer PostgreSQL migrations to be reversible. Store it in the `tech` namespace with the tags `postgres`, `migrations`, and `preference`.
 
-The client should call `store_fact`. Personal Memory embeds the fact, checks for near-duplicates, warns about related facts that may contradict it, and stores the metadata.
+The client should call `store_fact`. Personal Memory embeds the fact, checks for near-duplicates, returns related candidates for semantic inspection, and stores the metadata only when no blocking duplicate exists.
 
 ### Recall context before starting work
 
@@ -297,7 +297,16 @@ The rollout is read-only: startup performs no lifecycle migration, and the curre
 
 ### Similarity and mutations
 
-New facts at or above the deduplication threshold are not stored twice. Related facts below that threshold may be returned as contradiction warnings.
+Similarity scores are cosine similarity between embeddings: they measure semantic proximity, not contradiction or entailment probability. The service uses the following distinct concepts:
+
+- A **duplicate** is a sufficiently similar existing fact that blocks `store_fact`. Duplicate behavior is otherwise unchanged, but a valid `superseded` fact never blocks a new current fact, even above the duplicate threshold.
+- A **related fact** is a non-expired semantic neighbor returned for the caller to interpret. A valid superseded fact can be returned as related at any qualifying score, including above the duplicate threshold.
+- A **disputed** fact has explicit lifecycle metadata saying that its truth or authority is contested. Similarity does not assign this state.
+- A **superseded** fact is retained history that has been explicitly replaced. Similarity does not create the replacement relationship.
+
+`store_fact` prevents duplicates and returns related candidates for semantic inspection; it does not automatically classify conflicts, supersede facts, or invoke an LLM. Clients must inspect candidate text and lifecycle metadata rather than infer a contradiction from the score alone.
+
+Successful `store_fact` calls return structured content with `status` (`stored` or `duplicate`), `stored`, an optional new `point_id`, an optional `duplicate` candidate, and `related_facts`. `find_related` returns `count` and `related_facts`. Each candidate includes `point_id`, `text`, cosine `score`, `namespace`, `tags`, optional `primary_tag`, and normalized `lifecycle` metadata. Both tools also provide a concise text fallback for clients that do not consume structured MCP content.
 
 Semantic updates and deletions require a sufficiently strong, unambiguous match. The default mutation threshold is `0.90`; candidates within `0.01` of each other are treated as ambiguous. Supplying a validated `point_id` bypasses similarity selection while still enforcing namespace checks.
 
@@ -311,7 +320,7 @@ The RAG index is separate from the fact collection. Documents are split along Ma
 
 | Tool | Purpose |
 |---|---|
-| `store_fact(fact, tags?, primary_tag?, namespace?, permanent?, valid_until?)` | Store a fact after deduplication and contradiction checks. |
+| `store_fact(fact, tags?, primary_tag?, namespace?, permanent?, valid_until?)` | Prevent duplicate writes and return structured related-fact candidates plus a text fallback. |
 | `update_fact(new_fact, old_query?, point_id?, tags?, primary_tag?, namespace?, permanent?)` | Replace a fact selected by a safe semantic match or exact ID. |
 | `delete_fact(query?, point_id?, namespace?)` | Delete a fact selected by a safe semantic match or exact ID. |
 | `forget_old(days=90, namespace?, dry_run=true)` | Preview or remove old non-permanent facts. |
@@ -322,7 +331,7 @@ The RAG index is separate from the fact collection. Documents are split along Ma
 | Tool | Purpose |
 |---|---|
 | `recall_facts(query, namespace?, limit=5)` | Return semantically relevant valid, non-expired current facts and increment recall counts. |
-| `find_related(query, namespace?, limit=5)` | Inspect related non-expired facts across lifecycle states below the duplicate threshold. |
+| `find_related(query, namespace?, limit=5)` | Inspect lifecycle-ranked related non-expired facts with cosine scores; valid superseded facts remain eligible above the duplicate threshold. |
 | `list_facts(namespace?)` | List facts and normalized lifecycle metadata across states. |
 | `get_stats()` | Summarize namespaces, tags, lifecycle counts, and most-recalled facts. |
 | `list_tags(namespace?)` | List tags and their usage counts. |
@@ -457,7 +466,8 @@ Configuration is read from environment variables and validated at startup. Inval
 |---|---:|---|
 | `CACHE_TTL` | `60` | Recall cache TTL in seconds. |
 | `DEDUP_THRESHOLD` | `0.97` | Similarity at which a new fact is considered a duplicate. |
-| `CONTRADICTION_LOW` | `0.60` | Lower bound for related-fact contradiction warnings. |
+| `RELATED_FACT_LOW` | `0.60` | Minimum cosine similarity for related-fact candidates. |
+| `CONTRADICTION_LOW` | — | Deprecated compatibility fallback for `RELATED_FACT_LOW` for one deprecation window. `RELATED_FACT_LOW` wins when both are set. |
 | `MUTATION_MATCH_THRESHOLD` | `0.90` | Minimum score for semantic update/delete selection. |
 
 ### OAuth

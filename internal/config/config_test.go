@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"reflect"
 	"strings"
@@ -64,6 +66,183 @@ func TestLoadRejectsMalformedTypedEnvironment(t *testing.T) {
 	t.Setenv("KEEP_SNAPSHOTS", "seven")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected malformed KEEP_SNAPSHOTS to fail")
+	}
+}
+
+func TestLoadRelatedFactLowSelectionAndWarnings(t *testing.T) {
+	tests := []struct {
+		name             string
+		related          *string
+		legacy           *string
+		want             float64
+		wantWarning      string
+		unwantedLogValue string
+	}{
+		{name: "default", want: 0.60},
+		{name: "canonical only", related: stringPointer("0.62"), want: 0.62},
+		{
+			name:             "legacy only",
+			legacy:           stringPointer("0.61"),
+			want:             0.61,
+			wantWarning:      "CONTRADICTION_LOW is deprecated; use RELATED_FACT_LOW",
+			unwantedLogValue: "0.61",
+		},
+		{
+			name:             "canonical overrides legacy",
+			related:          stringPointer("0.63"),
+			legacy:           stringPointer("0.64"),
+			want:             0.63,
+			wantWarning:      "CONTRADICTION_LOW is deprecated and ignored because RELATED_FACT_LOW is set",
+			unwantedLogValue: "0.64",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setSecureTestEnv(t)
+			if tt.related != nil {
+				t.Setenv("RELATED_FACT_LOW", *tt.related)
+			}
+			if tt.legacy != nil {
+				t.Setenv("CONTRADICTION_LOW", *tt.legacy)
+			}
+
+			var logs bytes.Buffer
+			previousLogger := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			defer slog.SetDefault(previousLogger)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.RelatedFactLow != tt.want {
+				t.Fatalf("RelatedFactLow = %v, want %v", cfg.RelatedFactLow, tt.want)
+			}
+
+			logOutput := logs.String()
+			warningCount := strings.Count(logOutput, "level=WARN")
+			if tt.wantWarning == "" {
+				if warningCount != 0 {
+					t.Fatalf("warning count = %d, want 0; logs: %s", warningCount, logOutput)
+				}
+				return
+			}
+			if warningCount != 1 {
+				t.Fatalf("warning count = %d, want 1; logs: %s", warningCount, logOutput)
+			}
+			if !strings.Contains(logOutput, tt.wantWarning) {
+				t.Fatalf("logs = %q, want warning %q", logOutput, tt.wantWarning)
+			}
+			if tt.unwantedLogValue != "" && strings.Contains(logOutput, tt.unwantedLogValue) {
+				t.Fatalf("warning leaked configured value %q: %s", tt.unwantedLogValue, logOutput)
+			}
+		})
+	}
+}
+
+func TestLoadRelatedFactLowRejectsMalformedActiveSource(t *testing.T) {
+	tests := []struct {
+		name         string
+		related      *string
+		legacy       *string
+		want         string
+		wantWarnings int
+	}{
+		{
+			name:    "canonical only",
+			related: stringPointer("not-a-number"),
+			want:    "RELATED_FACT_LOW",
+		},
+		{
+			name:    "empty canonical only",
+			related: stringPointer(""),
+			want:    "RELATED_FACT_LOW",
+		},
+		{
+			name:         "canonical does not fall back to legacy",
+			related:      stringPointer("not-a-number"),
+			legacy:       stringPointer("0.61"),
+			want:         "RELATED_FACT_LOW",
+			wantWarnings: 1,
+		},
+		{
+			name:         "empty canonical does not fall back to legacy",
+			related:      stringPointer(""),
+			legacy:       stringPointer("0.61"),
+			want:         "RELATED_FACT_LOW",
+			wantWarnings: 1,
+		},
+		{
+			name:         "legacy only",
+			legacy:       stringPointer("not-a-number"),
+			want:         "CONTRADICTION_LOW",
+			wantWarnings: 1,
+		},
+		{
+			name:         "empty legacy only",
+			legacy:       stringPointer(""),
+			want:         "CONTRADICTION_LOW",
+			wantWarnings: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setSecureTestEnv(t)
+			if tt.related != nil {
+				t.Setenv("RELATED_FACT_LOW", *tt.related)
+			}
+			if tt.legacy != nil {
+				t.Setenv("CONTRADICTION_LOW", *tt.legacy)
+			}
+			var logs bytes.Buffer
+			previousLogger := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			defer slog.SetDefault(previousLogger)
+
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Load() error = %v, want source %q", err, tt.want)
+			}
+			if got := strings.Count(logs.String(), "level=WARN"); got != tt.wantWarnings {
+				t.Fatalf("warning count = %d, want %d; logs: %s", got, tt.wantWarnings, logs.String())
+			}
+		})
+	}
+}
+
+func TestLoadRelatedFactLowValidationNamesActiveSource(t *testing.T) {
+	tests := []struct {
+		name    string
+		related *string
+		legacy  *string
+		dedup   string
+		want    string
+	}{
+		{name: "default", dedup: "0.50", want: "RELATED_FACT_LOW"},
+		{name: "canonical range", related: stringPointer("NaN"), dedup: "0.97", want: "RELATED_FACT_LOW"},
+		{name: "canonical ordering", related: stringPointer("0.98"), dedup: "0.97", want: "RELATED_FACT_LOW"},
+		{name: "legacy range", legacy: stringPointer("+Inf"), dedup: "0.97", want: "CONTRADICTION_LOW"},
+		{name: "legacy ordering", legacy: stringPointer("0.98"), dedup: "0.97", want: "CONTRADICTION_LOW"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setSecureTestEnv(t)
+			if tt.related != nil {
+				t.Setenv("RELATED_FACT_LOW", *tt.related)
+			}
+			if tt.legacy != nil {
+				t.Setenv("CONTRADICTION_LOW", *tt.legacy)
+			}
+			t.Setenv("DEDUP_THRESHOLD", tt.dedup)
+
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Load() error = %v, want source %q", err, tt.want)
+			}
+		})
 	}
 }
 
@@ -307,6 +486,8 @@ func TestEnvCSVEmpty(t *testing.T) {
 
 func setSecureTestEnv(t *testing.T) {
 	t.Helper()
+	unsetTestEnv(t, "RELATED_FACT_LOW")
+	unsetTestEnv(t, "CONTRADICTION_LOW")
 	t.Setenv("API_KEY", "test-key")
 	t.Setenv("ALLOW_INSECURE_AUTH", "false")
 	t.Setenv("ENABLE_TODOIST", "false")
@@ -322,4 +503,27 @@ func setSecureTestEnv(t *testing.T) {
 	t.Setenv("EMBED_MODEL", defaultEmbedModelID)
 	t.Setenv("EMBED_MODEL_REVISION", defaultEmbedModelRevision)
 	t.Setenv("ADOPT_EXISTING_EMBEDDING_IDENTITY", "false")
+}
+
+func stringPointer(value string) *string {
+	return &value
+}
+
+func unsetTestEnv(t *testing.T, key string) {
+	t.Helper()
+	value, set := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("unset %s: %v", key, err)
+	}
+	t.Cleanup(func() {
+		if set {
+			if err := os.Setenv(key, value); err != nil {
+				t.Errorf("restore %s: %v", key, err)
+			}
+			return
+		}
+		if err := os.Unsetenv(key); err != nil {
+			t.Errorf("restore unset %s: %v", key, err)
+		}
+	})
 }
