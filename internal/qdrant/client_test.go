@@ -371,6 +371,92 @@ func TestSetPayloadUsesPartialUpdateEndpoint(t *testing.T) {
 	}
 }
 
+func TestReplaceLifecyclePayloadUsesOrderedStrongBatch(t *testing.T) {
+	type capturedRequest struct {
+		method   string
+		path     string
+		wait     string
+		ordering string
+		body     map[string]interface{}
+	}
+	var requests []capturedRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		requests = append(requests, capturedRequest{
+			method:   r.Method,
+			path:     r.URL.Path,
+			wait:     r.URL.Query().Get("wait"),
+			ordering: r.URL.Query().Get("ordering"),
+			body:     body,
+		})
+		_, _ = w.Write([]byte(`{"status":"ok","result":[{"status":"completed"}]}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "memory")
+	set := map[string]interface{}{
+		"lifecycle_state": "current",
+		"canonical":       false,
+		"supersedes":      []string{},
+		"superseded_by":   []string{},
+	}
+	for _, id := range []string{"12345", "4f08ef2a-42c0-45df-a6c3-5ca86db4ddf8"} {
+		if err := client.ReplaceLifecyclePayload(context.Background(), id, set, []string{"provenance", "verified_at"}); err != nil {
+			t.Fatalf("ReplaceLifecyclePayload(%q): %v", id, err)
+		}
+	}
+	if len(requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(requests))
+	}
+	for _, request := range requests {
+		if request.method != http.MethodPost || request.path != "/collections/memory/points/batch" {
+			t.Fatalf("unexpected request: %s %s", request.method, request.path)
+		}
+		if request.wait != "true" || request.ordering != "strong" {
+			t.Fatalf("query wait=%q ordering=%q", request.wait, request.ordering)
+		}
+		operations, ok := request.body["operations"].([]interface{})
+		if !ok || len(operations) != 2 {
+			t.Fatalf("operations = %#v, want set + delete", request.body["operations"])
+		}
+	}
+	numericOperations := requests[0].body["operations"].([]interface{})
+	numericSet := numericOperations[0].(map[string]interface{})["set_payload"].(map[string]interface{})
+	if got := numericSet["points"].([]interface{})[0]; got != float64(12345) {
+		t.Fatalf("numeric point ID = %#v, want 12345", got)
+	}
+	uuidOperations := requests[1].body["operations"].([]interface{})
+	uuidSet := uuidOperations[0].(map[string]interface{})["set_payload"].(map[string]interface{})
+	if got := uuidSet["points"].([]interface{})[0]; got != "4f08ef2a-42c0-45df-a6c3-5ca86db4ddf8" {
+		t.Fatalf("UUID point ID = %#v", got)
+	}
+}
+
+func TestReplaceLifecyclePayloadRejectsUnrelatedKeysBeforeRequest(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	err := NewClient(server.URL, "memory").ReplaceLifecyclePayload(
+		context.Background(),
+		"1",
+		map[string]interface{}{"text": "must not be rewritten"},
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "not lifecycle metadata") {
+		t.Fatalf("error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("requests = %d, want 0", requests)
+	}
+}
+
 func TestGetRetrievesExactPoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/collections/memory/points/exact-id" {

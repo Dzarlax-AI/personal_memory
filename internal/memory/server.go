@@ -28,6 +28,7 @@ type Server struct {
 	dedupThreshold         float64
 	relatedFactLow         float64
 	mutationMatchThreshold float64
+	factMutationMu         sync.Mutex
 	recallCounterMu        sync.Mutex
 	recallCounter          *recallCounter
 }
@@ -113,6 +114,13 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 		mcp.WithString("namespace", mcp.Description("Namespace (default: default)")),
 		mcp.WithBoolean("permanent", mcp.Description("Never deleted by forget_old")),
 		mcp.WithString("valid_until", mcp.Description("ISO date after which fact expires")),
+		mcp.WithString("lifecycle_state", mcp.Description("Optional explicit lifecycle state")),
+		mcp.WithBoolean("canonical", mcp.Description("Current-only authority hint")),
+		mcp.WithString("provenance_source", mcp.Description("Non-empty provenance source")),
+		mcp.WithString("provenance_reference", mcp.Description("Optional provenance reference; requires provenance_source")),
+		mcp.WithString("verified_at", mcp.Description("Optional RFC3339 verification timestamp")),
+		mcp.WithArray("supersedes", mcp.Description("Point IDs replaced by this fact"), mcp.WithStringItems(), mcp.MaxItems(maxLifecycleRelations), mcp.UniqueItems(true)),
+		mcp.WithArray("superseded_by", mcp.Description("Point IDs replacing this fact"), mcp.WithStringItems(), mcp.MaxItems(maxLifecycleRelations), mcp.UniqueItems(true)),
 	), s.storeFact)
 
 	srv.AddTool(mcp.NewTool("recall_facts",
@@ -139,7 +147,31 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 		mcp.WithString("primary_tag", mcp.Description("Single primary tag for overview grouping; must also be present in tags")),
 		mcp.WithString("namespace", mcp.Description("Namespace")),
 		mcp.WithBoolean("permanent", mcp.Description("Set permanent flag")),
+		mcp.WithString("lifecycle_state", mcp.Description("Optional replacement lifecycle state")),
+		mcp.WithBoolean("canonical", mcp.Description("Current-only authority hint")),
+		mcp.WithString("provenance_source", mcp.Description("Non-empty provenance source")),
+		mcp.WithString("provenance_reference", mcp.Description("Optional provenance reference; requires provenance_source")),
+		mcp.WithString("verified_at", mcp.Description("Optional RFC3339 verification timestamp")),
+		mcp.WithArray("supersedes", mcp.Description("Point IDs replaced by this fact"), mcp.WithStringItems(), mcp.MaxItems(maxLifecycleRelations), mcp.UniqueItems(true)),
+		mcp.WithArray("superseded_by", mcp.Description("Point IDs replacing this fact"), mcp.WithStringItems(), mcp.MaxItems(maxLifecycleRelations), mcp.UniqueItems(true)),
 	), s.updateFact)
+
+	srv.AddTool(mcp.NewTool("set_fact_lifecycle",
+		mcp.WithDescription("Replace lifecycle metadata for one exact fact ID without changing its text or embedding."),
+		mcp.WithOutputSchema[LifecycleMutationResult](),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithString("point_id", mcp.Description("Exact numeric legacy ID or UUID"), mcp.Required()),
+		mcp.WithString("lifecycle_state", mcp.Description("current, historical, superseded, or disputed"), mcp.Required()),
+		mcp.WithBoolean("canonical", mcp.Description("Current-only authority hint")),
+		mcp.WithString("provenance_source", mcp.Description("Non-empty provenance source")),
+		mcp.WithString("provenance_reference", mcp.Description("Optional provenance reference; requires provenance_source")),
+		mcp.WithString("verified_at", mcp.Description("Optional RFC3339 verification timestamp")),
+		mcp.WithArray("supersedes", mcp.Description("Point IDs replaced by this fact"), mcp.WithStringItems(), mcp.MaxItems(maxLifecycleRelations), mcp.UniqueItems(true)),
+		mcp.WithArray("superseded_by", mcp.Description("Point IDs replacing this fact"), mcp.WithStringItems(), mcp.MaxItems(maxLifecycleRelations), mcp.UniqueItems(true)),
+	), s.setFactLifecycle)
 
 	srv.AddTool(mcp.NewTool("delete_fact",
 		mcp.WithDescription("Find a fact by similarity and delete it."),
@@ -519,6 +551,11 @@ type FindRelatedResult struct {
 	Count        int                    `json:"count"`
 }
 
+type LifecycleMutationResult struct {
+	PointID   string         `json:"point_id"`
+	Lifecycle lifecycle.View `json:"lifecycle"`
+}
+
 func formatRelatedCandidate(candidate RelatedFactCandidate) string {
 	encoded, err := json.Marshal(candidate)
 	if err != nil {
@@ -564,6 +601,21 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	}
 	tags, primaryTag := normalizeFactTags(tagsParam(args), strParam(args, "primary_tag"))
 	namespace := NormalizeNamespace(strParam(args, "namespace"))
+	pointID := PointID(namespace, fact)
+	parsedLifecycle, err := parseLifecycleInput(args, false)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	var targetLifecycle lifecycle.View
+	if parsedLifecycle.Present {
+		targetLifecycle, err = lifecycle.NormalizeInput(pointID, parsedLifecycle.Input)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		if err := lifecycle.ValidateTransition(pointID, lifecycle.View{State: lifecycle.Current, Valid: true}, targetLifecycle); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+	}
 	permanent := boolParam(args, "permanent", false)
 	validUntil := strParam(args, "valid_until")
 	if validUntil != "" {
@@ -571,6 +623,9 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 			return mcp.NewToolResultError("valid_until must use YYYY-MM-DD format"), nil
 		}
 	}
+
+	s.factMutationMu.Lock()
+	defer s.factMutationMu.Unlock()
 
 	vec, err := s.embed.Embed(ctx, fact)
 	if err != nil {
@@ -628,8 +683,10 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	if validUntil != "" {
 		payload["valid_until"] = validUntil
 	}
+	if parsedLifecycle.Present {
+		payload = lifecycle.ApplyToPayload(payload, targetLifecycle)
+	}
 
-	pointID := PointID(namespace, fact)
 	if err := s.qdrant.Upsert(ctx, qdrant.Point{
 		ID:      pointID,
 		Vector:  vec,
@@ -728,28 +785,55 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 	}
+	parsedLifecycle, err := parseLifecycleInput(args, false)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	s.factMutationMu.Lock()
+	defer s.factMutationMu.Unlock()
 
 	old, targetError := s.mutationTarget(ctx, args, "old_query")
 	if targetError != "" {
 		return mcp.NewToolResultError(targetError), nil
 	}
 	oldText, _ := old.Payload["text"].(string)
-	// Embed new fact.
+
+	namespace := NormalizeNamespace(stringFromPayload(old.Payload["namespace"]))
+	if ns := strParam(args, "namespace"); ns != "" {
+		namespace = NormalizeNamespace(ns)
+	}
+	newID := PointID(namespace, newFact)
+
+	var targetLifecycle lifecycle.View
+	if parsedLifecycle.Present {
+		currentLifecycle := lifecycleView(old.ID, old.Payload)
+		targetLifecycle, err = lifecycle.NormalizeInput(newID, parsedLifecycle.Input)
+		if err == nil {
+			err = lifecycle.ValidateTransition(newID, currentLifecycle, targetLifecycle)
+		}
+	} else {
+		err = lifecycle.ValidateRelationshipsForPoint(old.Payload, newID)
+	}
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("lifecycle metadata is invalid for updated point_id: %v", err)), nil
+	}
+
+	// Embed only after all metadata that can be validated without the new
+	// vector has passed.
 	newVec, err := s.embed.Embed(ctx, newFact)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("embedding new fact failed: %v", err)), nil
 	}
 
-	// Preserve metadata from old fact.
-	payload := old.Payload
+	// Preserve metadata from old fact without mutating the retrieved map.
+	payload := make(map[string]interface{}, len(old.Payload)+1)
+	for key, value := range old.Payload {
+		payload[key] = value
+	}
 	payload["text"] = newFact
 	payload["updated_at"] = nowISO()
-	if ns := strParam(args, "namespace"); ns != "" {
-		payload["namespace"] = NormalizeNamespace(ns)
-	}
-	namespace := NormalizeNamespace(stringFromPayload(payload["namespace"]))
 	payload["namespace"] = namespace
-	newID := PointID(namespace, newFact)
 	if tags := tagsParam(args); tags != nil {
 		primary := strParam(args, "primary_tag")
 		if primary == "" {
@@ -766,6 +850,9 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	if v, ok := args["permanent"]; ok && v != nil {
 		payload["permanent"] = v
 	}
+	if parsedLifecycle.Present {
+		payload = lifecycle.ApplyToPayload(payload, targetLifecycle)
+	}
 
 	if err := s.qdrant.Upsert(ctx, qdrant.Point{
 		ID:      newID,
@@ -774,6 +861,8 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	}); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("store updated fact failed: %v", err)), nil
 	}
+	// The new point is visible even if deleting the old ID fails.
+	s.cache.Invalidate()
 
 	if old.ID != newID {
 		if err := s.qdrant.Delete(ctx, []string{old.ID}); err != nil {
@@ -781,8 +870,49 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		}
 	}
 
-	s.cache.Invalidate()
 	return mcp.NewToolResultText(fmt.Sprintf("Updated: '%s' → '%s'", oldText, newFact)), nil
+}
+
+func (s *Server) setFactLifecycle(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	pointID := strings.TrimSpace(strParam(args, "point_id"))
+	if !validPointIDPattern.MatchString(pointID) {
+		return mcp.NewToolResultError("point_id must be a numeric legacy ID or UUID"), nil
+	}
+	parsed, err := parseLifecycleInput(args, true)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	target, err := lifecycle.NormalizeInput(pointID, parsed.Input)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	s.factMutationMu.Lock()
+	defer s.factMutationMu.Unlock()
+
+	point, found, err := s.qdrant.Get(ctx, pointID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("exact point lookup failed: %v", err)), nil
+	}
+	if !found {
+		return mcp.NewToolResultError(fmt.Sprintf("no fact found with point_id %s", pointID)), nil
+	}
+	current := lifecycleView(point.ID, point.Payload)
+	if err := lifecycle.ValidateTransition(point.ID, current, target); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	set, deleteKeys := lifecycleMutationPayload(target)
+	err = s.qdrant.ReplaceLifecyclePayload(ctx, point.ID, set, deleteKeys)
+	// Once dispatched, a transport/server error is ambiguous: Qdrant may have
+	// applied the first ordered operation. Never leave a stale read cache.
+	s.cache.Invalidate()
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("set lifecycle failed: %v", err)), nil
+	}
+
+	result := LifecycleMutationResult{PointID: point.ID, Lifecycle: target}
+	return mcp.NewToolResultStructured(result, fmt.Sprintf("Updated lifecycle for point_id %s to %s", point.ID, target.State)), nil
 }
 
 func (s *Server) deleteFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -795,6 +925,9 @@ func (s *Server) deleteFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 	}
+	s.factMutationMu.Lock()
+	defer s.factMutationMu.Unlock()
+
 	target, targetError := s.mutationTarget(ctx, args, "query")
 	if targetError != "" {
 		return mcp.NewToolResultError(targetError), nil
@@ -822,6 +955,9 @@ func (s *Server) forgetOld(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	dryRun := boolParam(args, "dry_run", true)
+
+	s.factMutationMu.Lock()
+	defer s.factMutationMu.Unlock()
 
 	cutoff := time.Now().AddDate(0, 0, -days)
 	filters := s.buildFilters(nil, namespace)
@@ -887,9 +1023,12 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError(fmt.Sprintf("facts must contain at most %d entries", maxImportFacts)), nil
 	}
 
+	s.factMutationMu.Lock()
+	defer s.factMutationMu.Unlock()
+
 	imported := 0
 	skipped := 0
-	for _, f := range facts {
+	for index, f := range facts {
 		text, _ := f["text"].(string)
 		if err := validateBoundedString("text", text, maxFactBytes, true); err != nil {
 			skipped++
@@ -908,14 +1047,32 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			continue
 		}
 
+		namespace := NormalizeNamespace(stringFromPayload(f["namespace"]))
+		pointID := PointID(namespace, text)
+		var importedLifecycle lifecycle.View
+		hasLifecycle := false
+		for _, key := range lifecycle.PayloadFields() {
+			if _, exists := f[key]; exists {
+				hasLifecycle = true
+				break
+			}
+		}
+		if hasLifecycle {
+			var err error
+			importedLifecycle, err = lifecycle.Parse(f, pointID)
+			if err != nil {
+				slog.Warn("import lifecycle validation failed", "item_index", index, "point_id", pointID, "error", err)
+				skipped++
+				continue
+			}
+		}
+
 		vec, err := s.embed.Embed(ctx, text)
 		if err != nil {
-			slog.Warn("import embed failed", "text", text, "error", err)
+			slog.Warn("import embed failed", "item_index", index, "point_id", pointID)
 			skipped++
 			continue
 		}
-
-		namespace := NormalizeNamespace(stringFromPayload(f["namespace"]))
 
 		// Deduplication is namespace-scoped and lifecycle-aware, matching
 		// store_fact semantics. Search failures preserve the existing fail-open
@@ -950,20 +1107,25 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		if payload["created_at"] == nil {
 			payload["created_at"] = nowISO()
 		}
+		if hasLifecycle {
+			payload = lifecycle.ApplyToPayload(payload, importedLifecycle)
+		}
 
 		if err := s.qdrant.Upsert(ctx, qdrant.Point{
-			ID:      PointID(namespace, text),
+			ID:      pointID,
 			Vector:  vec,
 			Payload: payload,
 		}); err != nil {
-			slog.Warn("import upsert failed", "text", text, "error", err)
+			slog.Warn("import upsert failed", "item_index", index, "point_id", pointID)
 			skipped++
 			continue
 		}
 		imported++
 	}
 
-	s.cache.Invalidate()
+	if imported > 0 {
+		s.cache.Invalidate()
+	}
 	return mcp.NewToolResultText(fmt.Sprintf("Imported %d facts, skipped %d.", imported, skipped)), nil
 }
 

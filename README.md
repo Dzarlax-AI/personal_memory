@@ -293,7 +293,7 @@ Facts normalize to one of four states: `current`, `historical`, `superseded`, or
 
 Default `recall_facts` and operational-context reads return only valid, non-expired current facts. `find_related` is the semantic history-inspection path and can return all lifecycle states with normalized lifecycle labels; list, export, stats, and Viz remain inventory surfaces across states. Canonical, provenance, verification, relationship, transition, retention, expiry, visibility, rollout, and rollback semantics are defined in the normative [Fact Lifecycle Contract](docs/lifecycle.md).
 
-The rollout is read-only: startup performs no lifecycle migration, and the current write tools do not expose lifecycle mutation inputs.
+Startup performs no lifecycle migration. Lifecycle inputs on `store_fact` and `update_fact` are optional, while `set_fact_lifecycle` changes a complete lifecycle target by exact point ID without embedding or semantic selection. Legacy backfill is a separate dry-run-first command; see the migration runbook in the normative lifecycle contract.
 
 ### Similarity and mutations
 
@@ -320,8 +320,9 @@ The RAG index is separate from the fact collection. Documents are split along Ma
 
 | Tool | Purpose |
 |---|---|
-| `store_fact(fact, tags?, primary_tag?, namespace?, permanent?, valid_until?)` | Prevent duplicate writes and return structured related-fact candidates plus a text fallback. |
-| `update_fact(new_fact, old_query?, point_id?, tags?, primary_tag?, namespace?, permanent?)` | Replace a fact selected by a safe semantic match or exact ID. |
+| `store_fact(fact, tags?, primary_tag?, namespace?, permanent?, valid_until?, lifecycle_state?, canonical?, provenance_source?, provenance_reference?, verified_at?, supersedes?, superseded_by?)` | Prevent duplicate writes, optionally store validated lifecycle metadata, and return structured related-fact candidates. |
+| `update_fact(new_fact, old_query?, point_id?, tags?, primary_tag?, namespace?, permanent?, lifecycle_state?, canonical?, provenance_source?, provenance_reference?, verified_at?, supersedes?, superseded_by?)` | Replace a fact selected by a safe semantic match or exact ID and optionally replace its lifecycle metadata. |
+| `set_fact_lifecycle(point_id, lifecycle_state, canonical?, provenance_source?, provenance_reference?, verified_at?, supersedes?, superseded_by?)` | Replace lifecycle metadata for an exact point without changing text or embedding. |
 | `delete_fact(query?, point_id?, namespace?)` | Delete a fact selected by a safe semantic match or exact ID. |
 | `forget_old(days=90, namespace?, dry_run=true)` | Preview or remove old non-permanent facts. |
 | `import_facts(facts)` | Import a JSON-array string with at most 1,000 entries and 4 MiB. |
@@ -401,7 +402,7 @@ Canonical verification:
 make test
 ```
 
-This downloads and checksum-verifies pinned visualization assets, runs `go vet ./...`, runs all Go tests, and builds all three commands.
+This downloads and checksum-verifies pinned visualization assets, runs `go vet ./...`, runs all Go tests, and builds all four commands.
 
 Individual commands:
 
@@ -409,7 +410,7 @@ Individual commands:
 make dev-deps
 go test ./...
 go test -race ./...
-go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids
+go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle
 docker build -t personal-memory .
 ```
 
@@ -418,6 +419,33 @@ The final image contains:
 - `/personal-memory` — server entrypoint;
 - `/personal-memory-indexer` — one-shot RAG indexer;
 - `/personal-memory-migrate-ids` — memory ID migration utility.
+- `/personal-memory-migrate-lifecycle` — dry-run/apply/rollback lifecycle migration utility.
+
+Lifecycle migration is not part of deployment and never runs at server startup:
+
+```bash
+# Preview only.
+/personal-memory-migrate-lifecycle
+
+# After creating a Qdrant snapshot and stopping every memory writer.
+/personal-memory-migrate-lifecycle \
+  -apply \
+  -confirm-writes-stopped \
+  -rollback-manifest /secure/path/memory-lifecycle-rollback.jsonl
+
+# Resume uses the same immutable manifest.
+/personal-memory-migrate-lifecycle \
+  -apply \
+  -confirm-writes-stopped \
+  -rollback-manifest /secure/path/memory-lifecycle-rollback.jsonl
+
+# Roll back only unchanged migration targets.
+/personal-memory-migrate-lifecycle \
+  -rollback /secure/path/memory-lifecycle-rollback.jsonl \
+  -confirm-writes-stopped
+```
+
+The manifest is lifecycle-only and mode `0600`, but it must still be stored as operational backup material. Conflicts return a non-zero status and are never overwritten automatically. Full snapshot and rollback rules are in [docs/lifecycle.md](docs/lifecycle.md).
 
 ### Project layout
 
@@ -426,6 +454,7 @@ cmd/
   server/                 HTTP and MCP server entrypoint
   indexer/                standalone RAG indexer
   migrate-memory-ids/     namespace-aware ID migration
+  migrate-memory-lifecycle/ explicit lifecycle migration and rollback
 internal/
   backup/                 Qdrant snapshot loop
   config/                 environment loading and validation
@@ -433,6 +462,7 @@ internal/
   embeddingidentity/      fail-closed model and collection identity guard
   memory/                 memory tools, cache, IDs, recall counter
   memorymigration/        dry-run/apply migration logic
+  lifecyclemigration/     lifecycle dry-run/apply/resume/rollback logic
   middleware/             authentication and request limits
   oauth/                  OIDC discovery and JWT verification
   qdrant/                 bounded Qdrant REST client

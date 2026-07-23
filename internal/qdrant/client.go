@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -288,7 +289,7 @@ func (c *Client) Upsert(ctx context.Context, point Point) error {
 	body := map[string]interface{}{
 		"points": []map[string]interface{}{
 			{
-				"id":      point.ID,
+				"id":      qdrantPointID(point.ID),
 				"vector":  point.Vector,
 				"payload": point.Payload,
 			},
@@ -487,6 +488,66 @@ func (c *Client) SetPayload(ctx context.Context, id string, payload map[string]i
 	return c.mutate(ctx, http.MethodPost, url, body, true)
 }
 
+var lifecyclePayloadKeys = map[string]struct{}{
+	"lifecycle_state": {},
+	"canonical":       {},
+	"provenance":      {},
+	"verified_at":     {},
+	"supersedes":      {},
+	"superseded_by":   {},
+}
+
+// ReplaceLifecyclePayload applies a complete lifecycle target without
+// rewriting unrelated payload fields or vectors. Qdrant executes batch
+// operations in order; callers can safely retry the same target.
+func (c *Client) ReplaceLifecyclePayload(ctx context.Context, id string, set map[string]interface{}, deleteKeys []string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("point ID is required")
+	}
+	if len(set) == 0 && len(deleteKeys) == 0 {
+		return fmt.Errorf("lifecycle payload mutation must not be empty")
+	}
+	for key := range set {
+		if _, allowed := lifecyclePayloadKeys[key]; !allowed {
+			return fmt.Errorf("payload key %q is not lifecycle metadata", key)
+		}
+	}
+	for _, key := range deleteKeys {
+		if _, allowed := lifecyclePayloadKeys[key]; !allowed {
+			return fmt.Errorf("payload key %q is not lifecycle metadata", key)
+		}
+	}
+
+	pointID := qdrantPointID(id)
+	operations := make([]map[string]interface{}, 0, 2)
+	if len(set) > 0 {
+		operations = append(operations, map[string]interface{}{
+			"set_payload": map[string]interface{}{
+				"payload": set,
+				"points":  []interface{}{pointID},
+			},
+		})
+	}
+	if len(deleteKeys) > 0 {
+		operations = append(operations, map[string]interface{}{
+			"delete_payload": map[string]interface{}{
+				"keys":   append([]string(nil), deleteKeys...),
+				"points": []interface{}{pointID},
+			},
+		})
+	}
+
+	requestURL := fmt.Sprintf("%s/collections/%s/points/batch", c.url, c.collection)
+	parsed, err := url.Parse(requestURL)
+	if err != nil {
+		return fmt.Errorf("parse lifecycle batch URL: %w", err)
+	}
+	query := parsed.Query()
+	query.Set("ordering", "strong")
+	parsed.RawQuery = query.Encode()
+	return c.mutate(ctx, http.MethodPost, parsed.String(), map[string]interface{}{"operations": operations}, true)
+}
+
 // CreateSnapshot triggers a snapshot creation.
 func (c *Client) CreateSnapshot(ctx context.Context) (string, error) {
 	url := fmt.Sprintf("%s/collections/%s/snapshots", c.url, c.collection)
@@ -632,6 +693,20 @@ func validateMutationResponse(body []byte, requireCompleted bool) error {
 			completed = true
 			validated = true
 		}
+	}
+	if results, ok := response.Result.([]interface{}); ok && len(results) > 0 {
+		completed = true
+		for _, rawResult := range results {
+			result, ok := rawResult.(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("qdrant batch result is %T, want object", rawResult)
+			}
+			status, ok := result["status"].(string)
+			if !ok || status != "completed" {
+				return fmt.Errorf("qdrant batch operation status is %v, want completed", result["status"])
+			}
+		}
+		validated = true
 	}
 	if requireCompleted && !completed {
 		return fmt.Errorf("qdrant mutation response does not confirm a completed operation")

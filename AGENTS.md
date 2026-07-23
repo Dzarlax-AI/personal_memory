@@ -45,16 +45,18 @@ Collection name is now a `qdrant.Client` field, not a constant — one client pe
 cmd/
   server/main.go           — entrypoint, Chi router, graceful shutdown
   indexer/main.go          — standalone RAG indexer binary (cron-friendly)
+  migrate-memory-lifecycle/ — dry-run/apply/rollback lifecycle migration
 internal/
   config/                  — env vars → struct
   middleware/auth.go       — X-API-Key + Bearer auth
   qdrant/client.go         — Qdrant REST client (upsert, search, scroll, delete, snapshots, field index)
   embeddings/client.go     — TEI REST client (Embed + EmbedBatch, batch size 32)
   memory/
-    server.go              — 11 memory MCP tools
+    server.go              — 12 memory MCP tools
     cache.go               — in-memory cache with TTL + invalidation
     lifecycle/             — normalized lifecycle model, validation, authority ranking
     lifecycle_adapter.go   — memory read-path filters, formatting, and lifecycle counts
+  lifecyclemigration/      — immutable manifest, safe resume, and compare-before-rollback
   rag/
     chunker.go             — markdown-aware chunking (heading → paragraph → sentence)
     summarizer.go          — folder summaries (filenames + first H1/H2/H3)
@@ -73,8 +75,9 @@ internal/
 ## MCP Tools
 
 ### Writing
-- `store_fact(fact, tags?, primary_tag?, namespace?, permanent?, valid_until?)` — embed and save a fact; prevents duplicate writes and returns structured related-fact candidates plus a text fallback
-- `update_fact(old_query, new_fact, tags?, primary_tag?, ...)` — find by similarity, replace, preserve metadata
+- `store_fact(fact, tags?, primary_tag?, namespace?, permanent?, valid_until?, lifecycle_state?, ...)` — embed and save a fact; optional lifecycle inputs create a validated explicit target
+- `update_fact(old_query, new_fact, tags?, primary_tag?, lifecycle_state?, ...)` — find by similarity or exact ID, replace text, and preserve or explicitly replace lifecycle metadata
+- `set_fact_lifecycle(point_id, lifecycle_state, ...)` — replace validated lifecycle metadata by exact ID without re-embedding
 - `delete_fact(query, namespace?)` — find by similarity and delete
 - `forget_old(days?, namespace?, dry_run?)` — delete old facts; skips `permanent=true`; defaults to dry run
 - `import_facts(facts)` — bulk import from JSON string
@@ -176,7 +179,8 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - Duplicate prevention is unchanged except that a valid superseded fact does not block a new current fact. Related-fact feedback does not auto-supersede, classify disputes, or invoke an LLM.
 - `recall_facts` and operational context admit only valid, non-expired current facts; payloads with no lifecycle fields are legacy current. Canonical current facts rank first without changing vector scores.
 - `find_related`, `list_facts`, `export_facts`, `get_stats`, and Viz retain history-inspection visibility as defined in `docs/lifecycle.md`; malformed explicit lifecycle metadata remains inspectable but is never current truth.
-- Lifecycle rollout is read-only and performs no startup migration or payload backfill. Mutation tools and migrations are deferred to issue #22; do not add lifecycle write inputs as part of read-path work.
+- Lifecycle writes are explicit and validated. `store_fact`/`update_fact` preserve old-client behavior when lifecycle inputs are omitted; `set_fact_lifecycle` uses exact IDs and a lifecycle-only ordered Qdrant batch without re-embedding.
+- Lifecycle migration is standalone, dry-run-first, manifest-backed, and never runs at startup. Apply/rollback require stopped writers; rollback uses compare-before-restore and never overwrites post-migration lifecycle changes.
 
 ### memory/lifecycle and lifecycle_adapter.go
 - `lifecycle.Parse(payload, pointID)` is the single normalization and validation boundary. Only a payload with no lifecycle fields is treated as legacy current; malformed explicit metadata returns a non-sensitive invalid view and must not panic.
@@ -187,6 +191,7 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - Both `Search` and `Scroll` receive point IDs as `interface{}` and normalize via `parsePointID`
 - Scroll uses `interface{}` for offset to handle both string and numeric next_page_offset
 - `CreateFieldIndex(field, schema)` creates payload indexes (used by RAG for fast `file_path` / `folder_path` filtering)
+- `ReplaceLifecyclePayload` updates only lifecycle keys through an ordered strong batch; it never rewrites vectors or unrelated payload metadata
 - Supports snapshot create/list/delete for the backup loop
 - Reads and updates Qdrant 1.16+ collection metadata used by the embedding identity guard
 

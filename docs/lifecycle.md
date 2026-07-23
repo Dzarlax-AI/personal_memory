@@ -112,8 +112,26 @@ Viz does not filter nodes by lifecycle state. Its privacy-safe summaries include
 
 ## Rollout, future writes, and rollback
 
-The default rollout is read-only and performs no startup migration. Existing payloads are neither rewritten nor backfilled. Missing lifecycle metadata remains compatible through legacy normalization, so deployment does not require a collection-wide mutation.
+Deployment remains read-only and performs no startup migration. Existing payloads are neither rewritten nor backfilled automatically. Missing lifecycle metadata remains compatible through legacy normalization, so deployment does not require a collection-wide mutation.
 
-Lifecycle mutation tools, bulk backfill, relationship maintenance, and migration behavior are intentionally deferred to issue #22. Current write-tool schemas do not promise lifecycle inputs.
+`store_fact` and `update_fact` accept optional lifecycle inputs. Omitting every lifecycle input preserves the legacy-compatible store behavior and the existing update metadata respectively. Supplying any lifecycle input constructs a complete explicit target: the state defaults to `current`, canonical defaults to false, relationships default to empty, and omitted provenance or verification metadata is absent.
 
-Safe rollback is to deploy a version that ignores the additive lifecycle fields. Existing fact text and metadata remain in Qdrant, and no rollout migration needs to be reversed. Before rolling back after future issue #22 mutation support, operators must separately assess facts already classified as non-current because an older server will not enforce lifecycle visibility.
+`set_fact_lifecycle` is the metadata-only transition path. It requires an exact numeric or UUID point ID, never performs semantic target selection, and never calls the embedding service. The request describes a complete target lifecycle view. Qdrant updates are restricted to lifecycle keys, so text, vectors, recall counters, and unrelated payload fields are not rewritten. Changing a state does not infer or maintain reciprocal relationships.
+
+`import_facts` preserves valid lifecycle metadata from exported facts. Entries with malformed explicit lifecycle metadata are skipped without logging their fact text.
+
+### Explicit legacy migration
+
+`personal-memory-migrate-lifecycle` classifies only payloads with none of the six lifecycle keys. Its sole deterministic target is explicit `current`, `canonical=false`, and empty relationship arrays. Expiry, retention, text, tags, and similarity do not influence classification.
+
+The command is dry-run-only unless `-apply` is supplied. Apply requires every memory writer to be stopped and an exclusive rollback manifest path. The manifest is created with mode `0600` before the first mutation and contains point IDs plus lifecycle-only before/after metadata; it never contains fact text or vectors. A partial apply resumes from the same immutable manifest.
+
+Before production apply:
+
+1. Create and verify a Qdrant snapshot of the memory collection.
+2. Stop every server, importer, migration, and other memory writer.
+3. Run the lifecycle migration without `-apply` and review its counts and point IDs.
+4. Run apply with `-confirm-writes-stopped` and a new `-rollback-manifest` path.
+5. Re-run apply with the same manifest to verify zero remaining changes before restarting writers.
+
+Rollback also requires stopped writers. It restores a point only when its current lifecycle subset still exactly matches the migration-applied target. A deliberate post-migration change is reported as a conflict and is never overwritten. If manifest rollback cannot be completed, restore the pre-migration Qdrant snapshot according to the infrastructure runbook.

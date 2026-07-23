@@ -167,6 +167,109 @@ func TestValidateTransitionAllowsExplicitCorrectionsAndIdempotence(t *testing.T)
 	}
 }
 
+func TestNormalizeInputAndApplyToPayload(t *testing.T) {
+	input := Input{
+		State:     Superseded,
+		Canonical: false,
+		Provenance: &Provenance{
+			Source:    " user ",
+			Reference: "decision-7",
+		},
+		VerifiedAt:   "2026-07-23T10:00:00Z",
+		Supersedes:   []string{"old", "old"},
+		SupersededBy: []string{"new"},
+	}
+	view, err := NormalizeInput("self", input)
+	if err != nil {
+		t.Fatalf("NormalizeInput: %v", err)
+	}
+	if view.Legacy || !view.Valid || view.Provenance == nil || view.Provenance.Source != "user" {
+		t.Fatalf("unexpected normalized view: %#v", view)
+	}
+	if got, want := view.Supersedes, []string{"old"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("supersedes = %#v, want %#v", got, want)
+	}
+
+	original := map[string]interface{}{
+		"text":              "private",
+		"recall_count":      float64(9),
+		"lifecycle_state":   "current",
+		"canonical":         true,
+		"obsolete_metadata": "preserved",
+	}
+	applied := ApplyToPayload(original, view)
+	if original["lifecycle_state"] != "current" {
+		t.Fatal("ApplyToPayload mutated the source payload")
+	}
+	if applied["lifecycle_state"] != "superseded" || applied["canonical"] != false {
+		t.Fatalf("unexpected lifecycle payload: %#v", applied)
+	}
+	if applied["text"] != "private" || applied["recall_count"] != float64(9) || applied["obsolete_metadata"] != "preserved" {
+		t.Fatalf("unrelated metadata changed: %#v", applied)
+	}
+}
+
+func TestApplyToPayloadClearsAbsentOptionalLifecycleFields(t *testing.T) {
+	view, err := NormalizeInput("self", Input{State: Historical})
+	if err != nil {
+		t.Fatalf("NormalizeInput: %v", err)
+	}
+	applied := ApplyToPayload(map[string]interface{}{
+		"text":          "private",
+		"provenance":    map[string]interface{}{"source": "old"},
+		"verified_at":   "2026-07-20T00:00:00Z",
+		"supersedes":    []interface{}{"old"},
+		"superseded_by": []interface{}{"replacement"},
+	}, view)
+	for _, key := range []string{"provenance", "verified_at"} {
+		if _, exists := applied[key]; exists {
+			t.Fatalf("%s was not cleared: %#v", key, applied)
+		}
+	}
+	if got, ok := applied["supersedes"].([]string); !ok || len(got) != 0 {
+		t.Fatalf("supersedes = %#v, want empty []string", applied["supersedes"])
+	}
+	if got, ok := applied["superseded_by"].([]string); !ok || len(got) != 0 {
+		t.Fatalf("superseded_by = %#v, want empty []string", applied["superseded_by"])
+	}
+}
+
+func TestNormalizeInputRejectsInvalidTargets(t *testing.T) {
+	tests := []struct {
+		name  string
+		input Input
+	}{
+		{name: "unknown state", input: Input{State: "unknown"}},
+		{name: "canonical historical", input: Input{State: Historical, Canonical: true}},
+		{name: "superseded without replacement", input: Input{State: Superseded}},
+		{name: "current with replacement", input: Input{State: Current, SupersededBy: []string{"new"}}},
+		{name: "invalid verified at", input: Input{State: Current, VerifiedAt: "2026-07-23"}},
+		{name: "self reference", input: Input{State: Historical, Supersedes: []string{"self"}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := NormalizeInput("self", test.input); err == nil {
+				t.Fatalf("NormalizeInput accepted invalid target: %#v", test.input)
+			}
+		})
+	}
+}
+
+func TestValidateRelationshipsForPointIgnoresUnrelatedMalformedMetadata(t *testing.T) {
+	payload := map[string]interface{}{
+		"lifecycle_state": "wrong",
+		"canonical":       "not-a-boolean",
+		"supersedes":      []interface{}{"old"},
+	}
+	if err := ValidateRelationshipsForPoint(payload, "new"); err != nil {
+		t.Fatalf("unrelated malformed metadata blocked relationship validation: %v", err)
+	}
+	payload["supersedes"] = []interface{}{"new"}
+	if err := ValidateRelationshipsForPoint(payload, "new"); err == nil {
+		t.Fatal("self-reference was accepted")
+	}
+}
+
 func TestCurrentTruthExpirationAndRetentionIndependence(t *testing.T) {
 	view := View{State: Current, Valid: true}
 	if !IsCurrentTruth(view, false) {
