@@ -917,11 +917,18 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 
 		namespace := NormalizeNamespace(stringFromPayload(f["namespace"]))
 
-		// Deduplication is namespace-scoped, matching store_fact semantics.
-		existing, _ := s.qdrant.Search(ctx, vec, 1, s.buildFilters(nil, namespace), nil)
-		if len(existing) > 0 && existing[0].Score >= s.dedupThreshold {
-			skipped++
-			continue
+		// Deduplication is namespace-scoped and lifecycle-aware, matching
+		// store_fact semantics. Search failures preserve the existing fail-open
+		// import behavior, while a saturated non-blocking window is inconclusive.
+		dedupLimit := lifecycleCandidateLimit(relatedFactResultLimit)
+		dedupLow := s.dedupThreshold
+		existing, searchErr := s.qdrant.Search(ctx, vec, dedupLimit, s.buildFilters(nil, namespace), &dedupLow)
+		if searchErr == nil {
+			duplicate, _ := selectRelatedCandidates(existing, s.relatedFactLow, s.dedupThreshold, relatedFactResultLimit)
+			if duplicate != nil || len(existing) == dedupLimit {
+				skipped++
+				continue
+			}
 		}
 
 		payload := map[string]interface{}{

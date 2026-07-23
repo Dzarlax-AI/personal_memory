@@ -240,6 +240,9 @@ func TestStoreFactDuplicateKeepsOtherRelatedCandidatesWithoutRepeatingBlocker(t 
 	if structured.Status != "duplicate" || structured.Stored || structured.PointID != "" || structured.Duplicate == nil || structured.Duplicate.PointID != "blocker" {
 		t.Fatalf("duplicate result = %#v", structured)
 	}
+	if len(structured.RelatedFacts) != 2 {
+		t.Fatalf("related facts = %#v, want 2 entries", structured.RelatedFacts)
+	}
 	gotIDs := []string{structured.RelatedFacts[0].PointID, structured.RelatedFacts[1].PointID}
 	if want := []string{"related", "superseded"}; !reflect.DeepEqual(gotIDs, want) {
 		t.Fatalf("related IDs = %v, want %v", gotIDs, want)
@@ -252,6 +255,78 @@ func TestStoreFactDuplicateKeepsOtherRelatedCandidatesWithoutRepeatingBlocker(t 
 	}
 	if strings.Contains(strings.ToLower(text), "contradiction") || *writes != 0 {
 		t.Fatalf("fallback=%q writes=%d", text, *writes)
+	}
+}
+
+func TestImportFactsUsesLifecycleAwareDuplicateSelection(t *testing.T) {
+	tests := []struct {
+		name           string
+		searchResponse string
+		wantText       string
+		wantWrites     int
+	}{
+		{
+			name:           "valid superseded candidate does not block",
+			searchResponse: `{"result":[{"id":"old","score":0.99,"payload":{"text":"old version","namespace":"projects","lifecycle_state":"superseded","superseded_by":["replacement"]}}]}`,
+			wantText:       "Imported 1 facts, skipped 0.",
+			wantWrites:     1,
+		},
+		{
+			name:           "current candidate still blocks",
+			searchResponse: `{"result":[{"id":"current","score":0.99,"payload":{"text":"same fact","namespace":"projects","lifecycle_state":"current"}}]}`,
+			wantText:       "Imported 0 facts, skipped 1.",
+			wantWrites:     0,
+		},
+		{
+			name:           "invalid superseded candidate still blocks",
+			searchResponse: `{"result":[{"id":"invalid","score":0.99,"payload":{"text":"broken old version","namespace":"projects","lifecycle_state":"superseded"}}]}`,
+			wantText:       "Imported 0 facts, skipped 1.",
+			wantWrites:     0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, searches, writes := relatedResponseServer(t, tt.searchResponse)
+			result, err := srv.importFacts(context.Background(), toolRequest(map[string]interface{}{
+				"facts": `[{"text":"replacement","namespace":"projects"}]`,
+			}))
+			if err != nil || result.IsError {
+				t.Fatalf("import failed: result=%#v err=%v", result, err)
+			}
+			if text := toolResultText(t, result); text != tt.wantText {
+				t.Fatalf("import result = %q, want %q", text, tt.wantText)
+			}
+			if *searches != 1 || *writes != tt.wantWrites {
+				t.Fatalf("searches=%d writes=%d, want searches=1 writes=%d", *searches, *writes, tt.wantWrites)
+			}
+		})
+	}
+}
+
+func TestImportFactsRefusesInconclusiveDedupWindow(t *testing.T) {
+	dedupLimit := lifecycleCandidateLimit(relatedFactResultLimit)
+	points := make([]string, dedupLimit)
+	for i := range points {
+		points[i] = fmt.Sprintf(
+			`{"id":"superseded-%d","score":0.99,"payload":{"text":"old version %d","namespace":"projects","lifecycle_state":"superseded","superseded_by":["replacement"]}}`,
+			i,
+			i,
+		)
+	}
+	srv, searches, writes := relatedResponseServer(t, `{"result":[`+strings.Join(points, ",")+`]}`)
+
+	result, err := srv.importFacts(context.Background(), toolRequest(map[string]interface{}{
+		"facts": `[{"text":"replacement","namespace":"projects"}]`,
+	}))
+	if err != nil || result.IsError {
+		t.Fatalf("import failed: result=%#v err=%v", result, err)
+	}
+	if text := toolResultText(t, result); text != "Imported 0 facts, skipped 1." {
+		t.Fatalf("import result = %q", text)
+	}
+	if *searches != 1 || *writes != 0 {
+		t.Fatalf("searches=%d writes=%d, want searches=1 writes=0", *searches, *writes)
 	}
 }
 

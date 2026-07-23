@@ -33,7 +33,7 @@ func selectRelatedCandidates(points []qdrant.Point, relatedLow, dedupThreshold f
 			continue
 		}
 		view := lifecycleView(point.ID, point.Payload)
-		if point.Score >= dedupThreshold && !(view.Valid && view.State == lifecycle.Superseded) {
+		if point.Score >= dedupThreshold && (!view.Valid || view.State != lifecycle.Superseded) {
 			if duplicate == nil || point.Score > duplicate.Score {
 				candidate := projectRelatedFactCandidate(point, view)
 				duplicate = &candidate
