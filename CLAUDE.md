@@ -73,7 +73,7 @@ internal/
 ## MCP Tools
 
 ### Writing
-- `store_fact(fact, tags?, namespace?, permanent?, valid_until?)` — embed and save a fact; deduplicates (cosine ≥ 0.97); warns on contradictions (0.60–0.97)
+- `store_fact(fact, tags?, primary_tag?, namespace?, permanent?, valid_until?)` — embed and save a fact; prevents duplicate writes and returns structured related-fact candidates plus a text fallback
 - `update_fact(old_query, new_fact, ...)` — find by similarity, replace, preserve metadata
 - `delete_fact(query, namespace?)` — find by similarity and delete
 - `forget_old(days?, namespace?, dry_run?)` — delete old facts; skips `permanent=true`; defaults to dry run
@@ -82,7 +82,7 @@ internal/
 ### Reading
 - `recall_facts(query, tags?, namespace?, limit?)` — semantic search with scores; filters expired; async-increments `recall_count`
 - `list_facts(tags?, namespace?)` — list all facts with metadata
-- `find_related(query, namespace?, limit?)` — related but non-duplicate facts (score 0.60–0.97)
+- `find_related(query, namespace?, limit?)` — lifecycle-ranked related facts with cosine scores; valid superseded facts remain eligible above the duplicate threshold
 - `get_stats()` — counts, namespace/tag breakdown, most recalled
 - `list_tags(namespace?)` — all tags with counts
 - `export_facts(namespace?)` — export as JSON
@@ -143,7 +143,8 @@ The Qdrant client unmarshals `id` into `interface{}` and converts to string with
 | `VIZ_PROXY_SECRET` | — | Required only when `ENABLE_VIZ=true`; Traefik overwrites the trusted proxy header after ForwardAuth. |
 | `CACHE_TTL` | `60` | Search cache TTL in seconds |
 | `DEDUP_THRESHOLD` | `0.97` | Cosine similarity for dedup |
-| `CONTRADICTION_LOW` | `0.60` | Lower bound for contradiction warning |
+| `RELATED_FACT_LOW` | `0.60` | Minimum cosine similarity for related-fact candidates |
+| `CONTRADICTION_LOW` | — | Deprecated fallback for `RELATED_FACT_LOW` for one deprecation window; ignored when the new variable is set |
 | `KEEP_SNAPSHOTS` | `7` | Snapshots to retain |
 | `BACKUP_INTERVAL_HOURS` | `24` | Backup frequency in hours |
 | `VIZ_SIMILARITY_THRESHOLD` | `0.65` | Cosine similarity threshold for graph edges |
@@ -168,6 +169,9 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - `forget_old` defaults to `dry_run=true` — safe by default
 - New point IDs are deterministic from namespace + exact text; legacy numeric/text-only IDs are handled on read and by the standalone migration
 - TEI and Qdrant accessed via Docker network (no auth needed)
+- Similarity scores are cosine proximity, not contradiction or entailment probability. Duplicate, related, disputed, and superseded are distinct concepts; inspect structured related candidates semantically before acting on them.
+- `store_fact` returns `status`, `stored`, optional `point_id`/`duplicate`, and `related_facts`; `find_related` returns `count` and `related_facts`. Candidates include text, score, namespace, tags, and normalized lifecycle metadata, with a text fallback for older clients.
+- Duplicate prevention is unchanged except that a valid superseded fact does not block a new current fact. Related-fact feedback does not auto-supersede, classify disputes, or invoke an LLM.
 - `recall_facts` and operational context admit only valid, non-expired current facts; payloads with no lifecycle fields are legacy current. Canonical current facts rank first without changing vector scores.
 - `find_related`, `list_facts`, `export_facts`, `get_stats`, and Viz retain history-inspection visibility as defined in `docs/lifecycle.md`; malformed explicit lifecycle metadata remains inspectable but is never current truth.
 - Lifecycle rollout is read-only and performs no startup migration or payload backfill. Mutation tools and migrations are deferred to issue #22; do not add lifecycle write inputs as part of read-path work.

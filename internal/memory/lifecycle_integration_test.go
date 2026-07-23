@@ -216,7 +216,7 @@ func TestFindRelatedKeepsHistoryInspectableAndLifecycleOrdered(t *testing.T) {
 	if currentAt < 0 || historicalAt < 0 || supersededAt < 0 || invalidAt < 0 || currentAt >= historicalAt || historicalAt >= supersededAt || supersededAt >= invalidAt {
 		t.Fatalf("unexpected inspection order: %s", text)
 	}
-	for _, marker := range []string{"canonical", "state:historical", "verified:2026-07-21T08:30:00Z", "state:superseded", "superseded-by:1", "invalid:lifecycle_state"} {
+	for _, marker := range []string{`"canonical":true`, `"state":"historical"`, `"verified_at":"2026-07-21T08:30:00Z"`, `"state":"superseded"`, `"superseded_by":["1"]`, `"invalid_reason":"lifecycle_state`} {
 		if !strings.Contains(text, marker) {
 			t.Fatalf("find_related missing %q: %s", marker, text)
 		}

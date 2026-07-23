@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"net/url"
 	"os"
@@ -39,7 +40,8 @@ type Config struct {
 	MemoryUser             string
 	CacheTTL               time.Duration
 	DedupThreshold         float64
-	ContradictionLow       float64
+	RelatedFactLow         float64
+	relatedFactLowSource   string
 	MutationMatchThreshold float64
 
 	// Backup
@@ -89,7 +91,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	contradictionLow, err := envFloat("CONTRADICTION_LOW", 0.60)
+	relatedFactLow, relatedFactLowSource, relatedFactLowWarning, err := loadRelatedFactLow()
+	if relatedFactLowWarning != "" {
+		slog.Warn(relatedFactLowWarning)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +165,8 @@ func Load() (*Config, error) {
 		MemoryUser:             envOrDefault("MEMORY_USER", "claude"),
 		CacheTTL:               cacheTTL,
 		DedupThreshold:         dedupThreshold,
-		ContradictionLow:       contradictionLow,
+		RelatedFactLow:         relatedFactLow,
+		relatedFactLowSource:   relatedFactLowSource,
 		MutationMatchThreshold: mutationThreshold,
 
 		BackupInterval: backupInterval,
@@ -297,11 +303,15 @@ func (c *Config) Validate() error {
 	if err := validateThreshold("DEDUP_THRESHOLD", c.DedupThreshold); err != nil {
 		return err
 	}
-	if err := validateThreshold("CONTRADICTION_LOW", c.ContradictionLow); err != nil {
+	relatedFactLowSource := c.relatedFactLowSource
+	if relatedFactLowSource == "" {
+		relatedFactLowSource = "RELATED_FACT_LOW"
+	}
+	if err := validateThreshold(relatedFactLowSource, c.RelatedFactLow); err != nil {
 		return err
 	}
-	if c.ContradictionLow >= c.DedupThreshold {
-		return fmt.Errorf("CONTRADICTION_LOW must be less than DEDUP_THRESHOLD")
+	if c.RelatedFactLow >= c.DedupThreshold {
+		return fmt.Errorf("%s must be less than DEDUP_THRESHOLD", relatedFactLowSource)
 	}
 	if err := validateThreshold("MUTATION_MATCH_THRESHOLD", c.MutationMatchThreshold); err != nil {
 		return err
@@ -460,6 +470,31 @@ func envFloat(key string, def float64) (float64, error) {
 		return 0, fmt.Errorf("%s must be a number: %w", key, err)
 	}
 	return f, nil
+}
+
+func loadRelatedFactLow() (value float64, source, warning string, err error) {
+	relatedRaw, relatedSet := os.LookupEnv("RELATED_FACT_LOW")
+	legacyRaw, legacySet := os.LookupEnv("CONTRADICTION_LOW")
+
+	if relatedSet {
+		if legacySet {
+			warning = "CONTRADICTION_LOW is deprecated and ignored because RELATED_FACT_LOW is set"
+		}
+		value, err = strconv.ParseFloat(relatedRaw, 64)
+		if err != nil {
+			return 0, "RELATED_FACT_LOW", warning, fmt.Errorf("RELATED_FACT_LOW must be a number: %w", err)
+		}
+		return value, "RELATED_FACT_LOW", warning, nil
+	}
+	if legacySet {
+		warning = "CONTRADICTION_LOW is deprecated; use RELATED_FACT_LOW"
+		value, err = strconv.ParseFloat(legacyRaw, 64)
+		if err != nil {
+			return 0, "CONTRADICTION_LOW", warning, fmt.Errorf("CONTRADICTION_LOW must be a number: %w", err)
+		}
+		return value, "CONTRADICTION_LOW", warning, nil
+	}
+	return 0.60, "RELATED_FACT_LOW", "", nil
 }
 
 func envInt(key string, def int) (int, error) {

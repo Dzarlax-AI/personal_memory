@@ -76,7 +76,7 @@ func main() {
 	// Init memory server only after the persistent vector-space contract is
 	// verified. A failed identity check starts no workers and opens no listener.
 	cache := memory.NewCache(cfg.CacheTTL)
-	memSrv := memory.NewServer(qc, ec, cache, cfg.MemoryUser, cfg.DedupThreshold, cfg.ContradictionLow, cfg.MutationMatchThreshold)
+	memSrv := memory.NewServer(qc, ec, cache, cfg.MemoryUser, cfg.DedupThreshold, cfg.RelatedFactLow, cfg.MutationMatchThreshold)
 	// The recall worker outlives the signal context so active HTTP requests can
 	// finish recording recalls during graceful shutdown. It is stopped explicitly
 	// after srv.Shutdown has drained handlers.

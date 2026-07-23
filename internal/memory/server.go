@@ -26,7 +26,7 @@ type Server struct {
 	cache                  *Cache
 	user                   string
 	dedupThreshold         float64
-	contradictionLow       float64
+	relatedFactLow         float64
 	mutationMatchThreshold float64
 	recallCounterMu        sync.Mutex
 	recallCounter          *recallCounter
@@ -81,18 +81,19 @@ const (
 	maxNamespaceBytes       = 255
 	maxTags                 = 100
 	maxTagBytes             = 255
+	relatedFactResultLimit  = 3
 )
 
 var validPointIDPattern = regexp.MustCompile(`^(?:[0-9]+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$`)
 
-func NewServer(qc *qdrant.Client, ec *embeddings.Client, cache *Cache, user string, dedupThreshold, contradictionLow, mutationMatchThreshold float64) *Server {
+func NewServer(qc *qdrant.Client, ec *embeddings.Client, cache *Cache, user string, dedupThreshold, relatedFactLow, mutationMatchThreshold float64) *Server {
 	return &Server{
 		qdrant:                 qc,
 		embed:                  ec,
 		cache:                  cache,
 		user:                   user,
 		dedupThreshold:         dedupThreshold,
-		contradictionLow:       contradictionLow,
+		relatedFactLow:         relatedFactLow,
 		mutationMatchThreshold: mutationMatchThreshold,
 	}
 }
@@ -100,7 +101,8 @@ func NewServer(qc *qdrant.Client, ec *embeddings.Client, cache *Cache, user stri
 // RegisterTools registers all memory MCP tools on the given MCP server.
 func (s *Server) RegisterTools(srv *server.MCPServer) {
 	srv.AddTool(mcp.NewTool("store_fact",
-		mcp.WithDescription("Store a fact in semantic memory. Deduplicates (cosine >= threshold) and warns on contradictions."),
+		mcp.WithDescription("Store a fact in semantic memory. Cosine similarity identifies related candidates and prevents duplicate writes at the deduplication threshold; valid superseded facts remain related context and do not block storage."),
+		mcp.WithOutputSchema[StoreFactResult](),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -171,7 +173,8 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 	), s.importFacts)
 
 	srv.AddTool(mcp.NewTool("find_related",
-		mcp.WithDescription("Find related but non-duplicate facts (score 0.60-0.97)."),
+		mcp.WithDescription("Find lifecycle-ranked related candidates by cosine similarity. Blocking duplicate candidates are excluded, while valid superseded candidates remain inspectable at any qualifying score."),
+		mcp.WithOutputSchema[FindRelatedResult](),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -503,6 +506,53 @@ func (s *Server) mutationTarget(ctx context.Context, args map[string]interface{}
 
 // --- Tool implementations ---
 
+type StoreFactResult struct {
+	Status       string                 `json:"status"`
+	Stored       bool                   `json:"stored"`
+	PointID      string                 `json:"point_id,omitempty"`
+	Duplicate    *RelatedFactCandidate  `json:"duplicate,omitempty"`
+	RelatedFacts []RelatedFactCandidate `json:"related_facts"`
+}
+
+type FindRelatedResult struct {
+	RelatedFacts []RelatedFactCandidate `json:"related_facts"`
+	Count        int                    `json:"count"`
+}
+
+func formatRelatedCandidate(candidate RelatedFactCandidate) string {
+	encoded, err := json.Marshal(candidate)
+	if err != nil {
+		return "- candidate: <unavailable>"
+	}
+	return "- candidate: " + string(encoded)
+}
+
+func formatStoreFactResult(result StoreFactResult) string {
+	lines := []string{
+		"status: " + result.Status,
+		fmt.Sprintf("stored: %t", result.Stored),
+	}
+	if result.PointID != "" {
+		lines = append(lines, "point_id: "+result.PointID)
+	}
+	if result.Duplicate != nil {
+		lines = append(lines, "duplicate:", formatRelatedCandidate(*result.Duplicate))
+	}
+	lines = append(lines, fmt.Sprintf("related_facts: %d", len(result.RelatedFacts)))
+	for _, candidate := range result.RelatedFacts {
+		lines = append(lines, formatRelatedCandidate(candidate))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatFindRelatedResult(result FindRelatedResult) string {
+	lines := []string{fmt.Sprintf("count: %d", result.Count)}
+	for _, candidate := range result.RelatedFacts {
+		lines = append(lines, formatRelatedCandidate(candidate))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	fact := strParam(args, "fact")
@@ -527,25 +577,42 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		return mcp.NewToolResultError(fmt.Sprintf("embedding failed: %v", err)), nil
 	}
 
-	// Check for duplicates and contradictions.
-	existing, err := s.qdrant.Search(ctx, vec, 3, s.buildFilters(nil, namespace), nil)
-	if err != nil {
-		slog.Warn("dedup search failed", "error", err)
-	}
-
-	for _, p := range existing {
-		if p.Score >= s.dedupThreshold {
-			existingText, _ := p.Payload["text"].(string)
-			return mcp.NewToolResultText(fmt.Sprintf("⚠️ Duplicate (score %.2f): %s", p.Score, existingText)), nil
+	dedupLimit := lifecycleCandidateLimit(relatedFactResultLimit)
+	dedupLow := s.dedupThreshold
+	dedupCandidates, dedupErr := s.qdrant.Search(ctx, vec, dedupLimit, s.buildFilters(nil, namespace), &dedupLow)
+	var duplicate *RelatedFactCandidate
+	if dedupErr != nil {
+		// Preserve the existing fail-open behavior: availability of duplicate
+		// preflight must not make the memory write path unavailable.
+		slog.Warn("dedup search failed", "error", dedupErr)
+	} else {
+		duplicate, _ = selectRelatedCandidates(dedupCandidates, s.relatedFactLow, s.dedupThreshold, relatedFactResultLimit)
+		if duplicate == nil && len(dedupCandidates) == dedupLimit {
+			return mcp.NewToolResultError("duplicate preflight inconclusive; candidate limit reached"), nil
 		}
 	}
 
-	var warnings []string
-	for _, p := range existing {
-		if p.Score >= s.contradictionLow && p.Score < s.dedupThreshold {
-			existingText, _ := p.Payload["text"].(string)
-			warnings = append(warnings, fmt.Sprintf("⚠️ Possible contradiction (score %.2f): %s", p.Score, existingText))
+	relatedFacts := []RelatedFactCandidate{}
+	relatedLow := s.relatedFactLow
+	relatedCandidates, relatedErr := s.qdrant.Search(ctx, vec, lifecycleCandidateLimit(relatedFactResultLimit), s.buildFilters(nil, namespace), &relatedLow)
+	if relatedErr != nil {
+		slog.Warn("related fact search failed", "error", relatedErr)
+	} else {
+		var relatedDuplicate *RelatedFactCandidate
+		relatedDuplicate, relatedFacts = selectRelatedCandidates(relatedCandidates, s.relatedFactLow, s.dedupThreshold, relatedFactResultLimit)
+		if duplicate == nil {
+			duplicate = relatedDuplicate
 		}
+	}
+
+	if duplicate != nil {
+		result := StoreFactResult{
+			Status:       "duplicate",
+			Stored:       false,
+			Duplicate:    duplicate,
+			RelatedFacts: relatedFacts,
+		}
+		return mcp.NewToolResultStructured(result, formatStoreFactResult(result)), nil
 	}
 
 	payload := map[string]interface{}{
@@ -562,8 +629,9 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		payload["valid_until"] = validUntil
 	}
 
+	pointID := PointID(namespace, fact)
 	if err := s.qdrant.Upsert(ctx, qdrant.Point{
-		ID:      PointID(namespace, fact),
+		ID:      pointID,
 		Vector:  vec,
 		Payload: payload,
 	}); err != nil {
@@ -572,11 +640,13 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 
 	s.cache.Invalidate()
 
-	result := fmt.Sprintf("Stored: %s", fact)
-	if len(warnings) > 0 {
-		result += "\n" + strings.Join(warnings, "\n")
+	result := StoreFactResult{
+		Status:       "stored",
+		Stored:       true,
+		PointID:      pointID,
+		RelatedFacts: relatedFacts,
 	}
-	return mcp.NewToolResultText(result), nil
+	return mcp.NewToolResultStructured(result, formatStoreFactResult(result)), nil
 }
 
 func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -913,41 +983,15 @@ func (s *Server) findRelated(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError(fmt.Sprintf("embedding failed: %v", err)), nil
 	}
 
-	low := s.contradictionLow
-	results, err := s.qdrant.Search(ctx, vec, limit*3, s.buildFilters(nil, namespace), &low)
+	low := s.relatedFactLow
+	results, err := s.qdrant.Search(ctx, vec, lifecycleCandidateLimit(limit), s.buildFilters(nil, namespace), &low)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
 	}
 
-	eligible := make([]qdrant.Point, 0, len(results))
-	for _, p := range results {
-		if p.Score >= s.dedupThreshold {
-			continue // skip near-duplicates
-		}
-		if isExpired(p.Payload) {
-			continue
-		}
-		eligible = append(eligible, p)
-	}
-
-	var hits []map[string]interface{}
-	for _, lifecyclePoint := range relatedSearchPoints(eligible) {
-		p := lifecyclePoint.point
-		hit := map[string]interface{}{
-			"text":        p.Payload["text"],
-			"score":       p.Score,
-			"tags":        p.Payload["tags"],
-			"primary_tag": p.Payload["primary_tag"],
-			"namespace":   p.Payload["namespace"],
-		}
-		addLifecycleMetadata(hit, lifecyclePoint.view)
-		hits = append(hits, hit)
-		if len(hits) >= limit {
-			break
-		}
-	}
-
-	return mcp.NewToolResultText(formatFacts(hits)), nil
+	_, relatedFacts := selectRelatedCandidates(results, s.relatedFactLow, s.dedupThreshold, limit)
+	structured := FindRelatedResult{RelatedFacts: relatedFacts, Count: len(relatedFacts)}
+	return mcp.NewToolResultStructured(structured, formatFindRelatedResult(structured)), nil
 }
 
 func (s *Server) listFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
