@@ -14,11 +14,13 @@ import (
 )
 
 type fakeStore struct {
-	points       map[string]qdrant.Point
-	operations   []string
-	setCalls     int
-	failSetCall  int
-	failGetPoint string
+	points          map[string]qdrant.Point
+	operations      []string
+	setCalls        int
+	failSetCall     int
+	replaceCalls    int
+	failReplaceCall int
+	failGetPoint    string
 }
 
 func (s *fakeStore) ScrollAll(context.Context, map[string]interface{}, bool) ([]qdrant.ScrollPoint, error) {
@@ -53,6 +55,10 @@ func (s *fakeStore) SetPayload(_ context.Context, id string, payload map[string]
 }
 
 func (s *fakeStore) ReplaceLifecyclePayload(_ context.Context, id string, set map[string]interface{}, deleteKeys []string) error {
+	s.replaceCalls++
+	if s.failReplaceCall > 0 && s.replaceCalls == s.failReplaceCall {
+		return errors.New("forced replace failure")
+	}
 	point := s.points[id]
 	for key, value := range set {
 		point.Payload[key] = value
@@ -118,11 +124,33 @@ func TestRunDefaultsToPrivacySafeDryRun(t *testing.T) {
 	}
 }
 
+func TestRunRequiresStoppedWritersForMutatingModes(t *testing.T) {
+	store := migrationFixture()
+	manifestPath := filepath.Join(t.TempDir(), "rollback.jsonl")
+
+	if _, err := Run(context.Background(), store, Options{
+		Collection:   "memory",
+		Apply:        true,
+		ManifestPath: manifestPath,
+	}); err == nil || !strings.Contains(err.Error(), "writers are stopped") {
+		t.Fatalf("apply error = %v", err)
+	}
+	if _, err := Run(context.Background(), store, Options{
+		Collection:   "memory",
+		RollbackPath: manifestPath,
+	}); err == nil || !strings.Contains(err.Error(), "writers are stopped") {
+		t.Fatalf("rollback error = %v", err)
+	}
+	if len(store.operations) != 0 {
+		t.Fatalf("operations = %#v", store.operations)
+	}
+}
+
 func TestApplyResumeAndRollbackKeepImmutableManifest(t *testing.T) {
 	store := migrationFixture()
 	manifestPath := filepath.Join(t.TempDir(), "rollback.jsonl")
 	store.failSetCall = 2
-	first, err := Run(context.Background(), store, Options{Collection: "memory", Apply: true, ManifestPath: manifestPath})
+	first, err := Run(context.Background(), store, Options{Collection: "memory", Apply: true, WritesStopped: true, ManifestPath: manifestPath})
 	if err == nil || first.Applied != 1 {
 		t.Fatalf("first apply report=%#v err=%v", first, err)
 	}
@@ -144,7 +172,7 @@ func TestApplyResumeAndRollbackKeepImmutableManifest(t *testing.T) {
 	}
 
 	store.failSetCall = 0
-	second, err := Run(context.Background(), store, Options{Collection: "memory", Apply: true, ManifestPath: manifestPath})
+	second, err := Run(context.Background(), store, Options{Collection: "memory", Apply: true, WritesStopped: true, ManifestPath: manifestPath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,12 +187,63 @@ func TestApplyResumeAndRollbackKeepImmutableManifest(t *testing.T) {
 		t.Fatal("resume rewrote immutable manifest")
 	}
 
-	rolledBack, err := Run(context.Background(), store, Options{Collection: "memory", RollbackPath: manifestPath})
+	rolledBack, err := Run(context.Background(), store, Options{Collection: "memory", WritesStopped: true, RollbackPath: manifestPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rolledBack.RolledBack != 2 {
 		t.Fatalf("rollback report = %#v", rolledBack)
+	}
+	for _, id := range []string{"123", "11111111-1111-1111-1111-111111111111"} {
+		if !isLegacy(store.points[id].Payload) {
+			t.Fatalf("point %s was not restored to legacy: %#v", id, store.points[id].Payload)
+		}
+	}
+}
+
+func TestRollbackResumesAfterReplacementFailure(t *testing.T) {
+	store := migrationFixture()
+	manifestPath := filepath.Join(t.TempDir(), "rollback.jsonl")
+	if _, err := Run(context.Background(), store, Options{
+		Collection:    "memory",
+		Apply:         true,
+		WritesStopped: true,
+		ManifestPath:  manifestPath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	manifestBefore, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store.failReplaceCall = 1
+	first, err := Run(context.Background(), store, Options{
+		Collection:    "memory",
+		WritesStopped: true,
+		RollbackPath:  manifestPath,
+	})
+	if err == nil || first.RolledBack != 0 {
+		t.Fatalf("first rollback report=%#v err=%v", first, err)
+	}
+
+	second, err := Run(context.Background(), store, Options{
+		Collection:    "memory",
+		WritesStopped: true,
+		RollbackPath:  manifestPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.RolledBack != 2 {
+		t.Fatalf("resumed rollback report = %#v", second)
+	}
+	manifestAfter, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(manifestBefore, manifestAfter) {
+		t.Fatal("rollback resume rewrote immutable manifest")
 	}
 	for _, id := range []string{"123", "11111111-1111-1111-1111-111111111111"} {
 		if !isLegacy(store.points[id].Payload) {
@@ -180,7 +259,7 @@ func TestApplyRefusesToReplaceExistingManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	before, _ := os.ReadFile(manifestPath)
-	if _, err := Run(context.Background(), store, Options{Collection: "memory", Apply: true, ManifestPath: manifestPath}); err == nil {
+	if _, err := Run(context.Background(), store, Options{Collection: "memory", Apply: true, WritesStopped: true, ManifestPath: manifestPath}); err == nil {
 		t.Fatal("apply accepted invalid existing manifest")
 	}
 	after, _ := os.ReadFile(manifestPath)
@@ -195,14 +274,14 @@ func TestApplyRefusesToReplaceExistingManifest(t *testing.T) {
 func TestRollbackPreservesPostMigrationLifecycleChanges(t *testing.T) {
 	store := migrationFixture()
 	manifestPath := filepath.Join(t.TempDir(), "rollback.jsonl")
-	if _, err := Run(context.Background(), store, Options{Collection: "memory", Apply: true, ManifestPath: manifestPath}); err != nil {
+	if _, err := Run(context.Background(), store, Options{Collection: "memory", Apply: true, WritesStopped: true, ManifestPath: manifestPath}); err != nil {
 		t.Fatal(err)
 	}
 	changed := store.points["123"]
 	changed.Payload["lifecycle_state"] = "historical"
 	store.points["123"] = changed
 
-	report, err := Run(context.Background(), store, Options{Collection: "memory", RollbackPath: manifestPath})
+	report, err := Run(context.Background(), store, Options{Collection: "memory", WritesStopped: true, RollbackPath: manifestPath})
 	if err == nil || report.Conflicts != 1 || report.RolledBack != 1 {
 		t.Fatalf("rollback report=%#v err=%v", report, err)
 	}
@@ -232,7 +311,7 @@ func TestRunRejectsManifestThatCanMutateNonLegacyMetadata(t *testing.T) {
 	if err := createManifest(path, header, entries); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Run(context.Background(), store, Options{Collection: "memory", Apply: true, ManifestPath: path}); err == nil {
+	if _, err := Run(context.Background(), store, Options{Collection: "memory", Apply: true, WritesStopped: true, ManifestPath: path}); err == nil {
 		t.Fatal("apply accepted a non-legacy before snapshot")
 	}
 	if len(store.operations) != 0 {

@@ -28,9 +28,49 @@ type Server struct {
 	dedupThreshold         float64
 	relatedFactLow         float64
 	mutationMatchThreshold float64
-	factMutationMu         sync.Mutex
+	factMutationMu         [mutationStripeCount]sync.Mutex
 	recallCounterMu        sync.Mutex
 	recallCounter          *recallCounter
+}
+
+const mutationStripeCount = 64
+
+func mutationStripe(namespace string) int {
+	hash := uint32(2166136261)
+	for index := 0; index < len(namespace); index++ {
+		hash ^= uint32(namespace[index])
+		hash *= 16777619
+	}
+	return int(hash % mutationStripeCount)
+}
+
+// lockFactMutations serializes mutations within a namespace while allowing
+// unrelated namespaces to proceed. With no namespace it locks every stripe for
+// collection-wide operations.
+func (s *Server) lockFactMutations(namespaces ...string) func() {
+	indexSet := make(map[int]struct{}, mutationStripeCount)
+	if len(namespaces) == 0 {
+		for index := range s.factMutationMu {
+			indexSet[index] = struct{}{}
+		}
+	} else {
+		for _, namespace := range namespaces {
+			indexSet[mutationStripe(NormalizeNamespace(namespace))] = struct{}{}
+		}
+	}
+	indexes := make([]int, 0, len(indexSet))
+	for index := range indexSet {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+	for _, index := range indexes {
+		s.factMutationMu[index].Lock()
+	}
+	return func() {
+		for index := len(indexes) - 1; index >= 0; index-- {
+			s.factMutationMu[indexes[index]].Unlock()
+		}
+	}
 }
 
 // Start starts the bounded recall-counter worker. It is safe to call once.
@@ -624,13 +664,13 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		}
 	}
 
-	s.factMutationMu.Lock()
-	defer s.factMutationMu.Unlock()
-
 	vec, err := s.embed.Embed(ctx, fact)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("embedding failed: %v", err)), nil
 	}
+
+	unlockMutation := s.lockFactMutations(namespace)
+	defer unlockMutation()
 
 	dedupLimit := lifecycleCandidateLimit(relatedFactResultLimit)
 	dedupLow := s.dedupThreshold
@@ -790,41 +830,57 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	s.factMutationMu.Lock()
-	defer s.factMutationMu.Unlock()
-
-	old, targetError := s.mutationTarget(ctx, args, "old_query")
+	oldCandidate, targetError := s.mutationTarget(ctx, args, "old_query")
 	if targetError != "" {
 		return mcp.NewToolResultError(targetError), nil
 	}
-	oldText, _ := old.Payload["text"].(string)
-
-	namespace := NormalizeNamespace(stringFromPayload(old.Payload["namespace"]))
+	oldNamespace := NormalizeNamespace(stringFromPayload(oldCandidate.Payload["namespace"]))
+	namespace := oldNamespace
 	if ns := strParam(args, "namespace"); ns != "" {
 		namespace = NormalizeNamespace(ns)
 	}
 	newID := PointID(namespace, newFact)
 
-	var targetLifecycle lifecycle.View
-	if parsedLifecycle.Present {
-		currentLifecycle := lifecycleView(old.ID, old.Payload)
-		targetLifecycle, err = lifecycle.NormalizeInput(newID, parsedLifecycle.Input)
-		if err == nil {
-			err = lifecycle.ValidateTransition(newID, currentLifecycle, targetLifecycle)
+	validateTarget := func(point qdrant.Point, targetID string) (lifecycle.View, error) {
+		if parsedLifecycle.Present {
+			target, validationErr := lifecycle.NormalizeInput(targetID, parsedLifecycle.Input)
+			if validationErr == nil {
+				validationErr = lifecycle.ValidateTransition(targetID, lifecycleView(point.ID, point.Payload), target)
+			}
+			return target, validationErr
 		}
-	} else {
-		err = lifecycle.ValidateRelationshipsForPoint(old.Payload, newID)
+		return lifecycle.View{}, lifecycle.ValidateRelationshipsForPoint(point.Payload, targetID)
 	}
-	if err != nil {
+	if _, err = validateTarget(oldCandidate, newID); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("lifecycle metadata is invalid for updated point_id: %v", err)), nil
 	}
 
-	// Embed only after all metadata that can be validated without the new
-	// vector has passed.
+	// Embedding does not participate in mutation ordering and stays outside the
+	// namespace lock. Lifecycle metadata is revalidated against the exact point
+	// after the lock is acquired.
 	newVec, err := s.embed.Embed(ctx, newFact)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("embedding new fact failed: %v", err)), nil
 	}
+
+	unlockMutation := s.lockFactMutations(oldNamespace, namespace)
+	defer unlockMutation()
+
+	old, found, err := s.qdrant.Get(ctx, oldCandidate.ID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("exact point lookup failed: %v", err)), nil
+	}
+	if !found {
+		return mcp.NewToolResultError("fact changed during update; retry"), nil
+	}
+	if currentNamespace := NormalizeNamespace(stringFromPayload(old.Payload["namespace"])); currentNamespace != oldNamespace {
+		return mcp.NewToolResultError("fact namespace changed during update; retry"), nil
+	}
+	targetLifecycle, err := validateTarget(old, newID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("lifecycle metadata is invalid for updated point_id: %v", err)), nil
+	}
+	oldText, _ := old.Payload["text"].(string)
 
 	// Preserve metadata from old fact without mutating the retrieved map.
 	payload := make(map[string]interface{}, len(old.Payload)+1)
@@ -888,15 +944,26 @@ func (s *Server) setFactLifecycle(ctx context.Context, req mcp.CallToolRequest) 
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	s.factMutationMu.Lock()
-	defer s.factMutationMu.Unlock()
-
 	point, found, err := s.qdrant.Get(ctx, pointID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("exact point lookup failed: %v", err)), nil
 	}
 	if !found {
 		return mcp.NewToolResultError(fmt.Sprintf("no fact found with point_id %s", pointID)), nil
+	}
+	namespace := NormalizeNamespace(stringFromPayload(point.Payload["namespace"]))
+	unlockMutation := s.lockFactMutations(namespace)
+	defer unlockMutation()
+
+	point, found, err = s.qdrant.Get(ctx, pointID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("exact point lookup failed: %v", err)), nil
+	}
+	if !found {
+		return mcp.NewToolResultError(fmt.Sprintf("no fact found with point_id %s", pointID)), nil
+	}
+	if NormalizeNamespace(stringFromPayload(point.Payload["namespace"])) != namespace {
+		return mcp.NewToolResultError("fact namespace changed during lifecycle update; retry"), nil
 	}
 	current := lifecycleView(point.ID, point.Payload)
 	if err := lifecycle.ValidateTransition(point.ID, current, target); err != nil {
@@ -925,12 +992,23 @@ func (s *Server) deleteFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 	}
-	s.factMutationMu.Lock()
-	defer s.factMutationMu.Unlock()
-
-	target, targetError := s.mutationTarget(ctx, args, "query")
+	targetCandidate, targetError := s.mutationTarget(ctx, args, "query")
 	if targetError != "" {
 		return mcp.NewToolResultError(targetError), nil
+	}
+	namespace := NormalizeNamespace(stringFromPayload(targetCandidate.Payload["namespace"]))
+	unlockMutation := s.lockFactMutations(namespace)
+	defer unlockMutation()
+
+	target, found, err := s.qdrant.Get(ctx, targetCandidate.ID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("exact point lookup failed: %v", err)), nil
+	}
+	if !found {
+		return mcp.NewToolResultError("fact changed during delete; retry"), nil
+	}
+	if NormalizeNamespace(stringFromPayload(target.Payload["namespace"])) != namespace {
+		return mcp.NewToolResultError("fact namespace changed during delete; retry"), nil
 	}
 	if err := s.qdrant.Delete(ctx, []string{target.ID}); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("delete failed: %v", err)), nil
@@ -938,7 +1016,7 @@ func (s *Server) deleteFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 
 	s.cache.Invalidate()
 	text, _ := target.Payload["text"].(string)
-	return mcp.NewToolResultText(fmt.Sprintf("Deleted: %s (score %.2f)", text, target.Score)), nil
+	return mcp.NewToolResultText(fmt.Sprintf("Deleted: %s (score %.2f)", text, targetCandidate.Score)), nil
 }
 
 func (s *Server) forgetOld(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -956,8 +1034,15 @@ func (s *Server) forgetOld(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	}
 	dryRun := boolParam(args, "dry_run", true)
 
-	s.factMutationMu.Lock()
-	defer s.factMutationMu.Unlock()
+	if !dryRun {
+		var unlockMutation func()
+		if namespace == "" {
+			unlockMutation = s.lockFactMutations()
+		} else {
+			unlockMutation = s.lockFactMutations(namespace)
+		}
+		defer unlockMutation()
+	}
 
 	cutoff := time.Now().AddDate(0, 0, -days)
 	filters := s.buildFilters(nil, namespace)
@@ -1023,9 +1108,6 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError(fmt.Sprintf("facts must contain at most %d entries", maxImportFacts)), nil
 	}
 
-	s.factMutationMu.Lock()
-	defer s.factMutationMu.Unlock()
-
 	imported := 0
 	skipped := 0
 	for index, f := range facts {
@@ -1074,6 +1156,8 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			continue
 		}
 
+		unlockMutation := s.lockFactMutations(namespace)
+
 		// Deduplication is namespace-scoped and lifecycle-aware, matching
 		// store_fact semantics. Search failures preserve the existing fail-open
 		// import behavior, while a saturated non-blocking window is inconclusive.
@@ -1083,6 +1167,7 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		if searchErr == nil {
 			duplicate, _ := selectRelatedCandidates(existing, s.relatedFactLow, s.dedupThreshold, relatedFactResultLimit)
 			if duplicate != nil || len(existing) == dedupLimit {
+				unlockMutation()
 				skipped++
 				continue
 			}
@@ -1116,10 +1201,12 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			Vector:  vec,
 			Payload: payload,
 		}); err != nil {
+			unlockMutation()
 			slog.Warn("import upsert failed", "item_index", index, "point_id", pointID)
 			skipped++
 			continue
 		}
+		unlockMutation()
 		imported++
 	}
 

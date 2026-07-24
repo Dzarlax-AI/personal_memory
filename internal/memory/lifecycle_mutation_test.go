@@ -48,8 +48,8 @@ func TestSetFactLifecycleUsesExactLifecycleOnlyBatch(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("tool returned error: %#v", result)
 	}
-	if requests != 2 {
-		t.Fatalf("requests = %d, want exact Get + batch", requests)
+	if requests != 3 {
+		t.Fatalf("requests = %d, want pre-lock Get + locked Get + batch", requests)
 	}
 	encodedBatch, _ := json.Marshal(batch)
 	if strings.Contains(string(encodedBatch), "PRIVATE FACT") || strings.Contains(string(encodedBatch), "recall_count") {

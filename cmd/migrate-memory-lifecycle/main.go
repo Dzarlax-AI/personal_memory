@@ -44,10 +44,11 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	report, err := lifecyclemigration.Run(ctx, qdrant.NewClient(options.qdrantURL, options.collectionName), lifecyclemigration.Options{
-		Collection:   options.collectionName,
-		Apply:        options.apply,
-		ManifestPath: options.manifestPath,
-		RollbackPath: options.rollbackPath,
+		Collection:    options.collectionName,
+		Apply:         options.apply,
+		WritesStopped: options.writesStopped,
+		ManifestPath:  options.manifestPath,
+		RollbackPath:  options.rollbackPath,
 	})
 	fmt.Printf(
 		"mode=%s scanned=%d planned=%d applied=%d already_applied=%d rolled_back=%d conflicts=%d invalid=%d point_ids=%s\n",
@@ -65,7 +66,7 @@ func main() {
 		slog.Error("lifecycle migration failed", "error", err)
 		os.Exit(1)
 	}
-	if report.Conflicts > 0 || report.Invalid > 0 {
+	if report.Invalid > 0 {
 		os.Exit(2)
 	}
 }

@@ -29,10 +29,11 @@ type Store interface {
 }
 
 type Options struct {
-	Collection   string
-	Apply        bool
-	ManifestPath string
-	RollbackPath string
+	Collection    string
+	Apply         bool
+	WritesStopped bool
+	ManifestPath  string
+	RollbackPath  string
 }
 
 type Report struct {
@@ -84,6 +85,9 @@ func Run(ctx context.Context, store Store, options Options) (Report, error) {
 		if options.Apply || options.ManifestPath != "" {
 			return Report{}, errors.New("rollback cannot be combined with apply or manifest path")
 		}
+		if !options.WritesStopped {
+			return Report{}, errors.New("rollback requires confirmation that writers are stopped")
+		}
 		return rollback(ctx, store, options.Collection, options.RollbackPath)
 	}
 	if !options.Apply {
@@ -91,6 +95,9 @@ func Run(ctx context.Context, store Store, options Options) (Report, error) {
 	}
 	if strings.TrimSpace(options.ManifestPath) == "" {
 		return Report{}, errors.New("apply requires a rollback manifest path")
+	}
+	if !options.WritesStopped {
+		return Report{}, errors.New("apply requires confirmation that writers are stopped")
 	}
 	return apply(ctx, store, options.Collection, options.ManifestPath)
 }

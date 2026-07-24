@@ -25,7 +25,7 @@ func TestLifecycleMigrationIntegrationQdrant(t *testing.T) {
 		t.Fatalf("create test collection: %v", err)
 	}
 	t.Cleanup(func() {
-		request, _ := http.NewRequest(http.MethodDelete, qdrantURL+"/collections/"+collection, nil)
+		request, _ := http.NewRequestWithContext(context.Background(), http.MethodDelete, qdrantURL+"/collections/"+collection, nil)
 		response, err := http.DefaultClient.Do(request)
 		if err == nil {
 			_ = response.Body.Close()
@@ -62,11 +62,11 @@ func TestLifecycleMigrationIntegrationQdrant(t *testing.T) {
 	}
 
 	manifestPath := t.TempDir() + "/rollback.jsonl"
-	applied, err := Run(ctx, client, Options{Collection: collection, Apply: true, ManifestPath: manifestPath})
+	applied, err := Run(ctx, client, Options{Collection: collection, Apply: true, WritesStopped: true, ManifestPath: manifestPath})
 	if err != nil || applied.Applied != 2 {
 		t.Fatalf("apply report=%#v err=%v", applied, err)
 	}
-	resumed, err := Run(ctx, client, Options{Collection: collection, Apply: true, ManifestPath: manifestPath})
+	resumed, err := Run(ctx, client, Options{Collection: collection, Apply: true, WritesStopped: true, ManifestPath: manifestPath})
 	if err != nil || resumed.AlreadyApplied != 2 {
 		t.Fatalf("resume report=%#v err=%v", resumed, err)
 	}
@@ -81,7 +81,7 @@ func TestLifecycleMigrationIntegrationQdrant(t *testing.T) {
 		}
 	}
 
-	rolledBack, err := Run(ctx, client, Options{Collection: collection, RollbackPath: manifestPath})
+	rolledBack, err := Run(ctx, client, Options{Collection: collection, WritesStopped: true, RollbackPath: manifestPath})
 	if err != nil || rolledBack.RolledBack != 2 {
 		t.Fatalf("rollback report=%#v err=%v", rolledBack, err)
 	}
