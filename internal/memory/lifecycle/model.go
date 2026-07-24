@@ -49,6 +49,93 @@ type Candidate struct {
 	View    View
 }
 
+// Input is the complete lifecycle target accepted by write paths.
+// Optional metadata is absent when its zero value is used.
+type Input struct {
+	State        State
+	Canonical    bool
+	Provenance   *Provenance
+	VerifiedAt   string
+	Supersedes   []string
+	SupersededBy []string
+}
+
+var payloadFields = []string{
+	"lifecycle_state",
+	"canonical",
+	"provenance",
+	"verified_at",
+	"supersedes",
+	"superseded_by",
+}
+
+// PayloadFields returns the lifecycle payload keys. The returned slice is a
+// copy so callers cannot mutate the package contract.
+func PayloadFields() []string {
+	return append([]string(nil), payloadFields...)
+}
+
+// NormalizeInput builds and validates a normalized lifecycle view for a point.
+func NormalizeInput(pointID string, input Input) (View, error) {
+	payload := map[string]interface{}{
+		"lifecycle_state": string(input.State),
+		"canonical":       input.Canonical,
+		"supersedes":      append([]string(nil), input.Supersedes...),
+		"superseded_by":   append([]string(nil), input.SupersededBy...),
+	}
+	if input.Provenance != nil {
+		payload["provenance"] = map[string]interface{}{
+			"source":    input.Provenance.Source,
+			"reference": input.Provenance.Reference,
+		}
+		if input.Provenance.Reference == "" {
+			delete(payload["provenance"].(map[string]interface{}), "reference")
+		}
+	}
+	if input.VerifiedAt != "" {
+		payload["verified_at"] = input.VerifiedAt
+	}
+	return Parse(payload, pointID)
+}
+
+// PayloadFromView returns the explicit payload representation for a valid
+// normalized lifecycle view.
+func PayloadFromView(view View) map[string]interface{} {
+	payload := map[string]interface{}{
+		"lifecycle_state": string(view.State),
+		"canonical":       view.Canonical,
+		"supersedes":      append([]string{}, view.Supersedes...),
+		"superseded_by":   append([]string{}, view.SupersededBy...),
+	}
+	if view.Provenance != nil {
+		provenance := map[string]interface{}{"source": view.Provenance.Source}
+		if view.Provenance.Reference != "" {
+			provenance["reference"] = view.Provenance.Reference
+		}
+		payload["provenance"] = provenance
+	}
+	if view.VerifiedAt != "" {
+		payload["verified_at"] = view.VerifiedAt
+	}
+	return payload
+}
+
+// ApplyToPayload replaces only lifecycle fields while preserving unrelated
+// payload metadata.
+func ApplyToPayload(payload map[string]interface{}, view View) map[string]interface{} {
+	result := make(map[string]interface{}, len(payload)+len(payloadFields))
+	for key, value := range payload {
+		result[key] = value
+	}
+	for _, key := range payloadFields {
+		delete(result, key)
+	}
+	for key, value := range PayloadFromView(view) {
+		result[key] = value
+	}
+	return result
+}
+
 func (s State) Valid() bool {
 	switch s {
 	case Current, Historical, Superseded, Disputed:
@@ -286,6 +373,22 @@ func ValidateTransition(pointID string, _ View, target View) error {
 	for _, relationship := range append(append([]string{}, target.Supersedes...), target.SupersededBy...) {
 		if relationship == pointID {
 			return errors.New("lifecycle relationships cannot reference the fact itself")
+		}
+	}
+	return nil
+}
+
+// ValidateRelationshipsForPoint validates only relationship payload fields
+// against a target point ID. It lets text updates preserve unrelated malformed
+// legacy metadata while still preventing a newly introduced self-reference.
+func ValidateRelationshipsForPoint(payload map[string]interface{}, pointID string) error {
+	for _, field := range []string{"supersedes", "superseded_by"} {
+		raw, exists := payload[field]
+		if !exists {
+			continue
+		}
+		if _, err := parseRelationships(raw, pointID, field); err != nil {
+			return err
 		}
 	}
 	return nil

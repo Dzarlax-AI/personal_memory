@@ -10,7 +10,7 @@ UNPKG_BASE := https://unpkg.com
 help:
 	@echo "Targets:"
 	@echo "  make dev-deps  — fetch browser bundles into $(DS_DIR)"
-	@echo "  make build     — build all three binaries (runs dev-deps first)"
+	@echo "  make build     — build all four binaries (runs dev-deps first)"
 	@echo "  make test      — verify assets + vet + test + build all binaries"
 	@echo "  make clean     — remove built binaries and the vendored browser bundles"
 
@@ -35,14 +35,14 @@ verify-assets:
 	fi
 
 build: dev-deps
-	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids
+	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle
 
 vet:
 	go vet ./...
 
 test: dev-deps vet
 	go test ./...
-	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids
+	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle
 
 tidy:
 	go mod tidy
