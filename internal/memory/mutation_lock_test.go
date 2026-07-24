@@ -36,3 +36,24 @@ func TestMutationLockWithoutNamespaceCoversCollection(t *testing.T) {
 	}
 	unlockAll()
 }
+
+func TestWithFactMutationLockReleasesStripeAfterPanic(t *testing.T) {
+	var server Server
+	namespace := "projects"
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("mutation did not panic")
+			}
+		}()
+		server.withFactMutationLock(namespace, func() bool {
+			panic("forced import panic")
+		})
+	}()
+
+	index := mutationStripe(namespace)
+	if !server.factMutationMu[index].TryLock() {
+		t.Fatal("namespace stripe remained locked after panic")
+	}
+	server.factMutationMu[index].Unlock()
+}

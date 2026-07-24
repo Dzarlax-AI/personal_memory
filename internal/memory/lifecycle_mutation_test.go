@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -252,6 +253,106 @@ func TestUpdateFactRejectsPreservedLifecycleSelfReferenceBeforeEmbedding(t *test
 	}
 }
 
+func TestUpdateFactRefusesTargetPointCollision(t *testing.T) {
+	oldID := PointID("projects", "old")
+	newFact := "already stored"
+	newID := PointID("projects", newFact)
+	embedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[[0.1,0.2]]`))
+	}))
+	defer embedServer.Close()
+
+	qdrantRequests := 0
+	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		qdrantRequests++
+		if r.Method != http.MethodGet {
+			t.Fatalf("collision check attempted mutation: %s %s", r.Method, r.URL.Path)
+		}
+		switch r.URL.Path {
+		case "/collections/memory/points/" + oldID:
+			_, _ = w.Write([]byte(`{"result":{"id":"` + oldID + `","vector":[0.1,0.2],"payload":{"text":"old","namespace":"projects"}}}`))
+		case "/collections/memory/points/" + newID:
+			_, _ = w.Write([]byte(`{"result":{"id":"` + newID + `","vector":[0.3,0.4],"payload":{"text":"already stored","namespace":"projects"}}}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer qdrantServer.Close()
+
+	srv := NewServer(
+		qdrant.NewClient(qdrantServer.URL, "memory"),
+		embeddings.NewClient(embedServer.URL),
+		NewCache(time.Minute),
+		"test", .97, .60, .90,
+	)
+	result, err := srv.updateFact(context.Background(), toolRequest(map[string]interface{}{
+		"point_id": oldID,
+		"new_fact": newFact,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError || !strings.Contains(toolResultText(t, result), "collides with an existing fact") {
+		t.Fatalf("collision was accepted: %#v", result)
+	}
+	if qdrantRequests != 3 {
+		t.Fatalf("Qdrant requests = %d, want two old lookups plus target collision lookup", qdrantRequests)
+	}
+}
+
+func TestUpdateFactLogsFailedOldPointDeletion(t *testing.T) {
+	oldID := PointID("projects", "old")
+	newFact := "replacement"
+	newID := PointID("projects", newFact)
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previousLogger)
+
+	embedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[[0.1,0.2]]`))
+	}))
+	defer embedServer.Close()
+	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/collections/memory/points/"+oldID:
+			_, _ = w.Write([]byte(`{"result":{"id":"` + oldID + `","vector":[0.1,0.2],"payload":{"text":"old","namespace":"projects"}}}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/collections/memory/points/"+newID:
+			http.NotFound(w, r)
+		case r.Method == http.MethodPut && r.URL.Path == "/collections/memory/points":
+			_, _ = w.Write([]byte(`{"status":"ok","result":{"status":"completed"}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/delete":
+			http.Error(w, "forced delete failure", http.StatusBadGateway)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer qdrantServer.Close()
+
+	srv := NewServer(
+		qdrant.NewClient(qdrantServer.URL, "memory"),
+		embeddings.NewClient(embedServer.URL),
+		NewCache(time.Minute),
+		"test", .97, .60, .90,
+	)
+	result, err := srv.updateFact(context.Background(), toolRequest(map[string]interface{}{
+		"point_id": oldID,
+		"new_fact": newFact,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError || !strings.Contains(toolResultText(t, result), "delete old failed") {
+		t.Fatalf("delete failure was not returned: %#v", result)
+	}
+	logOutput := logs.String()
+	if !strings.Contains(logOutput, "duplicate may remain") ||
+		!strings.Contains(logOutput, oldID) ||
+		!strings.Contains(logOutput, newID) {
+		t.Fatalf("orphaned duplicate was not logged: %s", logOutput)
+	}
+}
+
 func TestImportFactsPreservesLifecycleAndDoesNotLogPrivateText(t *testing.T) {
 	const private = "PRIVATE_IMPORT_MARKER"
 	var logs bytes.Buffer
@@ -298,5 +399,139 @@ func TestImportFactsPreservesLifecycleAndDoesNotLogPrivateText(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), private) {
 		t.Fatalf("logs leaked fact text: %s", logs.String())
+	}
+}
+
+func TestImportFactsBatchesEmbeddings(t *testing.T) {
+	embedRequests := 0
+	var embeddedInputs []string
+	embedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		embedRequests++
+		var body struct {
+			Inputs []string `json:"inputs"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		embeddedInputs = append(embeddedInputs, body.Inputs...)
+		_, _ = w.Write([]byte(`[[0.1,0.2],[0.3,0.4]]`))
+	}))
+	defer embedServer.Close()
+
+	upserts := 0
+	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/points/search"):
+			_, _ = w.Write([]byte(`{"result":[]}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/collections/memory/points":
+			upserts++
+			_, _ = w.Write([]byte(`{"status":"ok","result":{"status":"completed"}}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer qdrantServer.Close()
+
+	srv := NewServer(
+		qdrant.NewClient(qdrantServer.URL, "memory"),
+		embeddings.NewClient(embedServer.URL),
+		NewCache(time.Minute),
+		"test", .97, .60, .90,
+	)
+	facts, _ := json.Marshal([]map[string]interface{}{
+		{"text": "first", "namespace": "projects"},
+		{"text": "second", "namespace": "work"},
+	})
+	result, err := srv.importFacts(context.Background(), toolRequest(map[string]interface{}{"facts": string(facts)}))
+	if err != nil || result.IsError {
+		t.Fatalf("import result=%#v err=%v", result, err)
+	}
+	if embedRequests != 1 || !reflect.DeepEqual(embeddedInputs, []string{"first", "second"}) {
+		t.Fatalf("embed requests=%d inputs=%#v", embedRequests, embeddedInputs)
+	}
+	if upserts != 2 || !strings.Contains(toolResultText(t, result), "Imported 2 facts, skipped 0") {
+		t.Fatalf("upserts=%d result=%#v", upserts, result)
+	}
+}
+
+func TestImportFactsFallsBackToPerItemEmbedding(t *testing.T) {
+	embedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Inputs []string `json:"inputs"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Inputs) > 1 || body.Inputs[0] == "second" {
+			http.Error(w, "forced embedding failure", http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte(`[[0.1,0.2]]`))
+	}))
+	defer embedServer.Close()
+
+	upserts := 0
+	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/points/search"):
+			_, _ = w.Write([]byte(`{"result":[]}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/collections/memory/points":
+			upserts++
+			_, _ = w.Write([]byte(`{"status":"ok","result":{"status":"completed"}}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer qdrantServer.Close()
+
+	srv := NewServer(
+		qdrant.NewClient(qdrantServer.URL, "memory"),
+		embeddings.NewClient(embedServer.URL),
+		NewCache(time.Minute),
+		"test", .97, .60, .90,
+	)
+	facts, _ := json.Marshal([]map[string]interface{}{
+		{"text": "first", "namespace": "projects"},
+		{"text": "second", "namespace": "work"},
+	})
+	result, err := srv.importFacts(context.Background(), toolRequest(map[string]interface{}{"facts": string(facts)}))
+	if err != nil || result.IsError {
+		t.Fatalf("import result=%#v err=%v", result, err)
+	}
+	if upserts != 1 || !strings.Contains(toolResultText(t, result), "Imported 1 facts, skipped 1") {
+		t.Fatalf("upserts=%d result=%#v", upserts, result)
+	}
+}
+
+func TestForgetOldRecordsGlobalMutationLockDuration(t *testing.T) {
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previousLogger)
+
+	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/points/scroll") {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"result":{"points":[],"next_page_offset":null}}`))
+	}))
+	defer qdrantServer.Close()
+
+	srv := &Server{
+		qdrant: qdrant.NewClient(qdrantServer.URL, "memory"),
+		cache:  NewCache(time.Minute),
+	}
+	result, err := srv.forgetOld(context.Background(), toolRequest(map[string]interface{}{
+		"days":    float64(90),
+		"dry_run": false,
+	}))
+	if err != nil || result.IsError {
+		t.Fatalf("forget_old result=%#v err=%v", result, err)
+	}
+	logOutput := logs.String()
+	for _, field := range []string{"global forget_old mutation lock released", "wait_duration", "held_duration"} {
+		if !strings.Contains(logOutput, field) {
+			t.Fatalf("global lock duration log missing %q: %s", field, logOutput)
+		}
 	}
 }

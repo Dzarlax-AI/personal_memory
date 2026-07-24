@@ -73,6 +73,12 @@ func (s *Server) lockFactMutations(namespaces ...string) func() {
 	}
 }
 
+func (s *Server) withFactMutationLock(namespace string, mutation func() bool) bool {
+	unlockMutation := s.lockFactMutations(namespace)
+	defer unlockMutation()
+	return mutation()
+}
+
 // Start starts the bounded recall-counter worker. It is safe to call once.
 func (s *Server) Start(ctx context.Context) {
 	s.recallCounterMu.Lock()
@@ -876,6 +882,13 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	if currentNamespace := NormalizeNamespace(stringFromPayload(old.Payload["namespace"])); currentNamespace != oldNamespace {
 		return mcp.NewToolResultError("fact namespace changed during update; retry"), nil
 	}
+	if newID != old.ID {
+		if _, conflictFound, lookupErr := s.qdrant.Get(ctx, newID); lookupErr != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("target point lookup failed: %v", lookupErr)), nil
+		} else if conflictFound {
+			return mcp.NewToolResultError("updated text collides with an existing fact; refusing to overwrite"), nil
+		}
+	}
 	targetLifecycle, err := validateTarget(old, newID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("lifecycle metadata is invalid for updated point_id: %v", err)), nil
@@ -922,6 +935,12 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 
 	if old.ID != newID {
 		if err := s.qdrant.Delete(ctx, []string{old.ID}); err != nil {
+			slog.Warn(
+				"delete old point after update failed; duplicate may remain",
+				"old_point_id", old.ID,
+				"new_point_id", newID,
+				"error", err,
+			)
 			return mcp.NewToolResultError(fmt.Sprintf("delete old failed: %v", err)), nil
 		}
 	}
@@ -1035,13 +1054,23 @@ func (s *Server) forgetOld(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	dryRun := boolParam(args, "dry_run", true)
 
 	if !dryRun {
-		var unlockMutation func()
 		if namespace == "" {
-			unlockMutation = s.lockFactMutations()
+			waitStarted := time.Now()
+			unlockMutation := s.lockFactMutations()
+			lockAcquired := time.Now()
+			defer func() {
+				heldFor := time.Since(lockAcquired)
+				unlockMutation()
+				slog.Info(
+					"global forget_old mutation lock released",
+					"wait_duration", lockAcquired.Sub(waitStarted),
+					"held_duration", heldFor,
+				)
+			}()
 		} else {
-			unlockMutation = s.lockFactMutations(namespace)
+			unlockMutation := s.lockFactMutations(namespace)
+			defer unlockMutation()
 		}
-		defer unlockMutation()
 	}
 
 	cutoff := time.Now().AddDate(0, 0, -days)
@@ -1108,7 +1137,19 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError(fmt.Sprintf("facts must contain at most %d entries", maxImportFacts)), nil
 	}
 
-	imported := 0
+	type importCandidate struct {
+		itemIndex      int
+		source         map[string]interface{}
+		text           string
+		namespace      string
+		pointID        string
+		lifecycle      lifecycle.View
+		hasLifecycle   bool
+		vector         []float32
+		embeddingReady bool
+	}
+
+	candidates := make([]importCandidate, 0, len(facts))
 	skipped := 0
 	for index, f := range facts {
 		text, _ := f["text"].(string)
@@ -1149,65 +1190,110 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			}
 		}
 
-		vec, err := s.embed.Embed(ctx, text)
-		if err != nil {
-			slog.Warn("import embed failed", "item_index", index, "point_id", pointID)
-			skipped++
-			continue
+		candidates = append(candidates, importCandidate{
+			itemIndex:    index,
+			source:       f,
+			text:         text,
+			namespace:    namespace,
+			pointID:      pointID,
+			lifecycle:    importedLifecycle,
+			hasLifecycle: hasLifecycle,
+		})
+	}
+
+	texts := make([]string, len(candidates))
+	for index := range candidates {
+		texts[index] = candidates[index].text
+	}
+	vectors, batchErr := s.embed.EmbedBatch(ctx, texts)
+	if batchErr == nil {
+		for index := range candidates {
+			candidates[index].vector = vectors[index]
+			candidates[index].embeddingReady = true
 		}
-
-		unlockMutation := s.lockFactMutations(namespace)
-
-		// Deduplication is namespace-scoped and lifecycle-aware, matching
-		// store_fact semantics. Search failures preserve the existing fail-open
-		// import behavior, while a saturated non-blocking window is inconclusive.
-		dedupLimit := lifecycleCandidateLimit(relatedFactResultLimit)
-		dedupLow := s.dedupThreshold
-		existing, searchErr := s.qdrant.Search(ctx, vec, dedupLimit, s.buildFilters(nil, namespace), &dedupLow)
-		if searchErr == nil {
-			duplicate, _ := selectRelatedCandidates(existing, s.relatedFactLow, s.dedupThreshold, relatedFactResultLimit)
-			if duplicate != nil || len(existing) == dedupLimit {
-				unlockMutation()
+	} else {
+		// Preserve the historical per-item failure behavior if a batch request
+		// fails, without logging private text or a possibly echoing TEI body.
+		slog.Warn("import batch embed failed; retrying individually", "candidate_count", len(candidates))
+		for index := range candidates {
+			vec, embedErr := s.embed.Embed(ctx, candidates[index].text)
+			if embedErr != nil {
+				slog.Warn("import embed failed", "item_index", candidates[index].itemIndex, "point_id", candidates[index].pointID)
 				skipped++
 				continue
 			}
+			candidates[index].vector = vec
+			candidates[index].embeddingReady = true
 		}
+	}
 
-		payload := map[string]interface{}{
-			"text":         text,
-			"user":         s.user,
-			"namespace":    namespace,
-			"tags":         nil,
-			"primary_tag":  nil,
-			"permanent":    f["permanent"],
-			"created_at":   f["created_at"],
-			"recall_count": 0,
-		}
-		tags, primaryTag := normalizeFactTags(tagsParamFromPayload(f["tags"]), stringFromPayload(f["primary_tag"]))
-		payload["tags"] = tags
-		payload["primary_tag"] = primaryTag
-		if v, ok := f["valid_until"]; ok {
-			payload["valid_until"] = v
-		}
-		if payload["created_at"] == nil {
-			payload["created_at"] = nowISO()
-		}
-		if hasLifecycle {
-			payload = lifecycle.ApplyToPayload(payload, importedLifecycle)
-		}
-
-		if err := s.qdrant.Upsert(ctx, qdrant.Point{
-			ID:      pointID,
-			Vector:  vec,
-			Payload: payload,
-		}); err != nil {
-			unlockMutation()
-			slog.Warn("import upsert failed", "item_index", index, "point_id", pointID)
-			skipped++
+	imported := 0
+	for _, candidate := range candidates {
+		if !candidate.embeddingReady {
 			continue
 		}
-		unlockMutation()
-		imported++
+		itemImported := s.withFactMutationLock(candidate.namespace, func() bool {
+			// Deduplication is namespace-scoped and lifecycle-aware, matching
+			// store_fact semantics. Search failures preserve the existing
+			// fail-open import behavior, while a saturated non-blocking window
+			// is inconclusive.
+			dedupLimit := lifecycleCandidateLimit(relatedFactResultLimit)
+			dedupLow := s.dedupThreshold
+			existing, searchErr := s.qdrant.Search(
+				ctx,
+				candidate.vector,
+				dedupLimit,
+				s.buildFilters(nil, candidate.namespace),
+				&dedupLow,
+			)
+			if searchErr == nil {
+				duplicate, _ := selectRelatedCandidates(existing, s.relatedFactLow, s.dedupThreshold, relatedFactResultLimit)
+				if duplicate != nil || len(existing) == dedupLimit {
+					return false
+				}
+			}
+
+			payload := map[string]interface{}{
+				"text":         candidate.text,
+				"user":         s.user,
+				"namespace":    candidate.namespace,
+				"tags":         nil,
+				"primary_tag":  nil,
+				"permanent":    candidate.source["permanent"],
+				"created_at":   candidate.source["created_at"],
+				"recall_count": 0,
+			}
+			tags, primaryTag := normalizeFactTags(
+				tagsParamFromPayload(candidate.source["tags"]),
+				stringFromPayload(candidate.source["primary_tag"]),
+			)
+			payload["tags"] = tags
+			payload["primary_tag"] = primaryTag
+			if value, ok := candidate.source["valid_until"]; ok {
+				payload["valid_until"] = value
+			}
+			if payload["created_at"] == nil {
+				payload["created_at"] = nowISO()
+			}
+			if candidate.hasLifecycle {
+				payload = lifecycle.ApplyToPayload(payload, candidate.lifecycle)
+			}
+
+			if err := s.qdrant.Upsert(ctx, qdrant.Point{
+				ID:      candidate.pointID,
+				Vector:  candidate.vector,
+				Payload: payload,
+			}); err != nil {
+				slog.Warn("import upsert failed", "item_index", candidate.itemIndex, "point_id", candidate.pointID)
+				return false
+			}
+			return true
+		})
+		if itemImported {
+			imported++
+		} else {
+			skipped++
+		}
 	}
 
 	if imported > 0 {
