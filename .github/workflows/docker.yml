@@ -50,9 +50,50 @@ jobs:
           done
           exit 1
       - run: go vet ./...
-      - run: go test ./...
+      - name: Run Go tests
+        run: |
+          go run gotest.tools/gotestsum@v1.13.0 \
+            --format pkgname \
+            --junitfile test-results.xml \
+            --jsonfile test-results.json \
+            -- ./...
         env:
           QDRANT_TEST_URL: http://127.0.0.1:6333
+      - name: Publish test summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ ! -s test-results.json ]]; then
+            echo "## Go tests" >> "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
+            echo "No structured test results were produced." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          passed=$(jq -s '[.[] | select(.Test != null and .Action == "pass")] | length' test-results.json)
+          failed=$(jq -s '[.[] | select(.Test != null and .Action == "fail")] | length' test-results.json)
+          skipped=$(jq -s '[.[] | select(.Test != null and .Action == "skip")] | length' test-results.json)
+          failed_packages=$(jq -s '[.[] | select(.Test == null and .Package != null and .Action == "fail")] | length' test-results.json)
+
+          {
+            echo "## Go tests"
+            echo
+            echo "| Passed | Failed | Skipped | Failed packages |"
+            echo "| ---: | ---: | ---: | ---: |"
+            echo "| ${passed} | ${failed} | ${skipped} | ${failed_packages} |"
+            echo
+            echo "Full JUnit and test2json reports are attached as the \`go-test-results\` artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: go-test-results
+          path: |
+            test-results.xml
+            test-results.json
+          if-no-files-found: warn
+          retention-days: 14
 
   build:
     if: github.event_name == 'push'
