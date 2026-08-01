@@ -276,7 +276,9 @@ func presentFactCandidates(query Query, points []qdrant.Point, now time.Time) pr
 				output.canonical.CanonicalPreferenceViolations++
 			}
 		}
-		if evidence.Decision == PresentationInclude || evidence.Decision == PresentationDemote {
+		if evidence.Decision == PresentationInclude ||
+			evidence.Decision == PresentationDemote ||
+			evidence.Decision == PresentationUncertain {
 			output.results = append(output.results, itemsFromPoints([]qdrant.Point{value.point})...)
 		}
 	}

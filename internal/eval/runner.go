@@ -193,7 +193,11 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 			if mode == "fixture" {
 				candidateLimit = max(candidateLimit, len(dataset.Facts))
 			}
-			points, err = clients.facts.Search(ctx, query.Vector, candidateLimit, currentLifecycleFilter(), nil)
+			var filter map[string]any
+			if query.EffectiveIntent() == QueryIntentCurrent {
+				filter = currentLifecycleFilter()
+			}
+			points, err = clients.facts.Search(ctx, query.Vector, candidateLimit, filter, nil)
 		case query.Mode == "flat":
 			points, err = clients.chunks.Search(ctx, query.Vector, searchLimit, nil, nil)
 		default:
@@ -213,7 +217,11 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 				}
 			}
 			presentation := presentFactCandidates(query, evidencePoints, now)
-			items = normalizeFactResults(points, now)
+			if query.EffectiveIntent() == QueryIntentCurrent {
+				items = normalizeFactResults(points, now)
+			} else {
+				items = presentFactCandidates(query, points, now).results
+			}
 			queryLifecycle = &presentation.report
 			lifecycleReport.Aggregate.Checks += presentation.canonical.Checks
 			lifecycleReport.Aggregate.Violations += presentation.canonical.Violations

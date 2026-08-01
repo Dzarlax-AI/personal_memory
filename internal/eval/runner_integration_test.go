@@ -196,6 +196,96 @@ func TestLiveV2LifecycleEvidenceUsesExactReadWithoutChangingRanking(t *testing.T
 	}
 }
 
+func TestLiveFactRankingRespectsLifecycleIntentAndEvidenceBoundary(t *testing.T) {
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/search":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if _, current := body["filter"]; current {
+				_, _ = w.Write([]byte(`{"result":[
+					{"id":42,"score":0.7,"payload":{"text":"current","lifecycle_state":"current","canonical":true}}
+				]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"result":[
+				{"id":43,"score":1.0,"payload":{"text":"historical","lifecycle_state":"historical"}},
+				{"id":44,"score":0.9,"payload":{"text":"disputed","lifecycle_state":"disputed"}},
+				{"id":42,"score":0.7,"payload":{"text":"current","lifecycle_state":"current","canonical":true}}
+			]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/collections/memory/points/999":
+			_, _ = w.Write([]byte(`{"result":{
+				"id":999,"vector":[1,0],
+				"payload":{"text":"outside ranking","lifecycle_state":"historical"}
+			}}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	historyDataset, err := Load(strings.NewReader(validV2Dataset()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	historyDataset.Facts = nil
+	historyQuery := &historyDataset.Queries[0]
+	historyQuery.Intent = QueryIntentHistory
+	expectation := &historyQuery.LifecycleExpectations[0]
+	expectation.ID = "999"
+	expectation.State = lifecycle.Historical
+	expectation.Decision = PresentationInclude
+	expectation.ReasonCodes = []string{string(ReasonHistoricalContext)}
+	historyReport, err := Run(context.Background(), historyDataset, RunOptions{
+		Source: "live", QdrantURL: server.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	historyIDs := resultIDs(historyReport.Queries[0].Results)
+	if strings.Join(historyIDs, ",") != "42,44,43" {
+		t.Fatalf("history Results = %v, want policy-ranked search candidates", historyIDs)
+	}
+	for _, id := range historyIDs {
+		if id == "999" {
+			t.Fatal("exact lifecycle evidence inflated history Results")
+		}
+	}
+	assertCandidate(t, *historyReport.Queries[0].Lifecycle, "43", lifecycle.Historical, PresentationInclude, ReasonHistoricalContext)
+	assertCandidate(t, *historyReport.Queries[0].Lifecycle, "44", lifecycle.Disputed, PresentationUncertain, ReasonDisputed)
+	assertCandidate(t, *historyReport.Queries[0].Lifecycle, "999", lifecycle.Historical, PresentationInclude, ReasonHistoricalContext)
+	if historyReport.Aggregate.MRR != 1 {
+		t.Fatalf("history MRR = %f, want 1", historyReport.Aggregate.MRR)
+	}
+
+	currentDataset, err := Load(strings.NewReader(validV2Dataset()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentDataset.Facts = nil
+	currentReport, err := Run(context.Background(), currentDataset, RunOptions{
+		Source: "live", QdrantURL: server.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if currentIDs := resultIDs(currentReport.Queries[0].Results); strings.Join(currentIDs, ",") != "42" {
+		t.Fatalf("current Results = %v, want historical/disputed excluded", currentIDs)
+	}
+	wantRequests := []string{
+		"POST /collections/memory/points/search",
+		"GET /collections/memory/points/999",
+		"POST /collections/memory/points/search",
+	}
+	if fmt.Sprint(requests) != fmt.Sprint(wantRequests) {
+		t.Fatalf("requests = %v, want %v", requests, wantRequests)
+	}
+}
+
 func TestLiveV2CurrentIncludeExpectationKeepsCurrentFilter(t *testing.T) {
 	var requestBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

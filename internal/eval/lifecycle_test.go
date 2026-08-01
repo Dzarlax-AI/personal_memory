@@ -107,10 +107,9 @@ func TestPresentFactCandidatesHistoryAndUncertainty(t *testing.T) {
 			assertCandidate(t, got.report, "superseded", lifecycle.Superseded, PresentationInclude, ReasonSupersededContext)
 			assertCandidate(t, got.report, "disputed-high", lifecycle.Disputed, PresentationUncertain, ReasonDisputed)
 			assertCandidate(t, got.report, "disputed-low", lifecycle.Disputed, PresentationUncertain, ReasonDisputed)
-			for _, id := range resultIDs(got.results) {
-				if strings.HasPrefix(id, "disputed") {
-					t.Fatalf("uncertain candidate %q entered relevance results", id)
-				}
+			ids := resultIDs(got.results)
+			if strings.Join(ids, ",") != "current,disputed-high,disputed-low,historical,superseded" {
+				t.Fatalf("policy-ranked result IDs = %v", ids)
 			}
 		})
 	}
@@ -148,6 +147,9 @@ func TestPresentFactCandidatesExpiredInvalidAndAsOf(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "DO-NOT-LEAK") {
 		t.Fatal("lifecycle failure leaked fact text")
+	}
+	if ids := resultIDs(got.results); len(ids) != 1 || ids[0] != "valid-on-date" {
+		t.Fatalf("as_of Results = %v, want only valid-on-date", ids)
 	}
 }
 
