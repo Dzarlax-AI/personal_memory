@@ -10,3 +10,7 @@ __pycache__/
 # Design system bundle — fetched at build time from dzarlax/design-system
 # so image builds auto-pick up upstream updates. Dev fetch: `make dev-deps`.
 internal/viz/static/assets/vendor/
+
+# Retrieval evaluation: private inputs and local/generated reports.
+evaldata/private/
+eval-results/

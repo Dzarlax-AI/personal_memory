@@ -1,4 +1,4 @@
-.PHONY: help dev-deps verify-assets build test vet tidy clean
+.PHONY: help dev-deps verify-assets build test vet eval-public tidy clean
 
 DS_VERSION ?= v1.4.0
 DS_DIR := internal/viz/static/assets/vendor
@@ -10,8 +10,9 @@ UNPKG_BASE := https://unpkg.com
 help:
 	@echo "Targets:"
 	@echo "  make dev-deps  — fetch browser bundles into $(DS_DIR)"
-	@echo "  make build     — build all four binaries (runs dev-deps first)"
+	@echo "  make build     — build all five binaries (runs dev-deps first)"
 	@echo "  make test      — verify assets + vet + test + build all binaries"
+	@echo "  make eval-public — run the public retrieval dataset against Qdrant"
 	@echo "  make clean     — remove built binaries and the vendored browser bundles"
 
 dev-deps:
@@ -35,14 +36,29 @@ verify-assets:
 	fi
 
 build: dev-deps
-	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle
+	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory
 
 vet:
 	go vet ./...
 
 test: dev-deps vet
 	go test ./...
-	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle
+	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory
+
+QDRANT_TEST_URL ?= http://127.0.0.1:6333
+
+eval-public:
+	go run ./cmd/eval-memory run \
+		--source fixture \
+		--dataset evaldata/public/v1/dataset.json \
+		--qdrant-url $(QDRANT_TEST_URL) \
+		--json eval-results/public.json \
+		--markdown eval-results/public.md
+	go run ./cmd/eval-memory compare \
+		--baseline evaldata/public/v1/baseline.json \
+		--candidate eval-results/public.json \
+		--json eval-results/comparison.json \
+		--enforce-gates
 
 tidy:
 	go mod tidy

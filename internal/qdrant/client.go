@@ -263,6 +263,23 @@ func (c *Client) CreateCollection(ctx context.Context, vectorSize int, metadata 
 	return c.mutate(ctx, http.MethodPut, requestURL, body, false)
 }
 
+// DeleteCollection removes the target collection only when its name has the
+// caller-supplied non-empty safety prefix.
+func (c *Client) DeleteCollection(ctx context.Context, requiredPrefix string) error {
+	if requiredPrefix == "" || !strings.HasPrefix(c.collection, requiredPrefix) {
+		return fmt.Errorf("collection %q does not have required deletion prefix %q", c.collection, requiredPrefix)
+	}
+	requestURL := fmt.Sprintf("%s/collections/%s", c.url, c.collection)
+	parsed, err := url.Parse(requestURL)
+	if err != nil {
+		return fmt.Errorf("parse collection deletion URL: %w", err)
+	}
+	query := parsed.Query()
+	query.Set("timeout", "15")
+	parsed.RawQuery = query.Encode()
+	return c.mutate(ctx, http.MethodDelete, parsed.String(), nil, false)
+}
+
 // UpdateCollectionMetadata merges collection-level metadata. Qdrant treats an
 // empty object as a request to clear the metadata.
 func (c *Client) UpdateCollectionMetadata(ctx context.Context, metadata map[string]any) error {
@@ -285,11 +302,29 @@ func (c *Client) EnsureCollection(ctx context.Context, vectorSize int) error {
 
 // Upsert inserts or updates a point.
 func (c *Client) Upsert(ctx context.Context, point Point) error {
+	return c.upsert(ctx, point, qdrantPointID(point.ID))
+}
+
+// UpsertWithPointID preserves the JSON fixture ID kind. This is primarily
+// useful for compatibility tests that need both numeric and string point IDs.
+func (c *Client) UpsertWithPointID(ctx context.Context, point Point, numeric bool) error {
+	var id any = point.ID
+	if numeric {
+		parsed, err := strconv.ParseUint(point.ID, 10, 64)
+		if err != nil {
+			return fmt.Errorf("numeric point ID %q: %w", point.ID, err)
+		}
+		id = parsed
+	}
+	return c.upsert(ctx, point, id)
+}
+
+func (c *Client) upsert(ctx context.Context, point Point, id any) error {
 	url := fmt.Sprintf("%s/collections/%s/points", c.url, c.collection)
 	body := map[string]interface{}{
 		"points": []map[string]interface{}{
 			{
-				"id":      qdrantPointID(point.ID),
+				"id":      id,
 				"vector":  point.Vector,
 				"payload": point.Payload,
 			},
