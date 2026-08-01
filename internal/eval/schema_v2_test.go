@@ -108,6 +108,7 @@ func TestLoadV2RejectsInvalidIntentAndAsOfCombinations(t *testing.T) {
 		want    string
 	}{
 		{"unknown intent", `"intent": "current"`, `"intent": "future"`, "intent"},
+		{"explicit empty intent", `"intent": "current"`, `"intent": ""`, "intent"},
 		{"as_of missing date", `"intent": "current"`, `"intent": "as_of"`, "as_of"},
 		{"as_of malformed date", `"intent": "current"`, `"intent": "as_of", "as_of": "14-03-2025"`, "YYYY-MM-DD"},
 		{"current rejects date", `"intent": "current"`, `"intent": "current", "as_of": "2025-03-14"`, "only valid"},
@@ -143,6 +144,7 @@ func TestLoadV2RejectsInvalidLifecycleExpectations(t *testing.T) {
 		want    string
 	}{
 		{"unknown state", `"state": "current"`, `"state": "future"`, "state"},
+		{"explicit empty state", `"state": "current"`, `"state": ""`, "state"},
 		{"null state", `"state": "current"`, `"state": null`, "state must be a string"},
 		{"null state with suppress", `"state": "current",` + "\n      " + `"decision": "include"`, `"state": null,` + "\n      " + `"decision": "suppress"`, "state must be a string"},
 		{"unknown decision", `"decision": "include"`, `"decision": "hide"`, "decision"},
@@ -241,9 +243,48 @@ func TestLoadV2RejectsUnknownLifecycleFields(t *testing.T) {
 }
 
 func TestLoadV1RejectsV2LifecycleFields(t *testing.T) {
-	value := strings.Replace(validDataset, `    "id": "q1",`, `    "id": "q1",`+validLifecycleFields, 1)
-	_, err := Load(strings.NewReader(value))
-	if err == nil || !strings.Contains(err.Error(), "schema_version 2") {
-		t.Fatalf("Load() error = %v, want schema_version 2 requirement", err)
+	tests := []struct {
+		name   string
+		insert string
+	}{
+		{"current intent", `"intent": "current",`},
+		{"empty intent", `"intent": "",`},
+		{"empty lifecycle expectations", `"lifecycle_expectations": [],`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value := strings.Replace(validDataset, `    "id": "q1",`, `    "id": "q1",`+"\n    "+tt.insert, 1)
+			_, err := Load(strings.NewReader(value))
+			if err == nil || !strings.Contains(err.Error(), "schema_version 2") {
+				t.Fatalf("Load() error = %v, want schema_version 2 requirement", err)
+			}
+		})
+	}
+
+	t.Run("empty transition scenarios", func(t *testing.T) {
+		value := strings.Replace(validDataset, "\n}", ",\n  \"transition_scenarios\": []\n}", 1)
+		_, err := Load(strings.NewReader(value))
+		if err == nil || !strings.Contains(err.Error(), "schema_version 2") {
+			t.Fatalf("Load() error = %v, want schema_version 2 requirement", err)
+		}
+	})
+
+	t.Run("nonempty lifecycle expectations", func(t *testing.T) {
+		value := strings.Replace(validDataset, `    "id": "q1",`, `    "id": "q1",`+validLifecycleFields, 1)
+		_, err := Load(strings.NewReader(value))
+		if err == nil || !strings.Contains(err.Error(), "schema_version 2") {
+			t.Fatalf("Load() error = %v, want schema_version 2 requirement", err)
+		}
+	})
+}
+
+func TestLoadV2AcceptsOnlyOmittedIntentAsDefaultCurrent(t *testing.T) {
+	value := strings.Replace(validV2Dataset(), `    "intent": "current",`+"\n", "", 1)
+	dataset, err := Load(strings.NewReader(value))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dataset.Queries[0].Intent != QueryIntentCurrent {
+		t.Fatalf("intent = %q, want %q", dataset.Queries[0].Intent, QueryIntentCurrent)
 	}
 }

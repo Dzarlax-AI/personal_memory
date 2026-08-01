@@ -104,7 +104,14 @@ func (d *Dataset) Validate() error {
 		if query.Target == "facts" && query.Mode != "flat" {
 			return fmt.Errorf("query %q facts target supports only flat mode", query.ID)
 		}
-		if query.Intent == "" {
+		if d.SchemaVersion == SchemaVersion &&
+			(query.intentPresent ||
+				(query.Intent != "" && query.Intent != QueryIntentCurrent) ||
+				query.asOfPresent || query.AsOf != "" ||
+				query.lifecycleExpectationsPresent || len(query.LifecycleExpectations) != 0) {
+			return fmt.Errorf("query %q lifecycle fields require schema_version %d", query.ID, CurrentDatasetSchemaVersion)
+		}
+		if query.Intent == "" && !query.intentPresent {
 			query.Intent = QueryIntentCurrent
 		}
 		if !query.Intent.valid() {
@@ -174,6 +181,9 @@ func (d *Dataset) Validate() error {
 			if expectation.State != "" && !expectation.State.Valid() {
 				return fmt.Errorf("query %q lifecycle expectation state for %q is invalid", query.ID, expectation.ID)
 			}
+			if expectation.statePresent && expectation.State == "" {
+				return fmt.Errorf("query %q lifecycle expectation state for %q must not be empty", query.ID, expectation.ID)
+			}
 			if !expectation.Decision.valid() {
 				return fmt.Errorf("query %q lifecycle expectation decision for %q must be include, suppress, demote, or uncertain", query.ID, expectation.ID)
 			}
@@ -187,10 +197,6 @@ func (d *Dataset) Validate() error {
 				}
 				reasonCodes[reasonCode] = struct{}{}
 			}
-		}
-		if d.SchemaVersion == SchemaVersion &&
-			(query.Intent != QueryIntentCurrent || query.AsOf != "" || len(query.LifecycleExpectations) != 0) {
-			return fmt.Errorf("query %q lifecycle fields require schema_version %d", query.ID, CurrentDatasetSchemaVersion)
 		}
 	}
 	transitionIDs := make(map[string]struct{}, len(d.TransitionScenarios))
@@ -220,7 +226,8 @@ func (d *Dataset) Validate() error {
 			return fmt.Errorf("transition scenario %q: %w", scenario.ID, err)
 		}
 	}
-	if d.SchemaVersion == SchemaVersion && len(d.TransitionScenarios) != 0 {
+	if d.SchemaVersion == SchemaVersion &&
+		(d.transitionScenariosPresent || len(d.TransitionScenarios) != 0) {
 		return fmt.Errorf("transition_scenarios require schema_version %d", CurrentDatasetSchemaVersion)
 	}
 	if err := validateGateMap("minimum_hit_at", d.Gates.MinimumHitAt, cfg.TopK); err != nil {

@@ -200,6 +200,8 @@ type LifecycleExpectation struct {
 	State       lifecycle.State      `json:"state,omitempty"`
 	Decision    PresentationDecision `json:"decision"`
 	ReasonCodes []string             `json:"reason_codes,omitempty"`
+
+	statePresent bool
 }
 
 func (expectation *LifecycleExpectation) UnmarshalJSON(data []byte) error {
@@ -225,6 +227,7 @@ func (expectation *LifecycleExpectation) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("lifecycle expectation state must be a string")
 	}
 	*expectation = LifecycleExpectation(decoded)
+	_, expectation.statePresent = fields["state"]
 	return nil
 }
 
@@ -241,7 +244,9 @@ type Query struct {
 	AsOf                  string                 `json:"as_of,omitempty"`
 	LifecycleExpectations []LifecycleExpectation `json:"lifecycle_expectations,omitempty"`
 
-	asOfPresent bool
+	intentPresent                bool
+	asOfPresent                  bool
+	lifecycleExpectationsPresent bool
 }
 
 func (query *Query) UnmarshalJSON(data []byte) error {
@@ -266,8 +271,13 @@ func (query *Query) UnmarshalJSON(data []byte) error {
 	if raw, exists := fields["as_of"]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return fmt.Errorf("query as_of must be a string")
 	}
+	if raw, exists := fields["lifecycle_expectations"]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("query lifecycle_expectations must be an array")
+	}
 	*query = Query(decoded)
+	_, query.intentPresent = fields["intent"]
 	_, query.asOfPresent = fields["as_of"]
+	_, query.lifecycleExpectationsPresent = fields["lifecycle_expectations"]
 	return nil
 }
 
@@ -377,6 +387,35 @@ type Dataset struct {
 	Queries             []Query              `json:"queries"`
 	Gates               Gates                `json:"gates"`
 	TransitionScenarios []TransitionScenario `json:"transition_scenarios,omitempty"`
+
+	transitionScenariosPresent bool
+}
+
+func (dataset *Dataset) UnmarshalJSON(data []byte) error {
+	type wire Dataset
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var decoded wire
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("dataset contains trailing JSON")
+		}
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if raw, exists := fields["transition_scenarios"]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("transition_scenarios must be an array")
+	}
+	*dataset = Dataset(decoded)
+	_, dataset.transitionScenariosPresent = fields["transition_scenarios"]
+	return nil
 }
 
 // RetrievedItem is the non-sensitive result representation stored in reports.
