@@ -186,6 +186,7 @@ func TestLoadV2RejectsInvalidLifecycleExpectations(t *testing.T) {
 		{"missing decision", `"decision": "include",`, ``, "decision"},
 		{"invalid ID", `"id": "42"`, `"id": "not-qdrant"`, "Qdrant point ID"},
 		{"empty reason code", `"reason_codes": ["current_truth"]`, `"reason_codes": [""]`, "reason code"},
+		{"unknown reason code", `"reason_codes": ["current_truth"]`, `"reason_codes": ["secret explanation"]`, "unknown reason code"},
 		{"duplicate reason code", `"reason_codes": ["current_truth"]`, `"reason_codes": ["current_truth", "current_truth"]`, "duplicate reason code"},
 	}
 	for _, tt := range tests {
@@ -237,6 +238,7 @@ func TestLoadV2RejectsInvalidTransitionScenarios(t *testing.T) {
 		{"null expected valid", `"expected_valid": true`, `"expected_valid": null`, "expected_valid must be a boolean"},
 		{"null canonical", `"canonical": true`, `"canonical": null`, "canonical must be a boolean"},
 		{"empty reason code", `"expected_reason_code": "transition_valid"`, `"expected_reason_code": ""`, "expected_reason_code"},
+		{"unknown reason code", `"expected_reason_code": "transition_valid"`, `"expected_reason_code": "because text"`, "unknown"},
 		{"unknown nested field", `"canonical": true,`, `"canonical": true, "authority": 10,`, "unknown field"},
 		{"unknown scenario field", `"expected_valid": true,`, `"expected_valid": true, "note": "no",`, "unknown field"},
 	}
@@ -305,6 +307,19 @@ func TestLoadV1RejectsV2LifecycleFields(t *testing.T) {
 
 	t.Run("nonempty lifecycle expectations", func(t *testing.T) {
 		value := strings.Replace(validDataset, `    "id": "q1",`, `    "id": "q1",`+validLifecycleFields, 1)
+		_, err := Load(strings.NewReader(value))
+		if err == nil || !strings.Contains(err.Error(), "schema_version 2") {
+			t.Fatalf("Load() error = %v, want schema_version 2 requirement", err)
+		}
+	})
+
+	t.Run("explicit false lifecycle gate", func(t *testing.T) {
+		value := strings.Replace(
+			validDataset,
+			`"forbid_invariant_violations": true`,
+			`"forbid_invariant_violations": true, "forbid_lifecycle_violations": false`,
+			1,
+		)
 		_, err := Load(strings.NewReader(value))
 		if err == nil || !strings.Contains(err.Error(), "schema_version 2") {
 			t.Fatalf("Load() error = %v, want schema_version 2 requirement", err)

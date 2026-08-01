@@ -13,13 +13,14 @@ import (
 	"github.com/google/uuid"
 )
 
-// SchemaVersion remains the current report schema version. Dataset loading also
-// accepts CurrentDatasetSchemaVersion while v2 report behavior is implemented
-// separately.
+// SchemaVersion is the original dataset and report schema version.
 const SchemaVersion = 1
 
 // CurrentDatasetSchemaVersion is the latest accepted dataset schema.
 const CurrentDatasetSchemaVersion = 2
+
+// CurrentReportSchemaVersion is the report schema emitted for v2 datasets.
+const CurrentReportSchemaVersion = 2
 
 // PointID preserves whether a fixture ID was encoded as a JSON number or
 // string while exposing one normalized string form for relevance scoring.
@@ -379,9 +380,33 @@ func (scenario *TransitionScenario) UnmarshalJSON(data []byte) error {
 // Gates contains explicit thresholds that may fail an evaluation.
 type Gates struct {
 	ForbidInvariantViolations bool               `json:"forbid_invariant_violations"`
+	ForbidLifecycleViolations bool               `json:"forbid_lifecycle_violations,omitempty"`
 	MinimumHitAt              map[string]float64 `json:"minimum_hit_at,omitempty"`
 	MinimumMRR                *float64           `json:"minimum_mrr,omitempty"`
 	MinimumNDCGAt             map[string]float64 `json:"minimum_ndcg_at,omitempty"`
+
+	forbidLifecycleViolationsPresent bool
+}
+
+func (gates *Gates) UnmarshalJSON(data []byte) error {
+	type wire Gates
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var decoded wire
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if raw, exists := fields["forbid_lifecycle_violations"]; exists &&
+		bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("forbid_lifecycle_violations must be a boolean")
+	}
+	*gates = Gates(decoded)
+	_, gates.forbidLifecycleViolationsPresent = fields["forbid_lifecycle_violations"]
+	return nil
 }
 
 // Dataset is the versioned input contract for fixture and live evaluation.
@@ -453,11 +478,12 @@ type AggregateMetrics struct {
 
 // QueryReport combines normalized results and metrics for one query.
 type QueryReport struct {
-	ID      string          `json:"id"`
-	Target  string          `json:"target"`
-	Mode    string          `json:"mode"`
-	Results []RetrievedItem `json:"results"`
-	Metrics QueryMetrics    `json:"metrics"`
+	ID        string                `json:"id"`
+	Target    string                `json:"target"`
+	Mode      string                `json:"mode"`
+	Results   []RetrievedItem       `json:"results"`
+	Metrics   QueryMetrics          `json:"metrics"`
+	Lifecycle *QueryLifecycleReport `json:"lifecycle,omitempty"`
 }
 
 // Report is the deterministic canonical evaluation output.
@@ -470,6 +496,7 @@ type Report struct {
 	TopK           []int             `json:"top_k"`
 	Aggregate      AggregateMetrics  `json:"aggregate"`
 	Queries        []QueryReport     `json:"queries"`
+	Lifecycle      *LifecycleReport  `json:"lifecycle,omitempty"`
 	GatesPassed    bool              `json:"gates_passed"`
 	GateFailures   []string          `json:"gate_failures,omitempty"`
 }

@@ -193,6 +193,9 @@ func (d *Dataset) Validate() error {
 				if strings.TrimSpace(reasonCode) == "" || reasonCode != strings.TrimSpace(reasonCode) {
 					return fmt.Errorf("query %q lifecycle expectation for %q contains an empty or non-normalized reason code", query.ID, expectation.ID)
 				}
+				if !LifecycleReasonCode(reasonCode).validPresentation() {
+					return fmt.Errorf("query %q lifecycle expectation for %q contains unknown reason code %q", query.ID, expectation.ID, reasonCode)
+				}
 				if _, duplicate := reasonCodes[reasonCode]; duplicate {
 					return fmt.Errorf("query %q lifecycle expectation for %q contains duplicate reason code %q", query.ID, expectation.ID, reasonCode)
 				}
@@ -220,6 +223,10 @@ func (d *Dataset) Validate() error {
 			scenario.ExpectedReasonCode != strings.TrimSpace(scenario.ExpectedReasonCode)) {
 			return fmt.Errorf("transition scenario %q expected_reason_code must be non-empty and normalized", scenario.ID)
 		}
+		if scenario.reasonCodePresent &&
+			!LifecycleReasonCode(scenario.ExpectedReasonCode).validTransition() {
+			return fmt.Errorf("transition scenario %q expected_reason_code is unknown", scenario.ID)
+		}
 		if err := validateLifecyclePayload(scenario.SourceLifecycle, "source_lifecycle"); err != nil {
 			return fmt.Errorf("transition scenario %q: %w", scenario.ID, err)
 		}
@@ -230,6 +237,10 @@ func (d *Dataset) Validate() error {
 	if d.SchemaVersion == SchemaVersion &&
 		(d.transitionScenariosPresent || len(d.TransitionScenarios) != 0) {
 		return fmt.Errorf("transition_scenarios require schema_version %d", CurrentDatasetSchemaVersion)
+	}
+	if d.SchemaVersion == SchemaVersion &&
+		(d.Gates.forbidLifecycleViolationsPresent || d.Gates.ForbidLifecycleViolations) {
+		return fmt.Errorf("forbid_lifecycle_violations requires schema_version %d", CurrentDatasetSchemaVersion)
 	}
 	if err := validateGateMap("minimum_hit_at", d.Gates.MinimumHitAt, cfg.TopK); err != nil {
 		return err

@@ -159,7 +159,20 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 	sort.Slice(queries, func(i, j int) bool { return queries[i].ID < queries[j].ID })
 	queryReports := make([]QueryReport, 0, len(queries))
 	metrics := make([]QueryMetrics, 0, len(queries))
+	var lifecycleReport *LifecycleReport
+	var lifecycleFailures []string
+	if dataset.SchemaVersion == CurrentDatasetSchemaVersion {
+		lifecycleReport = &LifecycleReport{
+			Transitions: executeTransitionScenarios(dataset.TransitionScenarios),
+		}
+		for _, transition := range lifecycleReport.Transitions {
+			lifecycleReport.Aggregate.Checks++
+			lifecycleReport.Aggregate.Violations += len(transition.Violations)
+			lifecycleFailures = append(lifecycleFailures, transition.Violations...)
+		}
+	}
 	maxK := dataset.Configuration.TopK[len(dataset.Configuration.TopK)-1]
+	now := time.Now()
 	for _, query := range queries {
 		searchLimit := maxK
 		if mode == "fixture" {
@@ -177,10 +190,16 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 		switch {
 		case query.Target == "facts":
 			candidateLimit := max(20, maxK*4)
+			var filter map[string]any
+			if len(query.LifecycleExpectations) == 0 {
+				filter = currentLifecycleFilter()
+			} else {
+				candidateLimit = max(100, maxK*10)
+			}
 			if mode == "fixture" {
 				candidateLimit = max(candidateLimit, len(dataset.Facts))
 			}
-			points, err = clients.facts.Search(ctx, query.Vector, candidateLimit, currentLifecycleFilter(), nil)
+			points, err = clients.facts.Search(ctx, query.Vector, candidateLimit, filter, nil)
 		case query.Mode == "flat":
 			points, err = clients.chunks.Search(ctx, query.Vector, searchLimit, nil, nil)
 		default:
@@ -190,8 +209,18 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 			return Report{}, fmt.Errorf("execute query %q: %w", query.ID, err)
 		}
 		var items []RetrievedItem
-		if query.Target == "facts" {
-			items = normalizeFactResults(points, time.Now())
+		var queryLifecycle *QueryLifecycleReport
+		if query.Target == "facts" && dataset.SchemaVersion == CurrentDatasetSchemaVersion {
+			presentation := presentFactCandidates(query, points, now)
+			items = presentation.results
+			queryLifecycle = &presentation.report
+			lifecycleReport.Aggregate.Checks += presentation.canonical.Checks
+			lifecycleReport.Aggregate.Violations += presentation.canonical.Violations
+			lifecycleReport.Aggregate.CanonicalPreferenceChecks += presentation.canonical.CanonicalPreferenceChecks
+			lifecycleReport.Aggregate.CanonicalPreferenceViolations += presentation.canonical.CanonicalPreferenceViolations
+			lifecycleFailures = append(lifecycleFailures, presentation.report.Violations...)
+		} else if query.Target == "facts" {
+			items = normalizeFactResults(points, now)
 		} else {
 			items = normalizeResults(points)
 		}
@@ -201,13 +230,22 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 		queryMetrics := ScoreQuery(query, items, dataset.Configuration.TopK)
 		queryReports = append(queryReports, QueryReport{
 			ID: query.ID, Target: query.Target, Mode: query.Mode, Results: items, Metrics: queryMetrics,
+			Lifecycle: queryLifecycle,
 		})
 		metrics = append(metrics, queryMetrics)
 	}
 	aggregate := Aggregate(metrics, dataset.Configuration.TopK)
 	failures := EvaluateGates(aggregate, dataset.Gates)
+	if dataset.Gates.ForbidLifecycleViolations {
+		failures = append(failures, lifecycleFailures...)
+		sort.Strings(failures)
+	}
+	reportSchema := SchemaVersion
+	if dataset.SchemaVersion == CurrentDatasetSchemaVersion {
+		reportSchema = CurrentReportSchemaVersion
+	}
 	return normalizeReport(Report{
-		SchemaVersion:  SchemaVersion,
+		SchemaVersion:  reportSchema,
 		DatasetVersion: dataset.DatasetVersion,
 		Mode:           mode,
 		Embedding:      dataset.Embedding,
@@ -215,6 +253,7 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 		TopK:           dataset.Configuration.TopK,
 		Aggregate:      aggregate,
 		Queries:        queryReports,
+		Lifecycle:      lifecycleReport,
 		GatesPassed:    len(failures) == 0,
 		GateFailures:   failures,
 	}), nil

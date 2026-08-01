@@ -46,3 +46,31 @@ func TestEvaluateGatesReportsMalformedKeys(t *testing.T) {
 		t.Fatalf("failures = %#v", failures)
 	}
 }
+
+func TestCompareKeepsV2LifecycleRegressionsVisible(t *testing.T) {
+	base := Report{
+		SchemaVersion: CurrentReportSchemaVersion, DatasetVersion: "2",
+		TopK: []int{1}, Configuration: Configuration{Name: "cfg"},
+		Aggregate: AggregateMetrics{HitAt: map[int]float64{1: 1}, NDCGAt: map[int]float64{1: 1}},
+		Queries: []QueryReport{{
+			ID: "q", Metrics: QueryMetrics{HitAt: map[int]float64{1: 1}, NDCGAt: map[int]float64{1: 1}},
+			Lifecycle: &QueryLifecycleReport{},
+		}},
+		Lifecycle:   &LifecycleReport{Aggregate: LifecycleAggregateMetrics{Checks: 1}},
+		GatesPassed: true,
+	}
+	candidate := base
+	candidate.Queries = []QueryReport{{
+		ID: "q", Metrics: QueryMetrics{HitAt: map[int]float64{1: 1}, NDCGAt: map[int]float64{1: 1}},
+		Lifecycle: &QueryLifecycleReport{Violations: []string{"query q candidate 1 invariant decision"}},
+	}}
+	candidate.Lifecycle = &LifecycleReport{Aggregate: LifecycleAggregateMetrics{Checks: 1, Violations: 1}}
+	comparison, err := Compare(base, candidate, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if comparison.SchemaVersion != CurrentReportSchemaVersion || comparison.Lifecycle == nil ||
+		len(comparison.Lifecycle.CandidateViolations) != 1 {
+		t.Fatalf("comparison = %#v", comparison)
+	}
+}

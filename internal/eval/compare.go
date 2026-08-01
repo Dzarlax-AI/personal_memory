@@ -24,12 +24,22 @@ type QueryDelta struct {
 
 // Comparison is the deterministic baseline/candidate comparison output.
 type Comparison struct {
-	SchemaVersion  int          `json:"schema_version"`
-	DatasetVersion string       `json:"dataset_version"`
-	Aggregate      MetricDelta  `json:"aggregate"`
-	Queries        []QueryDelta `json:"queries"`
-	GatesPassed    bool         `json:"gates_passed"`
-	GateFailures   []string     `json:"gate_failures,omitempty"`
+	SchemaVersion  int                  `json:"schema_version"`
+	DatasetVersion string               `json:"dataset_version"`
+	Aggregate      MetricDelta          `json:"aggregate"`
+	Queries        []QueryDelta         `json:"queries"`
+	Lifecycle      *LifecycleComparison `json:"lifecycle,omitempty"`
+	GatesPassed    bool                 `json:"gates_passed"`
+	GateFailures   []string             `json:"gate_failures,omitempty"`
+}
+
+// LifecycleComparison keeps lifecycle regressions visible without blending
+// them into ranking deltas.
+type LifecycleComparison struct {
+	BaselineAggregate   LifecycleAggregateMetrics `json:"baseline_aggregate"`
+	CandidateAggregate  LifecycleAggregateMetrics `json:"candidate_aggregate"`
+	BaselineViolations  []string                  `json:"baseline_violations,omitempty"`
+	CandidateViolations []string                  `json:"candidate_violations,omitempty"`
 }
 
 // Compare validates report compatibility and computes candidate deltas.
@@ -49,10 +59,21 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 		}
 	}
 	comparison := Comparison{
-		SchemaVersion:  SchemaVersion,
+		SchemaVersion:  baseline.SchemaVersion,
 		DatasetVersion: baseline.DatasetVersion,
 		Aggregate:      deltaMetrics(baseline.Aggregate, candidate.Aggregate, baseline.TopK),
 		GatesPassed:    !enforceGates || candidate.GatesPassed,
+	}
+	if baseline.SchemaVersion == CurrentReportSchemaVersion {
+		if baseline.Lifecycle == nil || candidate.Lifecycle == nil {
+			return Comparison{}, fmt.Errorf("schema_version %d reports require lifecycle sections", CurrentReportSchemaVersion)
+		}
+		comparison.Lifecycle = &LifecycleComparison{
+			BaselineAggregate:   baseline.Lifecycle.Aggregate,
+			CandidateAggregate:  candidate.Lifecycle.Aggregate,
+			BaselineViolations:  reportLifecycleViolations(baseline),
+			CandidateViolations: reportLifecycleViolations(candidate),
+		}
 	}
 	if enforceGates {
 		comparison.GateFailures = append([]string(nil), candidate.GateFailures...)
@@ -80,6 +101,22 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 	}
 	sort.Slice(comparison.Queries, func(i, j int) bool { return comparison.Queries[i].ID < comparison.Queries[j].ID })
 	return comparison, nil
+}
+
+func reportLifecycleViolations(report Report) []string {
+	var violations []string
+	for _, query := range report.Queries {
+		if query.Lifecycle != nil {
+			violations = append(violations, query.Lifecycle.Violations...)
+		}
+	}
+	if report.Lifecycle != nil {
+		for _, transition := range report.Lifecycle.Transitions {
+			violations = append(violations, transition.Violations...)
+		}
+	}
+	sort.Strings(violations)
+	return violations
 }
 
 // EvaluateGates returns deterministic descriptions of explicit gate failures.

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Dzarlax-AI/personal-memory/internal/memory/lifecycle"
 )
 
 func TestFixtureRunnerIntegration(t *testing.T) {
@@ -109,6 +111,47 @@ func TestLiveRunnerUsesOnlySearchRequests(t *testing.T) {
 	}
 	if len(paths) != 1 || report.Aggregate.MRR != 1 {
 		t.Fatalf("paths/report = %v/%#v", paths, report)
+	}
+}
+
+func TestLiveV2LifecycleQuerySearchesBroadCandidatesAndGatesViolations(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write([]byte(`{"result":[
+			{"id":99,"score":1,"payload":{"text":"obsolete","lifecycle_state":"historical"}},
+			{"id":42,"score":0.7,"payload":{"text":"current","lifecycle_state":"current","canonical":true}}
+		]}`))
+	}))
+	defer server.Close()
+
+	dataset, err := Load(strings.NewReader(validV2Dataset()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset.Facts = nil
+	dataset.Queries[0].LifecycleExpectations[0].Decision = PresentationSuppress
+	dataset.Gates.ForbidLifecycleViolations = true
+	report, err := Run(context.Background(), dataset, RunOptions{Source: "live", QdrantURL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, filtered := requestBody["filter"]; filtered {
+		t.Fatalf("lifecycle query unexpectedly used current-only filter: %#v", requestBody["filter"])
+	}
+	if report.SchemaVersion != CurrentReportSchemaVersion || report.Lifecycle == nil {
+		t.Fatalf("v2 lifecycle report missing: %#v", report)
+	}
+	if got := resultIDs(report.Queries[0].Results); len(got) != 1 || got[0] != "42" {
+		t.Fatalf("relevance result IDs = %v, want only current candidate 42", got)
+	}
+	assertCandidate(t, *report.Queries[0].Lifecycle, "99", lifecycle.Historical, PresentationSuppress, ReasonHistorical)
+	if report.GatesPassed ||
+		len(report.GateFailures) != 1 ||
+		report.GateFailures[0] != "query q1 candidate 42 invariant decision" {
+		t.Fatalf("gate result = passed %t failures %#v", report.GatesPassed, report.GateFailures)
 	}
 }
 
