@@ -225,6 +225,8 @@ OAuth applies to `/memory`; the optional Todoist endpoint remains API-key-only.
 
 Normal usage happens through an MCP client. The exact phrasing is up to the client, but the following prompts demonstrate the intended workflows.
 
+Models and agents integrating these tools should follow the normative [Model Memory Usage Contract](docs/model-usage-contract.md). It defines when to use facts, document search, Todoist, or ordinary context; how to handle lifecycle and stale information; and how to degrade honestly when an optional capability is unavailable.
+
 ### Remember a durable preference
 
 > Remember that I prefer PostgreSQL migrations to be reversible. Store it in the `tech` namespace with the tags `postgres`, `migrations`, and `preference`.
