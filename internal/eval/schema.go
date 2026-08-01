@@ -202,6 +202,32 @@ type LifecycleExpectation struct {
 	ReasonCodes []string             `json:"reason_codes,omitempty"`
 }
 
+func (expectation *LifecycleExpectation) UnmarshalJSON(data []byte) error {
+	type wire LifecycleExpectation
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var decoded wire
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("lifecycle expectation contains trailing JSON")
+		}
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if raw, exists := fields["state"]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("lifecycle expectation state must be a string")
+	}
+	*expectation = LifecycleExpectation(decoded)
+	return nil
+}
+
 // Query describes one fact or document retrieval evaluation.
 type Query struct {
 	ID                    string                 `json:"id"`
@@ -214,6 +240,35 @@ type Query struct {
 	Intent                QueryIntent            `json:"intent,omitempty"`
 	AsOf                  string                 `json:"as_of,omitempty"`
 	LifecycleExpectations []LifecycleExpectation `json:"lifecycle_expectations,omitempty"`
+
+	asOfPresent bool
+}
+
+func (query *Query) UnmarshalJSON(data []byte) error {
+	type wire Query
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var decoded wire
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("query contains trailing JSON")
+		}
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if raw, exists := fields["as_of"]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("query as_of must be a string")
+	}
+	*query = Query(decoded)
+	_, query.asOfPresent = fields["as_of"]
+	return nil
 }
 
 // LifecyclePayload is the strict evaluation representation of lifecycle.Input.

@@ -114,7 +114,7 @@ func (d *Dataset) Validate() error {
 			if !validISODate(query.AsOf) {
 				return fmt.Errorf("query %q as_of intent requires an ISO YYYY-MM-DD date", query.ID)
 			}
-		} else if query.AsOf != "" {
+		} else if query.asOfPresent || query.AsOf != "" {
 			return fmt.Errorf("query %q as_of is only valid for as_of intent", query.ID)
 		}
 		if query.Target == "documents" {
@@ -176,9 +176,6 @@ func (d *Dataset) Validate() error {
 			}
 			if !expectation.Decision.valid() {
 				return fmt.Errorf("query %q lifecycle expectation decision for %q must be include, suppress, demote, or uncertain", query.ID, expectation.ID)
-			}
-			if expectation.State == "" && expectation.Decision != PresentationSuppress {
-				return fmt.Errorf("query %q lifecycle expectation state for %q may be omitted only for suppress decisions", query.ID, expectation.ID)
 			}
 			reasonCodes := make(map[string]struct{}, len(expectation.ReasonCodes))
 			for _, reasonCode := range expectation.ReasonCodes {

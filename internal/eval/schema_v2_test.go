@@ -67,17 +67,12 @@ func TestLoadV2AcceptsLifecycleSchema(t *testing.T) {
 func TestLoadV2AcceptsAllPresentationDecisions(t *testing.T) {
 	for _, decision := range []string{"include", "suppress", "demote", "uncertain"} {
 		t.Run(decision, func(t *testing.T) {
-			value := strings.Replace(validV2Dataset(), `"decision": "include"`, `"decision": "`+decision+`"`, 1)
+			value := strings.Replace(validV2Dataset(), `"state": "current",`+"\n      ", "", 1)
+			value = strings.Replace(value, `"decision": "include"`, `"decision": "`+decision+`"`, 1)
 			if _, err := Load(strings.NewReader(value)); err != nil {
 				t.Fatal(err)
 			}
 		})
-	}
-
-	value := strings.Replace(validV2Dataset(), `"state": "current",`+"\n      ", "", 1)
-	value = strings.Replace(value, `"decision": "include"`, `"decision": "suppress"`, 1)
-	if _, err := Load(strings.NewReader(value)); err != nil {
-		t.Fatalf("state-less malformed-metadata suppression rejected: %v", err)
 	}
 }
 
@@ -116,6 +111,9 @@ func TestLoadV2RejectsInvalidIntentAndAsOfCombinations(t *testing.T) {
 		{"as_of missing date", `"intent": "current"`, `"intent": "as_of"`, "as_of"},
 		{"as_of malformed date", `"intent": "current"`, `"intent": "as_of", "as_of": "14-03-2025"`, "YYYY-MM-DD"},
 		{"current rejects date", `"intent": "current"`, `"intent": "current", "as_of": "2025-03-14"`, "only valid"},
+		{"current rejects explicit empty as_of", `"intent": "current"`, `"intent": "current", "as_of": ""`, "only valid"},
+		{"as_of intent rejects null", `"intent": "current"`, `"intent": "as_of", "as_of": null`, "as_of must be a string"},
+		{"current intent rejects null as_of", `"intent": "current"`, `"intent": "current", "as_of": null`, "as_of must be a string"},
 		{"null intent", `"intent": "current"`, `"intent": null`, "intent must be a string"},
 	}
 	for _, tt := range tests {
@@ -145,6 +143,8 @@ func TestLoadV2RejectsInvalidLifecycleExpectations(t *testing.T) {
 		want    string
 	}{
 		{"unknown state", `"state": "current"`, `"state": "future"`, "state"},
+		{"null state", `"state": "current"`, `"state": null`, "state must be a string"},
+		{"null state with suppress", `"state": "current",` + "\n      " + `"decision": "include"`, `"state": null,` + "\n      " + `"decision": "suppress"`, "state must be a string"},
 		{"unknown decision", `"decision": "include"`, `"decision": "hide"`, "decision"},
 		{"null decision", `"decision": "include"`, `"decision": null`, "decision must be a string"},
 		{"missing decision", `"decision": "include",`, ``, "decision"},
