@@ -14,17 +14,19 @@ import (
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 )
 
+// RunOptions selects the evaluation source and external clients.
 type RunOptions struct {
 	Source    string
 	QdrantURL string
 	Embed     func(context.Context, string) ([]float32, error)
 }
 
+// Run validates and evaluates a dataset in fixture or read-only live mode.
 func Run(ctx context.Context, dataset *Dataset, options RunOptions) (Report, error) {
 	if dataset == nil {
 		return Report{}, fmt.Errorf("dataset is required")
 	}
-	if err := dataset.Validate(); err != nil {
+	if err := dataset.ValidateForSource(options.Source); err != nil {
 		return Report{}, err
 	}
 	if strings.TrimSpace(options.QdrantURL) == "" {
@@ -32,11 +34,6 @@ func Run(ctx context.Context, dataset *Dataset, options RunOptions) (Report, err
 	}
 	switch options.Source {
 	case "fixture":
-		for _, query := range dataset.Queries {
-			if len(query.Vector) == 0 {
-				return Report{}, fmt.Errorf("fixture query %q must include a precomputed vector", query.ID)
-			}
-		}
 		return runFixture(ctx, dataset, options.QdrantURL)
 	case "live":
 		return runLive(ctx, dataset, options)

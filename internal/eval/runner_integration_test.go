@@ -9,8 +9,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFixtureRunnerIntegration(t *testing.T) {
@@ -23,7 +25,11 @@ func TestFixtureRunnerIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	t.Cleanup(func() {
+		if err := file.Close(); err != nil {
+			t.Errorf("close public dataset: %v", err)
+		}
+	})
 	dataset, err := Load(file)
 	if err != nil {
 		t.Fatal(err)
@@ -57,7 +63,7 @@ func TestFixtureRunnerIntegration(t *testing.T) {
 	if !bytes.Equal(first, baseline) {
 		t.Fatal("public baseline differs from a fresh Qdrant report")
 	}
-	after := listEvaluationCollections(t, qdrantURL)
+	after := waitForEvaluationCollections(t, qdrantURL, before)
 	if fmt.Sprint(before) != fmt.Sprint(after) {
 		t.Fatalf("eval collections leaked: before=%v after=%v", before, after)
 	}
@@ -68,7 +74,11 @@ func TestPublicDatasetLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	t.Cleanup(func() {
+		if err := file.Close(); err != nil {
+			t.Errorf("close public dataset: %v", err)
+		}
+	})
 	dataset, err := Load(file)
 	if err != nil {
 		t.Fatal(err)
@@ -92,6 +102,7 @@ func TestLiveRunnerUsesOnlySearchRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	dataset.Facts = nil
 	report, err := Run(context.Background(), dataset, RunOptions{Source: "live", QdrantURL: server.URL})
 	if err != nil {
 		t.Fatal(err)
@@ -103,11 +114,29 @@ func TestLiveRunnerUsesOnlySearchRequests(t *testing.T) {
 
 func listEvaluationCollections(t *testing.T, qdrantURL string) []string {
 	t.Helper()
-	response, err := http.Get(strings.TrimRight(qdrantURL, "/") + "/collections")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		strings.TrimRight(qdrantURL, "/")+"/collections",
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
+	client := &http.Client{Timeout: 5 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		closeErr := response.Body.Close()
+		if closeErr != nil {
+			t.Fatalf("list collections returned status %d; close body: %v", response.StatusCode, closeErr)
+		}
+		t.Fatalf("list collections returned status %d", response.StatusCode)
+	}
 	var decoded struct {
 		Result struct {
 			Collections []struct {
@@ -115,8 +144,13 @@ func listEvaluationCollections(t *testing.T, qdrantURL string) []string {
 			} `json:"collections"`
 		} `json:"result"`
 	}
-	if err := json.NewDecoder(response.Body).Decode(&decoded); err != nil {
-		t.Fatal(err)
+	decodeErr := json.NewDecoder(response.Body).Decode(&decoded)
+	closeErr := response.Body.Close()
+	if decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	if closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	var names []string
 	for _, collection := range decoded.Result.Collections {
@@ -124,5 +158,21 @@ func listEvaluationCollections(t *testing.T, qdrantURL string) []string {
 			names = append(names, collection.Name)
 		}
 	}
+	sort.Strings(names)
 	return names
+}
+
+func waitForEvaluationCollections(t *testing.T, qdrantURL string, want []string) []string {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		got := listEvaluationCollections(t, qdrantURL)
+		if fmt.Sprint(got) == fmt.Sprint(want) {
+			return got
+		}
+		if time.Now().After(deadline) {
+			return got
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }

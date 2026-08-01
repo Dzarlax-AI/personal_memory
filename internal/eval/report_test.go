@@ -2,6 +2,7 @@ package eval
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -34,5 +35,17 @@ func TestRenderReportIsDeterministic(t *testing.T) {
 	}
 	if bytes.Index(firstJSON, []byte(`"id": "a"`)) > bytes.Index(firstJSON, []byte(`"id": "z"`)) {
 		t.Fatal("queries are not sorted by ID")
+	}
+}
+
+func TestDecodeReportRejectsTrailingJSON(t *testing.T) {
+	report := Report{SchemaVersion: SchemaVersion, DatasetVersion: "1.0.0"}
+	data, err := RenderJSON(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = DecodeReport(append(data, []byte(`{}`)...))
+	if err == nil || !strings.Contains(err.Error(), "trailing") {
+		t.Fatalf("DecodeReport() error = %v, want trailing JSON error", err)
 	}
 }

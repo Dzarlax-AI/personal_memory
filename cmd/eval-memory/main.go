@@ -62,6 +62,13 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	if *datasetPath == "" || *jsonPath == "" || *markdownPath == "" {
 		return fmt.Errorf("--dataset, --json, and --markdown are required")
 	}
+	samePath, err := sameOutputPath(*jsonPath, *markdownPath)
+	if err != nil {
+		return fmt.Errorf("compare report output paths: %w", err)
+	}
+	if samePath {
+		return fmt.Errorf("--json and --markdown must refer to different files")
+	}
 	if *timeout <= 0 {
 		return fmt.Errorf("--timeout must be positive")
 	}
@@ -107,6 +114,31 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 		return &gateFailureError{failures: report.GateFailures}
 	}
 	return nil
+}
+
+func sameOutputPath(left, right string) (bool, error) {
+	leftPath, err := filepath.Abs(filepath.Clean(left))
+	if err != nil {
+		return false, err
+	}
+	rightPath, err := filepath.Abs(filepath.Clean(right))
+	if err != nil {
+		return false, err
+	}
+	if leftPath == rightPath {
+		return true, nil
+	}
+	leftInfo, leftErr := os.Stat(leftPath)
+	rightInfo, rightErr := os.Stat(rightPath)
+	if leftErr == nil && rightErr == nil {
+		return os.SameFile(leftInfo, rightInfo), nil
+	}
+	for _, statErr := range []error{leftErr, rightErr} {
+		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return false, statErr
+		}
+	}
+	return false, nil
 }
 
 func compareCommand(args []string, stdout, stderr io.Writer) error {
@@ -157,10 +189,13 @@ func loadDatasetFile(path string) (*memoryeval.Dataset, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open dataset: %w", err)
 	}
-	defer file.Close()
-	dataset, err := memoryeval.Load(file)
-	if err != nil {
-		return nil, fmt.Errorf("load dataset: %w", err)
+	dataset, loadErr := memoryeval.Load(file)
+	closeErr := file.Close()
+	if loadErr != nil {
+		return nil, fmt.Errorf("load dataset: %w", loadErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close dataset: %w", closeErr)
 	}
 	return dataset, nil
 }

@@ -1,6 +1,9 @@
 package eval
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestCompareShowsDegradedRankingAndHonorsExplicitGates(t *testing.T) {
 	minimum := 1.0
@@ -31,5 +34,15 @@ func TestCompareShowsDegradedRankingAndHonorsExplicitGates(t *testing.T) {
 	}
 	if withGates.GatesPassed || len(withGates.GateFailures) != 1 {
 		t.Fatalf("comparison with gates = %#v", withGates)
+	}
+}
+
+func TestEvaluateGatesReportsMalformedKeys(t *testing.T) {
+	failures := EvaluateGates(AggregateMetrics{}, Gates{
+		MinimumHitAt:  map[string]float64{"bad": 1},
+		MinimumNDCGAt: map[string]float64{"also-bad": 1},
+	})
+	if len(failures) != 2 || !strings.Contains(strings.Join(failures, "\n"), "not an integer") {
+		t.Fatalf("failures = %#v", failures)
 	}
 }

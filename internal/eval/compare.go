@@ -7,12 +7,14 @@ import (
 	"strconv"
 )
 
+// MetricDelta stores candidate-minus-baseline ranking metric changes.
 type MetricDelta struct {
 	MRR    float64         `json:"mrr"`
 	HitAt  map[int]float64 `json:"hit_at"`
 	NDCGAt map[int]float64 `json:"ndcg_at"`
 }
 
+// QueryDelta describes result and metric changes for one query.
 type QueryDelta struct {
 	ID                 string      `json:"id"`
 	BaselineResultIDs  []string    `json:"baseline_result_ids"`
@@ -20,6 +22,7 @@ type QueryDelta struct {
 	Metrics            MetricDelta `json:"metrics"`
 }
 
+// Comparison is the deterministic baseline/candidate comparison output.
 type Comparison struct {
 	SchemaVersion  int          `json:"schema_version"`
 	DatasetVersion string       `json:"dataset_version"`
@@ -29,6 +32,7 @@ type Comparison struct {
 	GateFailures   []string     `json:"gate_failures,omitempty"`
 }
 
+// Compare validates report compatibility and computes candidate deltas.
 func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) {
 	if baseline.SchemaVersion != candidate.SchemaVersion ||
 		baseline.DatasetVersion != candidate.DatasetVersion ||
@@ -78,6 +82,7 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 	return comparison, nil
 }
 
+// EvaluateGates returns deterministic descriptions of explicit gate failures.
 func EvaluateGates(metrics AggregateMetrics, gates Gates) []string {
 	var failures []string
 	if gates.ForbidInvariantViolations && metrics.InvariantViolations > 0 {
@@ -87,13 +92,21 @@ func EvaluateGates(metrics AggregateMetrics, gates Gates) []string {
 		failures = append(failures, fmt.Sprintf("MRR %.6f is below %.6f", metrics.MRR, *gates.MinimumMRR))
 	}
 	for rawK, minimum := range gates.MinimumHitAt {
-		k, _ := strconv.Atoi(rawK)
+		k, err := strconv.Atoi(rawK)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("minimum_hit_at key %q is not an integer", rawK))
+			continue
+		}
 		if metrics.HitAt[k] < minimum {
 			failures = append(failures, fmt.Sprintf("Hit@%d %.6f is below %.6f", k, metrics.HitAt[k], minimum))
 		}
 	}
 	for rawK, minimum := range gates.MinimumNDCGAt {
-		k, _ := strconv.Atoi(rawK)
+		k, err := strconv.Atoi(rawK)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("minimum_ndcg_at key %q is not an integer", rawK))
+			continue
+		}
 		if metrics.NDCGAt[k] < minimum {
 			failures = append(failures, fmt.Sprintf("nDCG@%d %.6f is below %.6f", k, metrics.NDCGAt[k], minimum))
 		}

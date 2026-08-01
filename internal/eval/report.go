@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 )
@@ -21,6 +22,7 @@ func normalizeReport(report Report) Report {
 	return report
 }
 
+// RenderJSON encodes a normalized report with deterministic ordering.
 func RenderJSON(report Report) ([]byte, error) {
 	report = normalizeReport(report)
 	data, err := json.MarshalIndent(report, "", "  ")
@@ -30,6 +32,7 @@ func RenderJSON(report Report) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
+// RenderMarkdown renders the same normalized report for human review.
 func RenderMarkdown(report Report) string {
 	report = normalizeReport(report)
 	var out strings.Builder
@@ -72,12 +75,20 @@ func escapeMarkdown(value string) string {
 	return strings.ReplaceAll(value, "|", `\|`)
 }
 
+// DecodeReport strictly decodes one report JSON document.
 func DecodeReport(data []byte) (Report, error) {
 	var report Report
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&report); err != nil {
 		return Report{}, fmt.Errorf("decode report: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return Report{}, fmt.Errorf("decode report: trailing JSON")
+		}
+		return Report{}, fmt.Errorf("decode report trailing JSON: %w", err)
 	}
 	if report.SchemaVersion != SchemaVersion || strings.TrimSpace(report.DatasetVersion) == "" {
 		return Report{}, fmt.Errorf("report schema_version and dataset_version are invalid")

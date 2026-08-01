@@ -17,6 +17,20 @@ func TestCLIRejectsUnknownSubcommand(t *testing.T) {
 	}
 }
 
+func TestRunCLIRejectsSameReportPath(t *testing.T) {
+	dir := t.TempDir()
+	reportPath := filepath.Join(dir, "report")
+	err := runCLI([]string{
+		"run",
+		"--dataset", filepath.Join(dir, "missing.json"),
+		"--json", reportPath,
+		"--markdown", filepath.Join(dir, ".", "report"),
+	}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "different files") {
+		t.Fatalf("error = %v, want same output path rejection", err)
+	}
+}
+
 func TestCompareCLIProducesDeterministicOutput(t *testing.T) {
 	dir := t.TempDir()
 	report := memoryeval.Report{

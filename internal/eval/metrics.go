@@ -5,6 +5,7 @@ import (
 	"sort"
 )
 
+// ScoreQuery computes ranking and invariant metrics for one query.
 func ScoreQuery(query Query, results []RetrievedItem, topK []int) QueryMetrics {
 	grades := make(map[string]int, len(query.Expected))
 	idealGrades := make([]int, 0, len(query.Expected))
@@ -24,7 +25,7 @@ func ScoreQuery(query Query, results []RetrievedItem, topK []int) QueryMetrics {
 	}
 	firstRelevantRank := 0
 	for i, result := range results {
-		if _, ok := grades[result.ID]; ok && firstRelevantRank == 0 {
+		if grade, ok := grades[result.ID]; ok && grade > 0 && firstRelevantRank == 0 {
 			firstRelevantRank = i + 1
 		}
 		if _, blocked := forbidden[result.ID]; blocked {
@@ -65,6 +66,7 @@ func ScoreQuery(query Query, results []RetrievedItem, topK []int) QueryMetrics {
 	return metrics
 }
 
+// Aggregate averages query metrics and totals invariant violations.
 func Aggregate(queries []QueryMetrics, topK []int) AggregateMetrics {
 	result := AggregateMetrics{
 		HitAt:  make(map[int]float64, len(topK)),

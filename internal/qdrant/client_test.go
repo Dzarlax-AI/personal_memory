@@ -244,6 +244,9 @@ func TestDeleteCollection(t *testing.T) {
 		if r.Method != http.MethodDelete || r.URL.Path != "/collections/eval_test" {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
+		if r.URL.Query().Get("timeout") != "15" {
+			t.Fatalf("timeout = %q, want 15", r.URL.Query().Get("timeout"))
+		}
 		_, _ = w.Write([]byte(`{"status":"ok","result":true}`))
 	}))
 	defer server.Close()
@@ -288,6 +291,10 @@ func TestUpsertWithPointIDPreservesKind(t *testing.T) {
 	}
 	if _, ok := ids[1].(string); !ok {
 		t.Fatalf("string ID decoded as %T", ids[1])
+	}
+	nonNumeric := Point{ID: "11111111-1111-4111-8111-111111111111", Vector: []float32{1}}
+	if err := client.UpsertWithPointID(context.Background(), nonNumeric, true); err == nil {
+		t.Fatal("UpsertWithPointID() accepted a non-numeric ID as numeric")
 	}
 }
 

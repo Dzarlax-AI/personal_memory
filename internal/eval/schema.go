@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
+// SchemaVersion is the only dataset and report schema accepted by this package.
 const SchemaVersion = 1
 
 // PointID preserves whether a fixture ID was encoded as a JSON number or
@@ -17,7 +21,10 @@ type PointID struct {
 	numeric bool
 }
 
-func (id PointID) String() string  { return id.value }
+// String returns the normalized ID used for result matching.
+func (id PointID) String() string { return id.value }
+
+// IsNumeric reports whether the fixture encoded the ID as a JSON integer.
 func (id PointID) IsNumeric() bool { return id.numeric }
 
 func (id *PointID) UnmarshalJSON(data []byte) error {
@@ -33,6 +40,13 @@ func (id *PointID) UnmarshalJSON(data []byte) error {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("point ID must not be empty")
 		}
+		parsed, err := uuid.Parse(value)
+		if err != nil {
+			return fmt.Errorf("string point ID %q must be a UUID: %w", value, err)
+		}
+		if value != parsed.String() {
+			return fmt.Errorf("string point ID %q must use canonical lowercase UUID format", value)
+		}
 		id.value = value
 		id.numeric = false
 		return nil
@@ -46,6 +60,29 @@ func (id *PointID) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// Vector decodes fixture vector elements without relying on encoding/json
+// error text to identify values outside float32's finite range.
+type Vector []float32
+
+func (vector *Vector) UnmarshalJSON(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var values []json.Number
+	if err := decoder.Decode(&values); err != nil {
+		return fmt.Errorf("decode vector: %w", err)
+	}
+	decoded := make(Vector, len(values))
+	for i, value := range values {
+		parsed, err := strconv.ParseFloat(value.String(), 32)
+		if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+			return fmt.Errorf("vector values must be finite")
+		}
+		decoded[i] = float32(parsed)
+	}
+	*vector = decoded
+	return nil
+}
+
 func (id PointID) MarshalJSON() ([]byte, error) {
 	if id.numeric {
 		return []byte(id.value), nil
@@ -53,6 +90,7 @@ func (id PointID) MarshalJSON() ([]byte, error) {
 	return json.Marshal(id.value)
 }
 
+// EmbeddingIdentity identifies the vector space used by a dataset.
 type EmbeddingIdentity struct {
 	Provider      string `json:"provider"`
 	ModelID       string `json:"model_id"`
@@ -62,6 +100,7 @@ type EmbeddingIdentity struct {
 	VectorSize    int    `json:"vector_size"`
 }
 
+// Configuration captures retrieval settings that participate in report identity.
 type Configuration struct {
 	Name             string  `json:"name"`
 	FactCollection   string  `json:"fact_collection"`
@@ -72,27 +111,31 @@ type Configuration struct {
 	TopK             []int   `json:"top_k"`
 }
 
+// FixturePoint is a synthetic Qdrant point used by fixture mode.
 type FixturePoint struct {
 	ID      PointID        `json:"id"`
-	Vector  []float32      `json:"vector"`
+	Vector  Vector         `json:"vector"`
 	Payload map[string]any `json:"payload"`
 }
 
+// ExpectedItem assigns a graded relevance score to a result ID.
 type ExpectedItem struct {
 	ID    string `json:"id"`
 	Grade int    `json:"grade"`
 }
 
+// Query describes one fact or document retrieval evaluation.
 type Query struct {
 	ID           string         `json:"id"`
 	Target       string         `json:"target"`
 	Mode         string         `json:"mode"`
 	Text         string         `json:"text"`
-	Vector       []float32      `json:"vector,omitempty"`
+	Vector       Vector         `json:"vector,omitempty"`
 	Expected     []ExpectedItem `json:"expected"`
 	ForbiddenIDs []string       `json:"forbidden_ids,omitempty"`
 }
 
+// Gates contains explicit thresholds that may fail an evaluation.
 type Gates struct {
 	ForbidInvariantViolations bool               `json:"forbid_invariant_violations"`
 	MinimumHitAt              map[string]float64 `json:"minimum_hit_at,omitempty"`
@@ -100,6 +143,7 @@ type Gates struct {
 	MinimumNDCGAt             map[string]float64 `json:"minimum_ndcg_at,omitempty"`
 }
 
+// Dataset is the versioned input contract for fixture and live evaluation.
 type Dataset struct {
 	SchemaVersion  int               `json:"schema_version"`
 	DatasetVersion string            `json:"dataset_version"`
@@ -112,12 +156,14 @@ type Dataset struct {
 	Gates          Gates             `json:"gates"`
 }
 
+// RetrievedItem is the non-sensitive result representation stored in reports.
 type RetrievedItem struct {
 	ID          string  `json:"id"`
 	Score       float64 `json:"score"`
 	MissingText bool    `json:"missing_text,omitempty"`
 }
 
+// QueryMetrics contains ranking and invariant metrics for one query.
 type QueryMetrics struct {
 	HitAt                map[int]float64 `json:"hit_at"`
 	MRR                  float64         `json:"mrr"`
@@ -126,6 +172,7 @@ type QueryMetrics struct {
 	MissingTextResultIDs []string        `json:"missing_text_result_ids,omitempty"`
 }
 
+// AggregateMetrics averages ranking metrics and counts invariant violations.
 type AggregateMetrics struct {
 	HitAt               map[int]float64 `json:"hit_at"`
 	MRR                 float64         `json:"mrr"`
@@ -133,6 +180,7 @@ type AggregateMetrics struct {
 	InvariantViolations int             `json:"invariant_violations"`
 }
 
+// QueryReport combines normalized results and metrics for one query.
 type QueryReport struct {
 	ID      string          `json:"id"`
 	Target  string          `json:"target"`
@@ -141,6 +189,7 @@ type QueryReport struct {
 	Metrics QueryMetrics    `json:"metrics"`
 }
 
+// Report is the deterministic canonical evaluation output.
 type Report struct {
 	SchemaVersion  int               `json:"schema_version"`
 	DatasetVersion string            `json:"dataset_version"`

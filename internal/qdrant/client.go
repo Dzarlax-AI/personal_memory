@@ -270,7 +270,14 @@ func (c *Client) DeleteCollection(ctx context.Context, requiredPrefix string) er
 		return fmt.Errorf("collection %q does not have required deletion prefix %q", c.collection, requiredPrefix)
 	}
 	requestURL := fmt.Sprintf("%s/collections/%s", c.url, c.collection)
-	return c.mutate(ctx, http.MethodDelete, requestURL, nil, false)
+	parsed, err := url.Parse(requestURL)
+	if err != nil {
+		return fmt.Errorf("parse collection deletion URL: %w", err)
+	}
+	query := parsed.Query()
+	query.Set("timeout", "15")
+	parsed.RawQuery = query.Encode()
+	return c.mutate(ctx, http.MethodDelete, parsed.String(), nil, false)
 }
 
 // UpdateCollectionMetadata merges collection-level metadata. Qdrant treats an

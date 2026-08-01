@@ -34,6 +34,17 @@ func TestScoreQueryEmptyResults(t *testing.T) {
 	}
 }
 
+func TestScoreQueryDoesNotCreditZeroGradeInMRR(t *testing.T) {
+	got := ScoreQuery(
+		Query{Expected: []ExpectedItem{{ID: "irrelevant", Grade: 0}, {ID: "relevant", Grade: 3}}},
+		[]RetrievedItem{{ID: "irrelevant"}, {ID: "relevant"}},
+		[]int{1, 2},
+	)
+	if got.MRR != 0.5 {
+		t.Fatalf("MRR = %v, want 0.5", got.MRR)
+	}
+}
+
 func TestAggregateMetrics(t *testing.T) {
 	got := Aggregate([]QueryMetrics{
 		{HitAt: map[int]float64{1: 1}, NDCGAt: map[int]float64{1: 0.5}, MRR: 1},

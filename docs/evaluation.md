@@ -49,6 +49,12 @@ Live mode is read-only. It searches the logical collection names declared in
 the dataset and does not create collections, upsert points, delete data, or
 increment recall counters.
 
+Private live datasets may contain only queries and expected or forbidden IDs;
+they do not need to duplicate production facts or chunks in fixture arrays.
+Fixture mode remains stricter and requires every referenced ID to exist in the
+corresponding synthetic point array. All string point IDs use Qdrant-compatible
+UUIDs; numeric IDs are encoded as JSON unsigned integers.
+
 Queries may contain precomputed vectors:
 
 ```bash
