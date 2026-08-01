@@ -48,7 +48,7 @@ func TestPublicV2FixtureRunnerIntegration(t *testing.T) {
 		report.Lifecycle.Aggregate.Violations != 0 ||
 		report.Lifecycle.Aggregate.CanonicalPreferenceChecks == 0 ||
 		report.Lifecycle.Aggregate.CanonicalPreferenceViolations != 0 ||
-		len(report.Lifecycle.Transitions) != 12 {
+		len(report.Lifecycle.Transitions) != 20 {
 		t.Fatalf("lifecycle coverage = %#v", report.Lifecycle)
 	}
 	first, err := RenderJSON(report)
@@ -102,7 +102,7 @@ func TestPublicV2DatasetLoads(t *testing.T) {
 		dataset.Embedding.Pooling != "mean" ||
 		dataset.Embedding.VectorSize != 16 ||
 		len(dataset.Queries) != 16 ||
-		len(dataset.TransitionScenarios) != 12 ||
+		len(dataset.TransitionScenarios) != 20 ||
 		!dataset.Gates.ForbidInvariantViolations ||
 		!dataset.Gates.ForbidLifecycleViolations {
 		t.Fatalf("dataset identity/coverage = %#v", dataset)
@@ -149,17 +149,16 @@ func TestPublicV2DatasetLoads(t *testing.T) {
 		t.Errorf("public as_of date = %q", queryByID["lifecycle-as-of-expiry"].AsOf)
 	}
 
-	targetStates := make(map[lifecycle.State]bool)
-	idempotentStates := make(map[lifecycle.State]bool)
+	validPairs := make(map[string]int)
 	invalidScenarios := make(map[string]bool)
 	for _, scenario := range dataset.TransitionScenarios {
-		if strings.HasPrefix(scenario.ID, "target-") && scenario.ExpectedValid {
-			targetStates[scenario.TargetLifecycle.State] = true
-		}
-		if strings.HasPrefix(scenario.ID, "idempotent-") &&
-			scenario.ExpectedValid &&
-			scenario.SourceLifecycle.State == scenario.TargetLifecycle.State {
-			idempotentStates[scenario.TargetLifecycle.State] = true
+		if scenario.ExpectedValid {
+			key := string(scenario.SourceLifecycle.State) + "->" + string(scenario.TargetLifecycle.State)
+			validPairs[key]++
+			wantID := "transition-" + string(scenario.SourceLifecycle.State) + "-to-" + string(scenario.TargetLifecycle.State)
+			if scenario.ID != wantID {
+				t.Errorf("transition pair %q ID = %q, want %q", key, scenario.ID, wantID)
+			}
 		}
 		if strings.HasPrefix(scenario.ID, "invalid-") &&
 			!scenario.ExpectedValid &&
@@ -167,14 +166,18 @@ func TestPublicV2DatasetLoads(t *testing.T) {
 			invalidScenarios[scenario.ID] = true
 		}
 	}
-	for _, state := range []lifecycle.State{
+	states := []lifecycle.State{
 		lifecycle.Current,
 		lifecycle.Historical,
 		lifecycle.Superseded,
 		lifecycle.Disputed,
-	} {
-		if !targetStates[state] || !idempotentStates[state] {
-			t.Errorf("transition coverage for %q: target=%t idempotent=%t", state, targetStates[state], idempotentStates[state])
+	}
+	for _, source := range states {
+		for _, target := range states {
+			key := string(source) + "->" + string(target)
+			if validPairs[key] != 1 {
+				t.Errorf("valid transition pair %q count = %d, want exactly 1", key, validPairs[key])
+			}
 		}
 	}
 	for _, id := range []string{
@@ -206,7 +209,7 @@ func TestPublicV2BaselineLoads(t *testing.T) {
 		report.Lifecycle.Aggregate.Violations != 0 ||
 		report.Lifecycle.Aggregate.CanonicalPreferenceChecks == 0 ||
 		report.Lifecycle.Aggregate.CanonicalPreferenceViolations != 0 ||
-		len(report.Lifecycle.Transitions) != 12 {
+		len(report.Lifecycle.Transitions) != 20 {
 		t.Fatalf("v2 baseline coverage = %#v", report)
 	}
 }

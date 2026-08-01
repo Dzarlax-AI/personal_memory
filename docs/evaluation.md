@@ -48,8 +48,11 @@ Presentation reason codes are deliberately closed and non-sensitive:
 `invalid_lifecycle`, and `expired`.
 
 Transition scenarios report `transition_valid`, `source_invalid`,
-`target_invalid`, or `transition_invalid`. Public v2 cases cover every valid
-target state, idempotent transitions, and invalid lifecycle invariants.
+`target_invalid`, or `transition_invalid`. Public v2 covers the complete
+16-case source→target matrix across `current`, `historical`, `superseded`, and
+`disputed`, including all four idempotent cases. Four additional cases reject
+canonical historical metadata, superseded metadata without `superseded_by`,
+current metadata with `superseded_by`, and self-references.
 
 ## Metrics and the blocking gate
 

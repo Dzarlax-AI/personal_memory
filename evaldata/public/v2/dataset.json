@@ -593,15 +593,15 @@
   },
   "transition_scenarios": [
     {
-      "id": "target-current",
+      "id": "transition-current-to-current",
       "point_id": 42,
-      "source_lifecycle": {"state": "historical", "canonical": false, "supersedes": [], "superseded_by": []},
+      "source_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
       "target_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
       "expected_valid": true,
       "expected_reason_code": "transition_valid"
     },
     {
-      "id": "target-historical",
+      "id": "transition-current-to-historical",
       "point_id": 42,
       "source_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
       "target_lifecycle": {"state": "historical", "canonical": false, "supersedes": [], "superseded_by": []},
@@ -609,7 +609,7 @@
       "expected_reason_code": "transition_valid"
     },
     {
-      "id": "target-superseded",
+      "id": "transition-current-to-superseded",
       "point_id": 42,
       "source_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
       "target_lifecycle": {"state": "superseded", "canonical": false, "supersedes": [], "superseded_by": ["51000000-0000-4000-8000-000000000001"]},
@@ -617,7 +617,7 @@
       "expected_reason_code": "transition_valid"
     },
     {
-      "id": "target-disputed",
+      "id": "transition-current-to-disputed",
       "point_id": 42,
       "source_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
       "target_lifecycle": {"state": "disputed", "canonical": false, "supersedes": [], "superseded_by": []},
@@ -625,15 +625,15 @@
       "expected_reason_code": "transition_valid"
     },
     {
-      "id": "idempotent-current",
+      "id": "transition-historical-to-current",
       "point_id": 42,
-      "source_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
+      "source_lifecycle": {"state": "historical", "canonical": false, "supersedes": [], "superseded_by": []},
       "target_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
       "expected_valid": true,
       "expected_reason_code": "transition_valid"
     },
     {
-      "id": "idempotent-historical",
+      "id": "transition-historical-to-historical",
       "point_id": 42,
       "source_lifecycle": {"state": "historical", "canonical": false, "supersedes": [], "superseded_by": []},
       "target_lifecycle": {"state": "historical", "canonical": false, "supersedes": [], "superseded_by": []},
@@ -641,7 +641,39 @@
       "expected_reason_code": "transition_valid"
     },
     {
-      "id": "idempotent-superseded",
+      "id": "transition-historical-to-superseded",
+      "point_id": 42,
+      "source_lifecycle": {"state": "historical", "canonical": false, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "superseded", "canonical": false, "supersedes": [], "superseded_by": ["51000000-0000-4000-8000-000000000001"]},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-historical-to-disputed",
+      "point_id": 42,
+      "source_lifecycle": {"state": "historical", "canonical": false, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "disputed", "canonical": false, "supersedes": [], "superseded_by": []},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-superseded-to-current",
+      "point_id": 42,
+      "source_lifecycle": {"state": "superseded", "canonical": false, "supersedes": [], "superseded_by": ["51000000-0000-4000-8000-000000000001"]},
+      "target_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-superseded-to-historical",
+      "point_id": 42,
+      "source_lifecycle": {"state": "superseded", "canonical": false, "supersedes": [], "superseded_by": ["51000000-0000-4000-8000-000000000001"]},
+      "target_lifecycle": {"state": "historical", "canonical": false, "supersedes": [], "superseded_by": []},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-superseded-to-superseded",
       "point_id": 42,
       "source_lifecycle": {"state": "superseded", "canonical": false, "supersedes": [], "superseded_by": ["51000000-0000-4000-8000-000000000001"]},
       "target_lifecycle": {"state": "superseded", "canonical": false, "supersedes": [], "superseded_by": ["51000000-0000-4000-8000-000000000001"]},
@@ -649,7 +681,39 @@
       "expected_reason_code": "transition_valid"
     },
     {
-      "id": "idempotent-disputed",
+      "id": "transition-superseded-to-disputed",
+      "point_id": 42,
+      "source_lifecycle": {"state": "superseded", "canonical": false, "supersedes": [], "superseded_by": ["51000000-0000-4000-8000-000000000001"]},
+      "target_lifecycle": {"state": "disputed", "canonical": false, "supersedes": [], "superseded_by": []},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-disputed-to-current",
+      "point_id": 42,
+      "source_lifecycle": {"state": "disputed", "canonical": false, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-disputed-to-historical",
+      "point_id": 42,
+      "source_lifecycle": {"state": "disputed", "canonical": false, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "historical", "canonical": false, "supersedes": [], "superseded_by": []},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-disputed-to-superseded",
+      "point_id": 42,
+      "source_lifecycle": {"state": "disputed", "canonical": false, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "superseded", "canonical": false, "supersedes": [], "superseded_by": ["51000000-0000-4000-8000-000000000001"]},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-disputed-to-disputed",
       "point_id": 42,
       "source_lifecycle": {"state": "disputed", "canonical": false, "supersedes": [], "superseded_by": []},
       "target_lifecycle": {"state": "disputed", "canonical": false, "supersedes": [], "superseded_by": []},

@@ -3467,40 +3467,12 @@
   ],
   "lifecycle": {
     "aggregate": {
-      "checks": 27,
+      "checks": 35,
       "violations": 0,
       "canonical_preference_checks": 18,
       "canonical_preference_violations": 0
     },
     "transitions": [
-      {
-        "id": "idempotent-current",
-        "valid": true,
-        "reason_code": "transition_valid",
-        "passed": true,
-        "violations": []
-      },
-      {
-        "id": "idempotent-disputed",
-        "valid": true,
-        "reason_code": "transition_valid",
-        "passed": true,
-        "violations": []
-      },
-      {
-        "id": "idempotent-historical",
-        "valid": true,
-        "reason_code": "transition_valid",
-        "passed": true,
-        "violations": []
-      },
-      {
-        "id": "idempotent-superseded",
-        "valid": true,
-        "reason_code": "transition_valid",
-        "passed": true,
-        "violations": []
-      },
       {
         "id": "invalid-canonical-historical",
         "valid": false,
@@ -3530,28 +3502,112 @@
         "violations": []
       },
       {
-        "id": "target-current",
+        "id": "transition-current-to-current",
         "valid": true,
         "reason_code": "transition_valid",
         "passed": true,
         "violations": []
       },
       {
-        "id": "target-disputed",
+        "id": "transition-current-to-disputed",
         "valid": true,
         "reason_code": "transition_valid",
         "passed": true,
         "violations": []
       },
       {
-        "id": "target-historical",
+        "id": "transition-current-to-historical",
         "valid": true,
         "reason_code": "transition_valid",
         "passed": true,
         "violations": []
       },
       {
-        "id": "target-superseded",
+        "id": "transition-current-to-superseded",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-disputed-to-current",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-disputed-to-disputed",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-disputed-to-historical",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-disputed-to-superseded",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-historical-to-current",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-historical-to-disputed",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-historical-to-historical",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-historical-to-superseded",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-superseded-to-current",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-superseded-to-disputed",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-superseded-to-historical",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-superseded-to-superseded",
         "valid": true,
         "reason_code": "transition_valid",
         "passed": true,
