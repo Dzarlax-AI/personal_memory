@@ -15,6 +15,10 @@ func normalizeReport(report Report) Report {
 	report.TopK = append([]int(nil), report.TopK...)
 	sort.Ints(report.TopK)
 	report.Queries = append([]QueryReport(nil), report.Queries...)
+	for i := range report.Queries {
+		report.Queries[i].Lifecycle = cloneQueryLifecycleReport(report.Queries[i].Lifecycle)
+	}
+	report.Lifecycle = cloneLifecycleReport(report.Lifecycle)
 	sort.Slice(report.Queries, func(i, j int) bool { return report.Queries[i].ID < report.Queries[j].ID })
 	report.GateFailures = append([]string(nil), report.GateFailures...)
 	sort.Strings(report.GateFailures)
@@ -50,6 +54,56 @@ func normalizeReport(report Report) Report {
 		}
 	}
 	return report
+}
+
+func cloneQueryLifecycleReport(source *QueryLifecycleReport) *QueryLifecycleReport {
+	if source == nil {
+		return nil
+	}
+	cloned := *source
+	cloned.present = clonePresence(source.present)
+	cloned.Candidates = append([]LifecycleCandidateReport{}, source.Candidates...)
+	for i := range cloned.Candidates {
+		cloned.Candidates[i].ReasonCodes =
+			append([]LifecycleReasonCode{}, source.Candidates[i].ReasonCodes...)
+		cloned.Candidates[i].present = clonePresence(source.Candidates[i].present)
+	}
+	cloned.Violations = append([]LifecycleViolation{}, source.Violations...)
+	for i := range cloned.Violations {
+		cloned.Violations[i].present = clonePresence(source.Violations[i].present)
+	}
+	return &cloned
+}
+
+func cloneLifecycleReport(source *LifecycleReport) *LifecycleReport {
+	if source == nil {
+		return nil
+	}
+	cloned := *source
+	cloned.present = clonePresence(source.present)
+	cloned.Aggregate.present = clonePresence(source.Aggregate.present)
+	cloned.Transitions = append([]TransitionReport{}, source.Transitions...)
+	for i := range cloned.Transitions {
+		cloned.Transitions[i].present = clonePresence(source.Transitions[i].present)
+		cloned.Transitions[i].Violations =
+			append([]LifecycleViolation{}, source.Transitions[i].Violations...)
+		for j := range cloned.Transitions[i].Violations {
+			cloned.Transitions[i].Violations[j].present =
+				clonePresence(source.Transitions[i].Violations[j].present)
+		}
+	}
+	return &cloned
+}
+
+func clonePresence(source map[string]bool) map[string]bool {
+	if source == nil {
+		return nil
+	}
+	cloned := make(map[string]bool, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 // RenderJSON encodes a normalized report with deterministic ordering.

@@ -202,7 +202,8 @@ type LifecycleExpectation struct {
 	Decision    PresentationDecision `json:"decision"`
 	ReasonCodes []string             `json:"reason_codes,omitempty"`
 
-	statePresent bool
+	statePresent       bool
+	reasonCodesPresent bool
 }
 
 func (expectation *LifecycleExpectation) UnmarshalJSON(data []byte) error {
@@ -227,9 +228,31 @@ func (expectation *LifecycleExpectation) UnmarshalJSON(data []byte) error {
 	if raw, exists := fields["state"]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return fmt.Errorf("lifecycle expectation state must be a string")
 	}
+	if raw, exists := fields["reason_codes"]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("lifecycle expectation reason_codes must be an array")
+	}
 	*expectation = LifecycleExpectation(decoded)
 	_, expectation.statePresent = fields["state"]
+	_, expectation.reasonCodesPresent = fields["reason_codes"]
 	return nil
+}
+
+func (expectation LifecycleExpectation) assertsReasonCodes() bool {
+	return expectation.reasonCodesPresent || expectation.ReasonCodes != nil
+}
+
+func (expectation LifecycleExpectation) MarshalJSON() ([]byte, error) {
+	fields := map[string]any{
+		"id":       expectation.ID,
+		"decision": expectation.Decision,
+	}
+	if expectation.statePresent || expectation.State != "" {
+		fields["state"] = expectation.State
+	}
+	if expectation.assertsReasonCodes() {
+		fields["reason_codes"] = append([]string{}, expectation.ReasonCodes...)
+	}
+	return json.Marshal(fields)
 }
 
 // Query describes one fact or document retrieval evaluation.

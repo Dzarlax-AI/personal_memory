@@ -176,6 +176,66 @@ func TestLifecycleExpectationScoringUsesExactReasonCodesAndSafeIDs(t *testing.T)
 	}
 }
 
+func TestLifecycleExpectationReasonCodesArePresenceSensitive(t *testing.T) {
+	candidate := LifecycleCandidateReport{
+		ID: "42", State: lifecycle.Current, Decision: PresentationInclude,
+		ReasonCodes: []LifecycleReasonCode{ReasonCurrentTruth}, Valid: true,
+	}
+	for _, tt := range []struct {
+		name        string
+		expectation LifecycleExpectation
+		want        int
+	}{
+		{
+			name: "omitted reasons do not assert",
+			expectation: LifecycleExpectation{
+				ID: "42", State: lifecycle.Current, Decision: PresentationInclude,
+			},
+			want: 0,
+		},
+		{
+			name: "explicit empty reasons assert exact empty",
+			expectation: LifecycleExpectation{
+				ID: "42", State: lifecycle.Current, Decision: PresentationInclude,
+				ReasonCodes: []string{}, reasonCodesPresent: true,
+			},
+			want: 1,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			query := Query{
+				ID: "q", LifecycleExpectations: []LifecycleExpectation{tt.expectation},
+			}
+			report := QueryLifecycleReport{Candidates: []LifecycleCandidateReport{candidate}}
+			scoreLifecycleExpectations(query, &report)
+			if len(report.Violations) != tt.want {
+				t.Fatalf("violations = %#v, want %d", report.Violations, tt.want)
+			}
+		})
+	}
+}
+
+func TestMissingExactLifecycleEvidenceProducesCandidatePresentViolation(t *testing.T) {
+	query := Query{
+		ID: "q-missing",
+		LifecycleExpectations: []LifecycleExpectation{{
+			ID: "99", Decision: PresentationSuppress,
+		}},
+	}
+	report := QueryLifecycleReport{}
+	scoreLifecycleExpectations(query, &report)
+	if len(report.Violations) != 1 {
+		t.Fatalf("violations = %#v, want one", report.Violations)
+	}
+	violation := report.Violations[0]
+	if violation.Scope != ViolationScopeQuery ||
+		violation.QueryID != query.ID ||
+		violation.CandidateID != "99" ||
+		violation.Invariant != InvariantCandidatePresent {
+		t.Fatalf("violation = %#v", violation)
+	}
+}
+
 func TestExecuteTransitionScenariosCoversEveryTargetAndIdempotence(t *testing.T) {
 	states := []lifecycle.State{lifecycle.Current, lifecycle.Historical, lifecycle.Superseded, lifecycle.Disputed}
 	var scenarios []TransitionScenario

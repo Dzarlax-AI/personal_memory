@@ -114,16 +114,40 @@ func TestLiveRunnerUsesOnlySearchRequests(t *testing.T) {
 	}
 }
 
-func TestLiveV2LifecycleQuerySearchesBroadCandidatesAndGatesViolations(t *testing.T) {
+func TestLiveV2LifecycleEvidenceUsesExactReadWithoutChangingRanking(t *testing.T) {
 	var requestBody map[string]any
+	var requests []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
-			t.Fatal(err)
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/search":
+			if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+				t.Fatal(err)
+			}
+			if _, filtered := requestBody["filter"]; !filtered {
+				results := make([]map[string]any, 101)
+				for i := range results {
+					results[i] = map[string]any{
+						"id": 1000 + i, "score": 1 - float64(i)/1000,
+						"payload": map[string]any{
+							"text": "obsolete", "lifecycle_state": "historical",
+						},
+					}
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"result": results})
+				return
+			}
+			_, _ = w.Write([]byte(`{"result":[
+				{"id":42,"score":0.7,"payload":{"text":"current","lifecycle_state":"current","canonical":true}}
+			]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/collections/memory/points/999":
+			_, _ = w.Write([]byte(`{"result":{
+				"id":999,"vector":[1,0],
+				"payload":{"text":"expected obsolete","lifecycle_state":"historical"}
+			}}`))
+		default:
+			t.Fatalf("unexpected lifecycle request: %s %s", r.Method, r.URL.Path)
 		}
-		_, _ = w.Write([]byte(`{"result":[
-			{"id":99,"score":1,"payload":{"text":"obsolete","lifecycle_state":"historical"}},
-			{"id":42,"score":0.7,"payload":{"text":"current","lifecycle_state":"current","canonical":true}}
-		]}`))
 	}))
 	defer server.Close()
 
@@ -132,26 +156,36 @@ func TestLiveV2LifecycleQuerySearchesBroadCandidatesAndGatesViolations(t *testin
 		t.Fatal(err)
 	}
 	dataset.Facts = nil
-	dataset.Queries[0].LifecycleExpectations[0].Decision = PresentationSuppress
+	expectation := &dataset.Queries[0].LifecycleExpectations[0]
+	expectation.ID = "999"
+	expectation.State = lifecycle.Historical
+	expectation.Decision = PresentationSuppress
+	expectation.ReasonCodes = []string{string(ReasonHistorical)}
 	dataset.Gates.ForbidLifecycleViolations = true
 	report, err := Run(context.Background(), dataset, RunOptions{Source: "live", QdrantURL: server.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, filtered := requestBody["filter"]; filtered {
-		t.Fatalf("lifecycle query unexpectedly used current-only filter: %#v", requestBody["filter"])
+	if _, filtered := requestBody["filter"]; !filtered {
+		t.Fatalf("ranking search omitted current-only filter: %#v", requestBody)
 	}
 	if report.SchemaVersion != CurrentReportSchemaVersion || report.Lifecycle == nil {
 		t.Fatalf("v2 lifecycle report missing: %#v", report)
 	}
-	if got := resultIDs(report.Queries[0].Results); len(got) != 1 || got[0] != "42" {
+	if got := resultIDs(report.Queries[0].Results); len(got) != 1 || got[0] != "42" ||
+		report.Aggregate.MRR != 1 {
 		t.Fatalf("relevance result IDs = %v, want only current candidate 42", got)
 	}
-	assertCandidate(t, *report.Queries[0].Lifecycle, "99", lifecycle.Historical, PresentationSuppress, ReasonHistorical)
-	if report.GatesPassed ||
-		len(report.GateFailures) != 1 ||
-		report.GateFailures[0] != "query q1 candidate 42 invariant decision" {
+	assertCandidate(t, *report.Queries[0].Lifecycle, "999", lifecycle.Historical, PresentationSuppress, ReasonHistorical)
+	if !report.GatesPassed || len(report.GateFailures) != 0 {
 		t.Fatalf("gate result = passed %t failures %#v", report.GatesPassed, report.GateFailures)
+	}
+	wantRequests := []string{
+		"POST /collections/memory/points/search",
+		"GET /collections/memory/points/999",
+	}
+	if fmt.Sprint(requests) != fmt.Sprint(wantRequests) {
+		t.Fatalf("requests = %v, want read-only requests %v", requests, wantRequests)
 	}
 	encoded, err := RenderJSON(report)
 	if err != nil {

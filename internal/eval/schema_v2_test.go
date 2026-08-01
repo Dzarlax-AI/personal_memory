@@ -210,6 +210,55 @@ func TestLoadV2RejectsInvalidLifecycleExpectations(t *testing.T) {
 	}
 }
 
+func TestLoadV2LifecycleReasonCodesPresence(t *testing.T) {
+	t.Run("omitted does not assert", func(t *testing.T) {
+		value := strings.Replace(
+			validV2Dataset(),
+			","+"\n      "+`"reason_codes": ["current_truth"]`,
+			"",
+			1,
+		)
+		dataset, err := Load(strings.NewReader(value))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dataset.Queries[0].LifecycleExpectations[0].assertsReasonCodes() {
+			t.Fatal("omitted reason_codes unexpectedly asserts reasons")
+		}
+	})
+
+	t.Run("explicit empty asserts exact empty", func(t *testing.T) {
+		value := strings.Replace(validV2Dataset(), `["current_truth"]`, `[]`, 1)
+		dataset, err := Load(strings.NewReader(value))
+		if err != nil {
+			t.Fatal(err)
+		}
+		expectation := dataset.Queries[0].LifecycleExpectations[0]
+		if !expectation.assertsReasonCodes() || expectation.ReasonCodes == nil {
+			t.Fatalf("explicit empty reason_codes presence was lost: %#v", expectation)
+		}
+		encoded, err := json.Marshal(dataset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reloaded, err := Load(strings.NewReader(string(encoded)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reloaded.Queries[0].LifecycleExpectations[0].assertsReasonCodes() {
+			t.Fatal("explicit empty reason_codes presence was lost across JSON round trip")
+		}
+	})
+
+	t.Run("explicit null rejects", func(t *testing.T) {
+		value := strings.Replace(validV2Dataset(), `["current_truth"]`, `null`, 1)
+		if _, err := Load(strings.NewReader(value)); err == nil ||
+			!strings.Contains(err.Error(), "reason_codes must be an array") {
+			t.Fatalf("Load() error = %v, want null reason_codes rejection", err)
+		}
+	})
+}
+
 func TestValidateForFixtureChecksLifecycleExpectationReferences(t *testing.T) {
 	dataset, err := Load(strings.NewReader(validV2Dataset()))
 	if err != nil {

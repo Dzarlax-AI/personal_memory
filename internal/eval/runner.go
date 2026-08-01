@@ -190,16 +190,10 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 		switch {
 		case query.Target == "facts":
 			candidateLimit := max(20, maxK*4)
-			var filter map[string]any
-			if !requiresBroadLifecycleSearch(query) {
-				filter = currentLifecycleFilter()
-			} else {
-				candidateLimit = max(100, maxK*10)
-			}
 			if mode == "fixture" {
 				candidateLimit = max(candidateLimit, len(dataset.Facts))
 			}
-			points, err = clients.facts.Search(ctx, query.Vector, candidateLimit, filter, nil)
+			points, err = clients.facts.Search(ctx, query.Vector, candidateLimit, currentLifecycleFilter(), nil)
 		case query.Mode == "flat":
 			points, err = clients.chunks.Search(ctx, query.Vector, searchLimit, nil, nil)
 		default:
@@ -211,8 +205,15 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 		var items []RetrievedItem
 		var queryLifecycle *QueryLifecycleReport
 		if query.Target == "facts" && dataset.SchemaVersion == CurrentDatasetSchemaVersion {
-			presentation := presentFactCandidates(query, points, now)
-			items = presentation.results
+			evidencePoints := points
+			if requiresBroadLifecycleSearch(query) {
+				evidencePoints, err = fetchLifecycleEvidence(ctx, clients.facts, query, points)
+				if err != nil {
+					return Report{}, fmt.Errorf("fetch lifecycle evidence for query %q: %w", query.ID, err)
+				}
+			}
+			presentation := presentFactCandidates(query, evidencePoints, now)
+			items = normalizeFactResults(points, now)
 			queryLifecycle = &presentation.report
 			lifecycleReport.Aggregate.Checks += presentation.canonical.Checks
 			lifecycleReport.Aggregate.Violations += presentation.canonical.Violations
@@ -257,6 +258,38 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 		GatesPassed:    len(failures) == 0,
 		GateFailures:   failures,
 	}), nil
+}
+
+func fetchLifecycleEvidence(
+	ctx context.Context,
+	client *qdrant.Client,
+	query Query,
+	rankingPoints []qdrant.Point,
+) ([]qdrant.Point, error) {
+	evidence := append([]qdrant.Point(nil), rankingPoints...)
+	seen := make(map[string]struct{}, len(rankingPoints)+len(query.LifecycleExpectations))
+	for _, point := range rankingPoints {
+		seen[point.ID] = struct{}{}
+	}
+	ids := make([]string, 0, len(query.LifecycleExpectations))
+	for _, expectation := range query.LifecycleExpectations {
+		if _, exists := seen[expectation.ID]; exists {
+			continue
+		}
+		seen[expectation.ID] = struct{}{}
+		ids = append(ids, expectation.ID)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		point, exists, err := client.Get(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("get candidate %s: %w", id, err)
+		}
+		if exists {
+			evidence = append(evidence, point)
+		}
+	}
+	return evidence, nil
 }
 
 func requiresBroadLifecycleSearch(query Query) bool {

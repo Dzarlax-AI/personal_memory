@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -93,6 +94,70 @@ func TestRenderAndDecodeV2ReportAreDeterministic(t *testing.T) {
 	}
 	if bytes.Index(first, []byte(`"id": "1"`)) > bytes.Index(first, []byte(`"id": "99"`)) {
 		t.Fatal("v2 lifecycle entries are not sorted")
+	}
+}
+
+func TestLifecycleRenderingDoesNotMutateCallerAndIsConcurrentSafe(t *testing.T) {
+	report := validV2LifecycleReport()
+	report.Queries[0].Lifecycle.Candidates = []LifecycleCandidateReport{
+		{
+			ID: "2", State: "current", Valid: true,
+			Decision:    PresentationInclude,
+			ReasonCodes: []LifecycleReasonCode{ReasonCurrentTruth},
+		},
+		{
+			ID: "1", State: "historical", Valid: true,
+			Decision:    PresentationSuppress,
+			ReasonCodes: []LifecycleReasonCode{ReasonHistorical},
+		},
+	}
+	report.Lifecycle.Transitions = []TransitionReport{
+		{ID: "z", Valid: true, ReasonCode: ReasonTransitionValid, Passed: true},
+		{ID: "a", Valid: false, ReasonCode: ReasonTargetInvalid, Passed: true},
+	}
+	report.Lifecycle.Aggregate.Checks = 2
+	before, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedJSON, err := RenderJSON(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedMarkdown := RenderMarkdown(report)
+	after, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("render mutated caller report\nbefore: %s\nafter: %s", before, after)
+	}
+
+	const workers = 24
+	var wait sync.WaitGroup
+	errors := make(chan string, workers)
+	for i := 0; i < workers; i++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			gotJSON, renderErr := RenderJSON(report)
+			if renderErr != nil {
+				errors <- renderErr.Error()
+				return
+			}
+			if !bytes.Equal(gotJSON, expectedJSON) {
+				errors <- "concurrent JSON render differed"
+				return
+			}
+			if gotMarkdown := RenderMarkdown(report); gotMarkdown != expectedMarkdown {
+				errors <- "concurrent Markdown render differed"
+			}
+		}()
+	}
+	wait.Wait()
+	close(errors)
+	for renderError := range errors {
+		t.Error(renderError)
 	}
 }
 

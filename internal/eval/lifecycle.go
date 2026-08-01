@@ -386,13 +386,15 @@ func scoreLifecycleExpectations(query Query, report *QueryLifecycleReport) {
 			report.Violations = append(report.Violations,
 				queryLifecycleViolation(query.ID, expectation.ID, InvariantDecision))
 		}
-		expectedReasons := make([]LifecycleReasonCode, len(expectation.ReasonCodes))
-		for i, reason := range expectation.ReasonCodes {
-			expectedReasons[i] = LifecycleReasonCode(reason)
-		}
-		if !equalReasonCodes(candidate.ReasonCodes, expectedReasons) {
-			report.Violations = append(report.Violations,
-				queryLifecycleViolation(query.ID, expectation.ID, InvariantReasonCodes))
+		if expectation.assertsReasonCodes() {
+			expectedReasons := make([]LifecycleReasonCode, len(expectation.ReasonCodes))
+			for i, reason := range expectation.ReasonCodes {
+				expectedReasons[i] = LifecycleReasonCode(reason)
+			}
+			if !equalReasonCodes(candidate.ReasonCodes, expectedReasons) {
+				report.Violations = append(report.Violations,
+					queryLifecycleViolation(query.ID, expectation.ID, InvariantReasonCodes))
+			}
 		}
 	}
 	sortLifecycleViolations(report.Violations)
