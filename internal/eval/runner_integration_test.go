@@ -17,13 +17,13 @@ import (
 	"github.com/Dzarlax-AI/personal-memory/internal/memory/lifecycle"
 )
 
-func TestFixtureRunnerIntegration(t *testing.T) {
+func TestPublicV2FixtureRunnerIntegration(t *testing.T) {
 	qdrantURL := os.Getenv("QDRANT_TEST_URL")
 	if qdrantURL == "" {
 		t.Skip("QDRANT_TEST_URL is not set")
 	}
 	before := listEvaluationCollections(t, qdrantURL)
-	file, err := os.Open(filepath.Join("..", "..", "evaldata", "public", "v1", "dataset.json"))
+	file, err := os.Open(filepath.Join("..", "..", "evaldata", "public", "v2", "dataset.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,8 +40,16 @@ func TestFixtureRunnerIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(report.Queries) != 8 || report.Aggregate.HitAt[1] != 1 || !report.GatesPassed {
+	if report.SchemaVersion != CurrentReportSchemaVersion || len(report.Queries) != 16 ||
+		report.Aggregate.HitAt[1] != 1 || !report.GatesPassed || report.Lifecycle == nil {
 		t.Fatalf("report = %#v", report)
+	}
+	if report.Lifecycle.Aggregate.Checks == 0 ||
+		report.Lifecycle.Aggregate.Violations != 0 ||
+		report.Lifecycle.Aggregate.CanonicalPreferenceChecks == 0 ||
+		report.Lifecycle.Aggregate.CanonicalPreferenceViolations != 0 ||
+		len(report.Lifecycle.Transitions) != 12 {
+		t.Fatalf("lifecycle coverage = %#v", report.Lifecycle)
 	}
 	first, err := RenderJSON(report)
 	if err != nil {
@@ -58,7 +66,7 @@ func TestFixtureRunnerIntegration(t *testing.T) {
 	if !bytes.Equal(first, second) {
 		t.Fatal("independent Qdrant runs produced different reports")
 	}
-	baseline, err := os.ReadFile(filepath.Join("..", "..", "evaldata", "public", "v1", "baseline.json"))
+	baseline, err := os.ReadFile(filepath.Join("..", "..", "evaldata", "public", "v2", "baseline.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,8 +79,8 @@ func TestFixtureRunnerIntegration(t *testing.T) {
 	}
 }
 
-func TestPublicDatasetLoads(t *testing.T) {
-	file, err := os.Open(filepath.Join("..", "..", "evaldata", "public", "v1", "dataset.json"))
+func TestPublicV2DatasetLoads(t *testing.T) {
+	file, err := os.Open(filepath.Join("..", "..", "evaldata", "public", "v2", "dataset.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,8 +93,161 @@ func TestPublicDatasetLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dataset.DatasetVersion != "1.0.0" || len(dataset.Queries) != 8 {
-		t.Fatalf("dataset identity/coverage = %q/%d", dataset.DatasetVersion, len(dataset.Queries))
+	if dataset.SchemaVersion != CurrentDatasetSchemaVersion ||
+		dataset.DatasetVersion != "2.0.0" ||
+		dataset.Embedding.Provider != "synthetic" ||
+		dataset.Embedding.ModelID != "personal-memory-golden-v2" ||
+		dataset.Embedding.ModelRevision != "2" ||
+		dataset.Embedding.DType != "float32" ||
+		dataset.Embedding.Pooling != "mean" ||
+		dataset.Embedding.VectorSize != 16 ||
+		len(dataset.Queries) != 16 ||
+		len(dataset.TransitionScenarios) != 12 ||
+		!dataset.Gates.ForbidInvariantViolations ||
+		!dataset.Gates.ForbidLifecycleViolations {
+		t.Fatalf("dataset identity/coverage = %#v", dataset)
+	}
+
+	queryByID := make(map[string]Query, len(dataset.Queries))
+	for _, query := range dataset.Queries {
+		queryByID[query.ID] = query
+	}
+	for _, id := range []string{
+		"fact-ambiguous-en",
+		"fact-legacy-numeric-en",
+		"fact-multilingual",
+		"fact-russian",
+		"document-flat",
+		"document-hierarchical",
+		"document-hierarchical-fallback",
+		"document-missing-text",
+	} {
+		if _, exists := queryByID[id]; !exists {
+			t.Errorf("v2 dataset does not preserve v1 query %q", id)
+		}
+	}
+	for id, intent := range map[string]QueryIntent{
+		"lifecycle-current-superseded":   QueryIntentCurrent,
+		"lifecycle-history":              QueryIntentHistory,
+		"lifecycle-as-of-expiry":         QueryIntentAsOf,
+		"lifecycle-uncertainty":          QueryIntentUncertainty,
+		"lifecycle-expired-canonical":    QueryIntentCurrent,
+		"lifecycle-permanent-historical": QueryIntentCurrent,
+		"lifecycle-canonical-preference": QueryIntentCurrent,
+		"lifecycle-legacy-invalid":       QueryIntentCurrent,
+	} {
+		query, exists := queryByID[id]
+		if !exists {
+			t.Errorf("missing lifecycle query %q", id)
+			continue
+		}
+		if query.EffectiveIntent() != intent || len(query.LifecycleExpectations) == 0 {
+			t.Errorf("lifecycle query %q intent/expectations = %q/%d", id, query.EffectiveIntent(), len(query.LifecycleExpectations))
+		}
+	}
+	if queryByID["lifecycle-as-of-expiry"].AsOf != "2025-03-14" {
+		t.Errorf("public as_of date = %q", queryByID["lifecycle-as-of-expiry"].AsOf)
+	}
+
+	targetStates := make(map[lifecycle.State]bool)
+	idempotentStates := make(map[lifecycle.State]bool)
+	invalidScenarios := make(map[string]bool)
+	for _, scenario := range dataset.TransitionScenarios {
+		if strings.HasPrefix(scenario.ID, "target-") && scenario.ExpectedValid {
+			targetStates[scenario.TargetLifecycle.State] = true
+		}
+		if strings.HasPrefix(scenario.ID, "idempotent-") &&
+			scenario.ExpectedValid &&
+			scenario.SourceLifecycle.State == scenario.TargetLifecycle.State {
+			idempotentStates[scenario.TargetLifecycle.State] = true
+		}
+		if strings.HasPrefix(scenario.ID, "invalid-") &&
+			!scenario.ExpectedValid &&
+			scenario.ExpectedReasonCode == string(ReasonTargetInvalid) {
+			invalidScenarios[scenario.ID] = true
+		}
+	}
+	for _, state := range []lifecycle.State{
+		lifecycle.Current,
+		lifecycle.Historical,
+		lifecycle.Superseded,
+		lifecycle.Disputed,
+	} {
+		if !targetStates[state] || !idempotentStates[state] {
+			t.Errorf("transition coverage for %q: target=%t idempotent=%t", state, targetStates[state], idempotentStates[state])
+		}
+	}
+	for _, id := range []string{
+		"invalid-canonical-historical",
+		"invalid-superseded-without-successor",
+		"invalid-current-with-successor",
+		"invalid-self-reference",
+	} {
+		if !invalidScenarios[id] {
+			t.Errorf("missing invalid transition coverage %q", id)
+		}
+	}
+}
+
+func TestPublicV2BaselineLoads(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "evaldata", "public", "v2", "baseline.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := DecodeReport(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.SchemaVersion != CurrentReportSchemaVersion ||
+		report.DatasetVersion != "2.0.0" ||
+		!report.GatesPassed ||
+		report.Lifecycle == nil ||
+		report.Lifecycle.Aggregate.Checks == 0 ||
+		report.Lifecycle.Aggregate.Violations != 0 ||
+		report.Lifecycle.Aggregate.CanonicalPreferenceChecks == 0 ||
+		report.Lifecycle.Aggregate.CanonicalPreferenceViolations != 0 ||
+		len(report.Lifecycle.Transitions) != 12 {
+		t.Fatalf("v2 baseline coverage = %#v", report)
+	}
+}
+
+func TestPublicV1BaselineByteCompatibility(t *testing.T) {
+	qdrantURL := os.Getenv("QDRANT_TEST_URL")
+	if qdrantURL == "" {
+		t.Skip("QDRANT_TEST_URL is not set")
+	}
+	before := listEvaluationCollections(t, qdrantURL)
+	file, err := os.Open(filepath.Join("..", "..", "evaldata", "public", "v1", "dataset.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := file.Close(); err != nil {
+			t.Errorf("close v1 public dataset: %v", err)
+		}
+	})
+	dataset, err := Load(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Run(context.Background(), dataset, RunOptions{Source: "fixture", QdrantURL: qdrantURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := RenderJSON(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := os.ReadFile(filepath.Join("..", "..", "evaldata", "public", "v1", "baseline.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(rendered, baseline) {
+		t.Fatal("v1 public baseline differs from a fresh Qdrant report")
+	}
+	after := waitForEvaluationCollections(t, qdrantURL, before)
+	if fmt.Sprint(before) != fmt.Sprint(after) {
+		t.Fatalf("v1 eval collections leaked: before=%v after=%v", before, after)
 	}
 }
 
