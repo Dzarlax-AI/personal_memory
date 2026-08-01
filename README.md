@@ -567,6 +567,15 @@ The dashboard is intended to sit behind Authentik ForwardAuth. After authenticat
 
 ## Operations
 
+### Retrieval evaluation
+
+The repository includes a versioned synthetic golden dataset and a Qdrant-based
+evaluation CLI for fact recall plus flat and hierarchical document search.
+Ordinary CI uses precomputed vectors and does not start TEI. Run
+`make eval-public` against a local Qdrant instance; see
+[`docs/evaluation.md`](docs/evaluation.md) for fixture, read-only live, privacy,
+baseline, and gate semantics.
+
 ### Embedding identity and controlled model changes
 
 The service stores this canonical contract in Qdrant collection metadata under `personal_memory.embedding`:
