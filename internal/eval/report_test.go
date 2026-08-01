@@ -57,7 +57,7 @@ func TestRenderAndDecodeV2ReportAreDeterministic(t *testing.T) {
 		SchemaVersion: CurrentReportSchemaVersion, DatasetVersion: "2.0.0",
 		TopK: []int{1},
 		Queries: []QueryReport{{
-			ID: "q", Target: "facts", Results: []RetrievedItem{},
+			ID: "q", Target: "facts", Mode: "flat", Results: []RetrievedItem{},
 			Lifecycle: &QueryLifecycleReport{
 				Intent: QueryIntentCurrent,
 				Candidates: []LifecycleCandidateReport{
@@ -172,7 +172,7 @@ func TestDecodeReportRejectsUnknownLifecycleReasonCode(t *testing.T) {
 	report := Report{
 		SchemaVersion: CurrentReportSchemaVersion, DatasetVersion: "2",
 		Queries: []QueryReport{{
-			ID: "q", Target: "facts",
+			ID: "q", Target: "facts", Mode: "flat",
 			Lifecycle: &QueryLifecycleReport{
 				Intent: QueryIntentCurrent,
 				Candidates: []LifecycleCandidateReport{{
@@ -221,7 +221,7 @@ func TestDecodeReportRejectsMalformedV2LifecycleContracts(t *testing.T) {
 			mutate: func(report *Report) {
 				report.Queries[0].Lifecycle = nil
 			},
-			want: "requires lifecycle subsection",
+			want: "lifecycle",
 		},
 		{
 			name: "duplicate candidates",
@@ -274,6 +274,63 @@ func TestDecodeReportRejectsMalformedV2LifecycleContracts(t *testing.T) {
 			}
 			if _, err := DecodeReport(data); err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("DecodeReport() error = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestDecodeReportValidatesPerQueryContracts(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Report)
+		field  string
+	}{
+		{
+			name: "facts require flat mode",
+			mutate: func(report *Report) {
+				report.Queries[0].Mode = "hierarchical"
+			},
+			field: "mode",
+		},
+		{
+			name: "target",
+			mutate: func(report *Report) {
+				report.Queries[0].Target = "other"
+			},
+			field: "target",
+		},
+		{
+			name: "current rejects as of",
+			mutate: func(report *Report) {
+				report.Queries[0].Lifecycle.AsOf = "2025-03-14"
+			},
+			field: "as_of",
+		},
+		{
+			name: "as of requires date",
+			mutate: func(report *Report) {
+				report.Queries[0].Lifecycle.Intent = QueryIntentAsOf
+			},
+			field: "as_of",
+		},
+		{
+			name: "documents reject lifecycle",
+			mutate: func(report *Report) {
+				report.Queries[0].Target = "documents"
+			},
+			field: "lifecycle",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := validV2LifecycleReport()
+			tt.mutate(&report)
+			data, err := RenderJSON(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeReport(data); err == nil || !strings.Contains(err.Error(), tt.field) {
+				t.Fatalf("DecodeReport() error = %v, want field %q rejection", err, tt.field)
 			}
 		})
 	}
@@ -468,7 +525,7 @@ func validV2LifecycleReport() Report {
 		SchemaVersion:  CurrentReportSchemaVersion,
 		DatasetVersion: "2",
 		Queries: []QueryReport{{
-			ID: "q", Target: "facts",
+			ID: "q", Target: "facts", Mode: "flat",
 			Lifecycle: &QueryLifecycleReport{
 				Intent: QueryIntentCurrent,
 				Candidates: []LifecycleCandidateReport{{

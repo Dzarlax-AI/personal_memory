@@ -38,7 +38,10 @@ func TestCompareCLIProducesDeterministicOutput(t *testing.T) {
 		Embedding:     memoryeval.EmbeddingIdentity{Provider: "synthetic", ModelID: "m", ModelRevision: "r", DType: "float32", Pooling: "mean", VectorSize: 2},
 		Configuration: memoryeval.Configuration{Name: "cfg"},
 		TopK:          []int{1}, Aggregate: memoryeval.AggregateMetrics{HitAt: map[int]float64{1: 1}, NDCGAt: map[int]float64{1: 1}, MRR: 1},
-		Queries:     []memoryeval.QueryReport{{ID: "q", Metrics: memoryeval.QueryMetrics{HitAt: map[int]float64{1: 1}, NDCGAt: map[int]float64{1: 1}, MRR: 1}}},
+		Queries: []memoryeval.QueryReport{{
+			ID: "q", Target: "facts", Mode: "flat",
+			Metrics: memoryeval.QueryMetrics{HitAt: map[int]float64{1: 1}, NDCGAt: map[int]float64{1: 1}, MRR: 1},
+		}},
 		GatesPassed: true,
 	}
 	data, err := memoryeval.RenderJSON(report)

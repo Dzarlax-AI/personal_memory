@@ -231,6 +231,9 @@ func DecodeReport(data []byte) (Report, error) {
 	if report.SchemaVersion == CurrentReportSchemaVersion && report.Lifecycle == nil {
 		return Report{}, fmt.Errorf("schema_version %d report requires lifecycle section", CurrentReportSchemaVersion)
 	}
+	if err := validateReportQueryContracts(report); err != nil {
+		return Report{}, fmt.Errorf("decode report query contract: %w", err)
+	}
 	if report.SchemaVersion == CurrentReportSchemaVersion {
 		if err := validateLifecycleReportPresence(report); err != nil {
 			return Report{}, fmt.Errorf("decode report lifecycle fields: %w", err)
@@ -240,6 +243,56 @@ func DecodeReport(data []byte) (Report, error) {
 		}
 	}
 	return normalizeReport(report), nil
+}
+
+func validateReportQueryContracts(report Report) error {
+	queryIDs := make(map[string]struct{}, len(report.Queries))
+	for _, query := range report.Queries {
+		if strings.TrimSpace(query.ID) == "" {
+			return fmt.Errorf("query ID is required")
+		}
+		if _, duplicate := queryIDs[query.ID]; duplicate {
+			return fmt.Errorf("duplicate query ID %q", query.ID)
+		}
+		queryIDs[query.ID] = struct{}{}
+		if query.Target != "facts" && query.Target != "documents" {
+			return fmt.Errorf("query %q field target is invalid", query.ID)
+		}
+		if query.Mode != "flat" && query.Mode != "hierarchical" {
+			return fmt.Errorf("query %q field mode is invalid", query.ID)
+		}
+		if query.Target == "facts" && query.Mode != "flat" {
+			return fmt.Errorf("query %q field mode must be flat for facts", query.ID)
+		}
+		switch report.SchemaVersion {
+		case SchemaVersion:
+			if query.Lifecycle != nil {
+				return fmt.Errorf("query %q field lifecycle requires schema_version %d", query.ID, CurrentReportSchemaVersion)
+			}
+		case CurrentReportSchemaVersion:
+			if query.Target == "facts" && query.Lifecycle == nil {
+				return fmt.Errorf("query %q field lifecycle is required for facts", query.ID)
+			}
+			if query.Target == "documents" && query.Lifecycle != nil {
+				return fmt.Errorf("query %q field lifecycle must be omitted for documents", query.ID)
+			}
+		}
+		if query.Lifecycle == nil {
+			continue
+		}
+		intent := query.Lifecycle.Intent
+		if !intent.valid() {
+			return fmt.Errorf("query %q field intent is invalid", query.ID)
+		}
+		if intent == QueryIntentAsOf {
+			if !validISODate(query.Lifecycle.AsOf) {
+				return fmt.Errorf("query %q field as_of must use YYYY-MM-DD", query.ID)
+			}
+		} else if query.Lifecycle.AsOf != "" {
+			return fmt.Errorf("query %q field as_of is only valid for as_of intent", query.ID)
+		}
+	}
+	return nil
 }
 
 func validateLifecycleReportPresence(report Report) error {

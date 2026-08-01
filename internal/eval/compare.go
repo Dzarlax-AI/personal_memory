@@ -50,6 +50,15 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 		!reflect.DeepEqual(baseline.Configuration, candidate.Configuration) {
 		return Comparison{}, fmt.Errorf("baseline and candidate identities are incompatible")
 	}
+	if err := validateMatchedQueryContracts(baseline, candidate); err != nil {
+		return Comparison{}, err
+	}
+	if err := validateReportQueryContracts(baseline); err != nil {
+		return Comparison{}, fmt.Errorf("baseline report query contract is invalid: %w", err)
+	}
+	if err := validateReportQueryContracts(candidate); err != nil {
+		return Comparison{}, fmt.Errorf("candidate report query contract is invalid: %w", err)
+	}
 	if baseline.SchemaVersion == CurrentReportSchemaVersion {
 		if baseline.Lifecycle == nil || candidate.Lifecycle == nil {
 			return Comparison{}, fmt.Errorf("schema_version %d reports require lifecycle sections", CurrentReportSchemaVersion)
@@ -109,6 +118,48 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 	}
 	sort.Slice(comparison.Queries, func(i, j int) bool { return comparison.Queries[i].ID < comparison.Queries[j].ID })
 	return comparison, nil
+}
+
+func validateMatchedQueryContracts(baseline, candidate Report) error {
+	baselineQueries := make(map[string]QueryReport, len(baseline.Queries))
+	for _, query := range baseline.Queries {
+		if _, duplicate := baselineQueries[query.ID]; duplicate {
+			return fmt.Errorf("baseline contains duplicate query ID %q", query.ID)
+		}
+		baselineQueries[query.ID] = query
+	}
+	for _, candidateQuery := range candidate.Queries {
+		baselineQuery, exists := baselineQueries[candidateQuery.ID]
+		if !exists {
+			return fmt.Errorf("candidate query %q is absent from baseline", candidateQuery.ID)
+		}
+		if baselineQuery.Target != candidateQuery.Target {
+			return queryContractMismatch(candidateQuery.ID, "target")
+		}
+		if baselineQuery.Mode != candidateQuery.Mode {
+			return queryContractMismatch(candidateQuery.ID, "mode")
+		}
+		if (baselineQuery.Lifecycle == nil) != (candidateQuery.Lifecycle == nil) {
+			return queryContractMismatch(candidateQuery.ID, "lifecycle")
+		}
+		if baseline.SchemaVersion == CurrentReportSchemaVersion && baselineQuery.Lifecycle != nil {
+			if baselineQuery.Lifecycle.Intent != candidateQuery.Lifecycle.Intent {
+				return queryContractMismatch(candidateQuery.ID, "intent")
+			}
+			if baselineQuery.Lifecycle.AsOf != candidateQuery.Lifecycle.AsOf {
+				return queryContractMismatch(candidateQuery.ID, "as_of")
+			}
+		}
+		delete(baselineQueries, candidateQuery.ID)
+	}
+	if len(baselineQueries) != 0 {
+		return fmt.Errorf("candidate report is missing %d baseline queries", len(baselineQueries))
+	}
+	return nil
+}
+
+func queryContractMismatch(queryID, field string) error {
+	return fmt.Errorf("query %q contract field %s mismatch", queryID, field)
 }
 
 func reportLifecycleViolations(report Report) []LifecycleViolation {
