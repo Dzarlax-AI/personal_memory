@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -42,8 +43,8 @@ func Load(reader io.Reader) (*Dataset, error) {
 // Validate checks schema, vectors, IDs, queries, metrics, and gates without
 // requiring live query IDs to exist in fixture point arrays.
 func (d *Dataset) Validate() error {
-	if d.SchemaVersion != SchemaVersion {
-		return fmt.Errorf("schema_version must be %d", SchemaVersion)
+	if d.SchemaVersion != SchemaVersion && d.SchemaVersion != CurrentDatasetSchemaVersion {
+		return fmt.Errorf("schema_version must be %d or %d", SchemaVersion, CurrentDatasetSchemaVersion)
 	}
 	if strings.TrimSpace(d.DatasetVersion) == "" {
 		return fmt.Errorf("dataset_version is required")
@@ -103,6 +104,27 @@ func (d *Dataset) Validate() error {
 		if query.Target == "facts" && query.Mode != "flat" {
 			return fmt.Errorf("query %q facts target supports only flat mode", query.ID)
 		}
+		if query.Intent == "" {
+			query.Intent = QueryIntentCurrent
+		}
+		if !query.Intent.valid() {
+			return fmt.Errorf("query %q intent must be current, history, as_of, or uncertainty", query.ID)
+		}
+		if query.Intent == QueryIntentAsOf {
+			if !validISODate(query.AsOf) {
+				return fmt.Errorf("query %q as_of intent requires an ISO YYYY-MM-DD date", query.ID)
+			}
+		} else if query.AsOf != "" {
+			return fmt.Errorf("query %q as_of is only valid for as_of intent", query.ID)
+		}
+		if query.Target == "documents" {
+			if query.Intent != QueryIntentCurrent {
+				return fmt.Errorf("query %q document queries support only current intent", query.ID)
+			}
+			if len(query.LifecycleExpectations) != 0 {
+				return fmt.Errorf("query %q document queries do not support lifecycle expectations", query.ID)
+			}
+		}
 		if strings.TrimSpace(query.Text) == "" {
 			return fmt.Errorf("query %q text is required", query.ID)
 		}
@@ -140,6 +162,69 @@ func (d *Dataset) Validate() error {
 			}
 			forbiddenIDs[forbiddenID] = struct{}{}
 		}
+		expectationIDs := make(map[string]struct{}, len(query.LifecycleExpectations))
+		for _, expectation := range query.LifecycleExpectations {
+			if err := validateNormalizedPointID(expectation.ID); err != nil {
+				return fmt.Errorf("query %q lifecycle expectation ID %q: %w", query.ID, expectation.ID, err)
+			}
+			if _, duplicate := expectationIDs[expectation.ID]; duplicate {
+				return fmt.Errorf("query %q has duplicate lifecycle expectation ID %q", query.ID, expectation.ID)
+			}
+			expectationIDs[expectation.ID] = struct{}{}
+			if expectation.State != "" && !expectation.State.Valid() {
+				return fmt.Errorf("query %q lifecycle expectation state for %q is invalid", query.ID, expectation.ID)
+			}
+			if !expectation.Decision.valid() {
+				return fmt.Errorf("query %q lifecycle expectation decision for %q must be include, suppress, demote, or uncertain", query.ID, expectation.ID)
+			}
+			if expectation.State == "" && expectation.Decision != PresentationSuppress {
+				return fmt.Errorf("query %q lifecycle expectation state for %q may be omitted only for suppress decisions", query.ID, expectation.ID)
+			}
+			reasonCodes := make(map[string]struct{}, len(expectation.ReasonCodes))
+			for _, reasonCode := range expectation.ReasonCodes {
+				if strings.TrimSpace(reasonCode) == "" || reasonCode != strings.TrimSpace(reasonCode) {
+					return fmt.Errorf("query %q lifecycle expectation for %q contains an empty or non-normalized reason code", query.ID, expectation.ID)
+				}
+				if _, duplicate := reasonCodes[reasonCode]; duplicate {
+					return fmt.Errorf("query %q lifecycle expectation for %q contains duplicate reason code %q", query.ID, expectation.ID, reasonCode)
+				}
+				reasonCodes[reasonCode] = struct{}{}
+			}
+		}
+		if d.SchemaVersion == SchemaVersion &&
+			(query.Intent != QueryIntentCurrent || query.AsOf != "" || len(query.LifecycleExpectations) != 0) {
+			return fmt.Errorf("query %q lifecycle fields require schema_version %d", query.ID, CurrentDatasetSchemaVersion)
+		}
+	}
+	transitionIDs := make(map[string]struct{}, len(d.TransitionScenarios))
+	for i := range d.TransitionScenarios {
+		scenario := &d.TransitionScenarios[i]
+		if strings.TrimSpace(scenario.ID) == "" || scenario.ID != strings.TrimSpace(scenario.ID) {
+			return fmt.Errorf("transition scenario ID must be a non-empty normalized string")
+		}
+		if _, duplicate := transitionIDs[scenario.ID]; duplicate {
+			return fmt.Errorf("duplicate transition scenario ID %q", scenario.ID)
+		}
+		transitionIDs[scenario.ID] = struct{}{}
+		if scenario.PointID.String() == "" {
+			return fmt.Errorf("transition scenario %q point_id is required", scenario.ID)
+		}
+		if !scenario.expectedValidPresent {
+			return fmt.Errorf("transition scenario %q expected_valid is required", scenario.ID)
+		}
+		if scenario.reasonCodePresent && (strings.TrimSpace(scenario.ExpectedReasonCode) == "" ||
+			scenario.ExpectedReasonCode != strings.TrimSpace(scenario.ExpectedReasonCode)) {
+			return fmt.Errorf("transition scenario %q expected_reason_code must be non-empty and normalized", scenario.ID)
+		}
+		if err := validateLifecyclePayload(scenario.SourceLifecycle, "source_lifecycle"); err != nil {
+			return fmt.Errorf("transition scenario %q: %w", scenario.ID, err)
+		}
+		if err := validateLifecyclePayload(scenario.TargetLifecycle, "target_lifecycle"); err != nil {
+			return fmt.Errorf("transition scenario %q: %w", scenario.ID, err)
+		}
+	}
+	if d.SchemaVersion == SchemaVersion && len(d.TransitionScenarios) != 0 {
+		return fmt.Errorf("transition_scenarios require schema_version %d", CurrentDatasetSchemaVersion)
 	}
 	if err := validateGateMap("minimum_hit_at", d.Gates.MinimumHitAt, cfg.TopK); err != nil {
 		return err
@@ -189,6 +274,65 @@ func (d *Dataset) ValidateForSource(source string) error {
 			if _, exists := targetSet[forbiddenID]; !exists {
 				return fmt.Errorf("query %q references unknown forbidden ID %q", query.ID, forbiddenID)
 			}
+		}
+		for _, expectation := range query.LifecycleExpectations {
+			if _, exists := targetSet[expectation.ID]; !exists {
+				return fmt.Errorf("query %q references unknown lifecycle expectation ID %q", query.ID, expectation.ID)
+			}
+		}
+	}
+	factIDs := sets["facts"]
+	for _, scenario := range d.TransitionScenarios {
+		if _, exists := factIDs[scenario.PointID.String()]; !exists {
+			return fmt.Errorf("transition scenario %q references unknown point ID %q", scenario.ID, scenario.PointID.String())
+		}
+	}
+	return nil
+}
+
+func validISODate(value string) bool {
+	if len(value) != len("2006-01-02") {
+		return false
+	}
+	parsed, err := time.Parse("2006-01-02", value)
+	return err == nil && parsed.Format("2006-01-02") == value
+}
+
+func validateLifecyclePayload(payload LifecyclePayload, field string) error {
+	for _, required := range []string{"state", "canonical", "supersedes", "superseded_by"} {
+		if !payload.present[required] {
+			return fmt.Errorf("%s.%s is required", field, required)
+		}
+	}
+	if !payload.State.Valid() {
+		return fmt.Errorf("%s.state must be current, historical, superseded, or disputed", field)
+	}
+	if payload.Supersedes == nil {
+		return fmt.Errorf("%s.supersedes must be an array", field)
+	}
+	if payload.SupersededBy == nil {
+		return fmt.Errorf("%s.superseded_by must be an array", field)
+	}
+	if payload.Provenance != nil && strings.TrimSpace(payload.Provenance.Source) == "" {
+		return fmt.Errorf("%s.provenance.source must be a non-empty string", field)
+	}
+	if payload.VerifiedAt != "" {
+		if _, err := time.Parse(time.RFC3339, payload.VerifiedAt); err != nil {
+			return fmt.Errorf("%s.verified_at must use RFC3339 format", field)
+		}
+	}
+	for relationshipField, ids := range map[string][]string{
+		"supersedes": payload.Supersedes, "superseded_by": payload.SupersededBy,
+	} {
+		seen := make(map[string]struct{}, len(ids))
+		for _, id := range ids {
+			if err := validateNormalizedPointID(id); err != nil {
+				return fmt.Errorf("%s.%s ID %q: %w", field, relationshipField, id, err)
+			}
+			if _, duplicate := seen[id]; duplicate {
+				return fmt.Errorf("%s.%s contains duplicate point ID %q", field, relationshipField, id)
+			}
+			seen[id] = struct{}{}
 		}
 	}
 	return nil

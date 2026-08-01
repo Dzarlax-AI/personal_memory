@@ -4,15 +4,22 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"strconv"
 	"strings"
 
+	"github.com/Dzarlax-AI/personal-memory/internal/memory/lifecycle"
 	"github.com/google/uuid"
 )
 
-// SchemaVersion is the only dataset and report schema accepted by this package.
+// SchemaVersion remains the current report schema version. Dataset loading also
+// accepts CurrentDatasetSchemaVersion while v2 report behavior is implemented
+// separately.
 const SchemaVersion = 1
+
+// CurrentDatasetSchemaVersion is the latest accepted dataset schema.
+const CurrentDatasetSchemaVersion = 2
 
 // PointID preserves whether a fixture ID was encoded as a JSON number or
 // string while exposing one normalized string form for relevance scoring.
@@ -124,15 +131,175 @@ type ExpectedItem struct {
 	Grade int    `json:"grade"`
 }
 
+// QueryIntent identifies the lifecycle view requested by a fact query.
+type QueryIntent string
+
+const (
+	QueryIntentCurrent     QueryIntent = "current"
+	QueryIntentHistory     QueryIntent = "history"
+	QueryIntentAsOf        QueryIntent = "as_of"
+	QueryIntentUncertainty QueryIntent = "uncertainty"
+)
+
+func (intent QueryIntent) valid() bool {
+	switch intent {
+	case QueryIntentCurrent, QueryIntentHistory, QueryIntentAsOf, QueryIntentUncertainty:
+		return true
+	default:
+		return false
+	}
+}
+
+func (intent *QueryIntent) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return fmt.Errorf("query intent must be a string: %w", err)
+	}
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return fmt.Errorf("query intent must be a string")
+	}
+	*intent = QueryIntent(value)
+	return nil
+}
+
+// PresentationDecision is the expected lifecycle treatment of a result.
+type PresentationDecision string
+
+const (
+	PresentationInclude   PresentationDecision = "include"
+	PresentationSuppress  PresentationDecision = "suppress"
+	PresentationDemote    PresentationDecision = "demote"
+	PresentationUncertain PresentationDecision = "uncertain"
+)
+
+func (decision PresentationDecision) valid() bool {
+	switch decision {
+	case PresentationInclude, PresentationSuppress, PresentationDemote, PresentationUncertain:
+		return true
+	default:
+		return false
+	}
+}
+
+func (decision *PresentationDecision) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return fmt.Errorf("presentation decision must be a string: %w", err)
+	}
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return fmt.Errorf("presentation decision must be a string")
+	}
+	*decision = PresentationDecision(value)
+	return nil
+}
+
+// LifecycleExpectation describes lifecycle presentation independently from a
+// result's graded semantic relevance.
+type LifecycleExpectation struct {
+	ID          string               `json:"id"`
+	State       lifecycle.State      `json:"state,omitempty"`
+	Decision    PresentationDecision `json:"decision"`
+	ReasonCodes []string             `json:"reason_codes,omitempty"`
+}
+
 // Query describes one fact or document retrieval evaluation.
 type Query struct {
-	ID           string         `json:"id"`
-	Target       string         `json:"target"`
-	Mode         string         `json:"mode"`
-	Text         string         `json:"text"`
-	Vector       Vector         `json:"vector,omitempty"`
-	Expected     []ExpectedItem `json:"expected"`
-	ForbiddenIDs []string       `json:"forbidden_ids,omitempty"`
+	ID                    string                 `json:"id"`
+	Target                string                 `json:"target"`
+	Mode                  string                 `json:"mode"`
+	Text                  string                 `json:"text"`
+	Vector                Vector                 `json:"vector,omitempty"`
+	Expected              []ExpectedItem         `json:"expected"`
+	ForbiddenIDs          []string               `json:"forbidden_ids,omitempty"`
+	Intent                QueryIntent            `json:"intent,omitempty"`
+	AsOf                  string                 `json:"as_of,omitempty"`
+	LifecycleExpectations []LifecycleExpectation `json:"lifecycle_expectations,omitempty"`
+}
+
+// LifecyclePayload is the strict evaluation representation of lifecycle.Input.
+// Presence metadata lets validation require complete transition targets without
+// changing the public value types later execution will consume.
+type LifecyclePayload struct {
+	State        lifecycle.State       `json:"state"`
+	Canonical    bool                  `json:"canonical"`
+	Provenance   *lifecycle.Provenance `json:"provenance,omitempty"`
+	VerifiedAt   string                `json:"verified_at,omitempty"`
+	Supersedes   []string              `json:"supersedes"`
+	SupersededBy []string              `json:"superseded_by"`
+
+	present map[string]bool
+}
+
+func (payload *LifecyclePayload) UnmarshalJSON(data []byte) error {
+	type wire LifecyclePayload
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var decoded wire
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("lifecycle payload contains trailing JSON")
+		}
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*payload = LifecyclePayload(decoded)
+	payload.present = make(map[string]bool, len(fields))
+	for field := range fields {
+		payload.present[field] = true
+	}
+	if raw, exists := fields["canonical"]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("canonical must be a boolean")
+	}
+	return nil
+}
+
+// TransitionScenario is a declarative lifecycle transition case. Execution and
+// scoring are intentionally handled by later evaluator tasks.
+type TransitionScenario struct {
+	ID                 string           `json:"id"`
+	PointID            PointID          `json:"point_id"`
+	SourceLifecycle    LifecyclePayload `json:"source_lifecycle"`
+	TargetLifecycle    LifecyclePayload `json:"target_lifecycle"`
+	ExpectedValid      bool             `json:"expected_valid"`
+	ExpectedReasonCode string           `json:"expected_reason_code,omitempty"`
+
+	expectedValidPresent bool
+	reasonCodePresent    bool
+}
+
+func (scenario *TransitionScenario) UnmarshalJSON(data []byte) error {
+	type wire TransitionScenario
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var decoded wire
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("transition scenario contains trailing JSON")
+		}
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*scenario = TransitionScenario(decoded)
+	_, scenario.expectedValidPresent = fields["expected_valid"]
+	_, scenario.reasonCodePresent = fields["expected_reason_code"]
+	if raw, exists := fields["expected_valid"]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("expected_valid must be a boolean")
+	}
+	return nil
 }
 
 // Gates contains explicit thresholds that may fail an evaluation.
@@ -145,15 +312,16 @@ type Gates struct {
 
 // Dataset is the versioned input contract for fixture and live evaluation.
 type Dataset struct {
-	SchemaVersion  int               `json:"schema_version"`
-	DatasetVersion string            `json:"dataset_version"`
-	Embedding      EmbeddingIdentity `json:"embedding"`
-	Configuration  Configuration     `json:"configuration"`
-	Facts          []FixturePoint    `json:"facts"`
-	Chunks         []FixturePoint    `json:"chunks"`
-	Folders        []FixturePoint    `json:"folders"`
-	Queries        []Query           `json:"queries"`
-	Gates          Gates             `json:"gates"`
+	SchemaVersion       int                  `json:"schema_version"`
+	DatasetVersion      string               `json:"dataset_version"`
+	Embedding           EmbeddingIdentity    `json:"embedding"`
+	Configuration       Configuration        `json:"configuration"`
+	Facts               []FixturePoint       `json:"facts"`
+	Chunks              []FixturePoint       `json:"chunks"`
+	Folders             []FixturePoint       `json:"folders"`
+	Queries             []Query              `json:"queries"`
+	Gates               Gates                `json:"gates"`
+	TransitionScenarios []TransitionScenario `json:"transition_scenarios,omitempty"`
 }
 
 // RetrievedItem is the non-sensitive result representation stored in reports.
