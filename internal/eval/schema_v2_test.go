@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -45,8 +46,27 @@ func TestLoadV1NormalizesOmittedIntentToCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dataset.SchemaVersion != 1 || dataset.Queries[0].Intent != QueryIntentCurrent {
-		t.Fatalf("schema/intent = %d/%q, want 1/%q", dataset.SchemaVersion, dataset.Queries[0].Intent, QueryIntentCurrent)
+	if dataset.SchemaVersion != 1 || dataset.Queries[0].Intent != "" ||
+		dataset.Queries[0].EffectiveIntent() != QueryIntentCurrent {
+		t.Fatalf("schema/raw/effective intent = %d/%q/%q, want 1/empty/%q",
+			dataset.SchemaVersion, dataset.Queries[0].Intent, dataset.Queries[0].EffectiveIntent(), QueryIntentCurrent)
+	}
+}
+
+func TestLoadV1RoundTripPreservesOmittedIntent(t *testing.T) {
+	dataset, err := Load(strings.NewReader(validDataset))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(dataset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"intent"`) {
+		t.Fatalf("marshaled v1 dataset unexpectedly contains intent: %s", encoded)
+	}
+	if _, err := Load(strings.NewReader(string(encoded))); err != nil {
+		t.Fatalf("reload marshaled v1 dataset: %v", err)
 	}
 }
 
@@ -284,7 +304,11 @@ func TestLoadV2AcceptsOnlyOmittedIntentAsDefaultCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dataset.Queries[0].Intent != QueryIntentCurrent {
-		t.Fatalf("intent = %q, want %q", dataset.Queries[0].Intent, QueryIntentCurrent)
+	if dataset.Queries[0].Intent != "" || dataset.Queries[0].EffectiveIntent() != QueryIntentCurrent {
+		t.Fatalf("raw/effective intent = %q/%q, want empty/%q",
+			dataset.Queries[0].Intent, dataset.Queries[0].EffectiveIntent(), QueryIntentCurrent)
+	}
+	if err := dataset.Validate(); err != nil {
+		t.Fatalf("repeated validation rejected omitted v2 intent: %v", err)
 	}
 }

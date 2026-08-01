@@ -249,6 +249,15 @@ type Query struct {
 	lifecycleExpectationsPresent bool
 }
 
+// EffectiveIntent returns the normalized query intent without changing the
+// serialized representation. Omitted intent is current for v1 compatibility.
+func (query Query) EffectiveIntent() QueryIntent {
+	if query.Intent == "" {
+		return QueryIntentCurrent
+	}
+	return query.Intent
+}
+
 func (query *Query) UnmarshalJSON(data []byte) error {
 	type wire Query
 	decoder := json.NewDecoder(bytes.NewReader(data))

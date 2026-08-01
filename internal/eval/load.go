@@ -111,13 +111,14 @@ func (d *Dataset) Validate() error {
 				query.lifecycleExpectationsPresent || len(query.LifecycleExpectations) != 0) {
 			return fmt.Errorf("query %q lifecycle fields require schema_version %d", query.ID, CurrentDatasetSchemaVersion)
 		}
-		if query.Intent == "" && !query.intentPresent {
-			query.Intent = QueryIntentCurrent
+		intent := query.Intent
+		if !query.intentPresent {
+			intent = query.EffectiveIntent()
 		}
-		if !query.Intent.valid() {
+		if !intent.valid() {
 			return fmt.Errorf("query %q intent must be current, history, as_of, or uncertainty", query.ID)
 		}
-		if query.Intent == QueryIntentAsOf {
+		if intent == QueryIntentAsOf {
 			if !validISODate(query.AsOf) {
 				return fmt.Errorf("query %q as_of intent requires an ISO YYYY-MM-DD date", query.ID)
 			}
@@ -125,7 +126,7 @@ func (d *Dataset) Validate() error {
 			return fmt.Errorf("query %q as_of is only valid for as_of intent", query.ID)
 		}
 		if query.Target == "documents" {
-			if query.Intent != QueryIntentCurrent {
+			if intent != QueryIntentCurrent {
 				return fmt.Errorf("query %q document queries support only current intent", query.ID)
 			}
 			if len(query.LifecycleExpectations) != 0 {
