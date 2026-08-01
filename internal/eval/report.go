@@ -22,15 +22,15 @@ func normalizeReport(report Report) Report {
 		report.Queries[i].Results = append([]RetrievedItem(nil), report.Queries[i].Results...)
 		if report.Queries[i].Lifecycle != nil {
 			lifecycleReport := report.Queries[i].Lifecycle
-			lifecycleReport.Candidates = append([]LifecycleCandidateReport(nil), lifecycleReport.Candidates...)
+			lifecycleReport.Candidates = append([]LifecycleCandidateReport{}, lifecycleReport.Candidates...)
 			sort.Slice(lifecycleReport.Candidates, func(i, j int) bool {
 				return lifecycleReport.Candidates[i].ID < lifecycleReport.Candidates[j].ID
 			})
-			lifecycleReport.Violations = append([]LifecycleViolation(nil), lifecycleReport.Violations...)
+			lifecycleReport.Violations = append([]LifecycleViolation{}, lifecycleReport.Violations...)
 			sortLifecycleViolations(lifecycleReport.Violations)
 			for j := range lifecycleReport.Candidates {
 				lifecycleReport.Candidates[j].ReasonCodes =
-					append([]LifecycleReasonCode(nil), lifecycleReport.Candidates[j].ReasonCodes...)
+					append([]LifecycleReasonCode{}, lifecycleReport.Candidates[j].ReasonCodes...)
 				sort.Slice(lifecycleReport.Candidates[j].ReasonCodes, func(a, b int) bool {
 					return lifecycleReport.Candidates[j].ReasonCodes[a] <
 						lifecycleReport.Candidates[j].ReasonCodes[b]
@@ -39,13 +39,13 @@ func normalizeReport(report Report) Report {
 		}
 	}
 	if report.Lifecycle != nil {
-		report.Lifecycle.Transitions = append([]TransitionReport(nil), report.Lifecycle.Transitions...)
+		report.Lifecycle.Transitions = append([]TransitionReport{}, report.Lifecycle.Transitions...)
 		sort.Slice(report.Lifecycle.Transitions, func(i, j int) bool {
 			return report.Lifecycle.Transitions[i].ID < report.Lifecycle.Transitions[j].ID
 		})
 		for i := range report.Lifecycle.Transitions {
 			report.Lifecycle.Transitions[i].Violations =
-				append([]LifecycleViolation(nil), report.Lifecycle.Transitions[i].Violations...)
+				append([]LifecycleViolation{}, report.Lifecycle.Transitions[i].Violations...)
 			sortLifecycleViolations(report.Lifecycle.Transitions[i].Violations)
 		}
 	}
@@ -178,11 +178,127 @@ func DecodeReport(data []byte) (Report, error) {
 		return Report{}, fmt.Errorf("schema_version %d report requires lifecycle section", CurrentReportSchemaVersion)
 	}
 	if report.SchemaVersion == CurrentReportSchemaVersion {
+		if err := validateLifecycleReportPresence(report); err != nil {
+			return Report{}, fmt.Errorf("decode report lifecycle fields: %w", err)
+		}
 		if err := validateLifecycleReport(report); err != nil {
 			return Report{}, fmt.Errorf("decode report lifecycle: %w", err)
 		}
 	}
 	return normalizeReport(report), nil
+}
+
+func validateLifecycleReportPresence(report Report) error {
+	if err := requireLifecycleFields(report.Lifecycle.present, "lifecycle", "aggregate", "transitions"); err != nil {
+		return err
+	}
+	if report.Lifecycle.Transitions == nil {
+		return fmt.Errorf("lifecycle.transitions must be an array")
+	}
+	aggregate := report.Lifecycle.Aggregate
+	if err := requireLifecycleFields(
+		aggregate.present,
+		"lifecycle.aggregate",
+		"checks",
+		"violations",
+		"canonical_preference_checks",
+		"canonical_preference_violations",
+	); err != nil {
+		return err
+	}
+	for _, query := range report.Queries {
+		if query.Lifecycle == nil {
+			continue
+		}
+		lifecycleReport := query.Lifecycle
+		if err := requireLifecycleFields(
+			lifecycleReport.present,
+			"query "+query.ID+".lifecycle",
+			"intent", "candidates", "checks", "violations",
+		); err != nil {
+			return err
+		}
+		if lifecycleReport.Candidates == nil || lifecycleReport.Violations == nil {
+			return fmt.Errorf("query %q lifecycle candidates and violations must be arrays", query.ID)
+		}
+		if lifecycleReport.Intent == QueryIntentAsOf {
+			if !lifecycleReport.present["as_of"] {
+				return fmt.Errorf("query %q lifecycle as_of is required", query.ID)
+			}
+		} else if lifecycleReport.present["as_of"] {
+			return fmt.Errorf("query %q lifecycle as_of must be omitted", query.ID)
+		}
+		for _, candidate := range lifecycleReport.Candidates {
+			if err := requireLifecycleFields(
+				candidate.present,
+				"query "+query.ID+" lifecycle candidate",
+				"id", "canonical", "expired", "decision", "reason_codes", "valid",
+			); err != nil {
+				return err
+			}
+			if candidate.ReasonCodes == nil {
+				return fmt.Errorf("query %q candidate %q reason_codes must be an array", query.ID, candidate.ID)
+			}
+			if candidate.Valid && !candidate.present["state"] {
+				return fmt.Errorf("query %q valid candidate %q requires state", query.ID, candidate.ID)
+			}
+			if !candidate.Valid && candidate.present["state"] {
+				return fmt.Errorf("query %q invalid candidate %q must omit state", query.ID, candidate.ID)
+			}
+		}
+		for _, violation := range lifecycleReport.Violations {
+			if err := validateLifecycleViolationPresence(violation); err != nil {
+				return err
+			}
+		}
+	}
+	for _, transition := range report.Lifecycle.Transitions {
+		if err := requireLifecycleFields(
+			transition.present,
+			"lifecycle transition",
+			"id", "valid", "reason_code", "passed", "violations",
+		); err != nil {
+			return err
+		}
+		if transition.Violations == nil {
+			return fmt.Errorf("transition %q violations must be an array", transition.ID)
+		}
+		for _, violation := range transition.Violations {
+			if err := validateLifecycleViolationPresence(violation); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateLifecycleViolationPresence(violation LifecycleViolation) error {
+	if err := requireLifecycleFields(
+		violation.present, "lifecycle violation", "scope", "invariant",
+	); err != nil {
+		return err
+	}
+	switch violation.Scope {
+	case ViolationScopeQuery:
+		return requireLifecycleFields(
+			violation.present, "query lifecycle violation", "query_id", "candidate_id",
+		)
+	case ViolationScopeTransition:
+		return requireLifecycleFields(
+			violation.present, "transition lifecycle violation", "scenario_id",
+		)
+	default:
+		return nil
+	}
+}
+
+func requireLifecycleFields(present map[string]bool, object string, fields ...string) error {
+	for _, field := range fields {
+		if !present[field] {
+			return fmt.Errorf("%s field %q is required", object, field)
+		}
+	}
+	return nil
 }
 
 func validateLifecycleReport(report Report) error {
@@ -257,7 +373,7 @@ func validateLifecycleReport(report Report) error {
 				canonicalChecks++
 			}
 		}
-		seenViolations := make(map[LifecycleViolation]struct{}, len(lifecycleReport.Violations))
+		seenViolations := make(map[string]struct{}, len(lifecycleReport.Violations))
 		for _, violation := range lifecycleReport.Violations {
 			if err := validateQueryLifecycleViolation(violation, query.ID); err != nil {
 				return err
@@ -266,10 +382,10 @@ func validateLifecycleReport(report Report) error {
 			if (violation.Invariant == InvariantCandidatePresent) == candidateExists {
 				return fmt.Errorf("query %q lifecycle violation does not match candidate evidence", query.ID)
 			}
-			if _, duplicate := seenViolations[violation]; duplicate {
+			if _, duplicate := seenViolations[violation.key()]; duplicate {
 				return fmt.Errorf("query %q has duplicate lifecycle violation", query.ID)
 			}
-			seenViolations[violation] = struct{}{}
+			seenViolations[violation.key()] = struct{}{}
 		}
 	}
 	transitionIDs := make(map[string]struct{}, len(report.Lifecycle.Transitions))
@@ -292,15 +408,15 @@ func validateLifecycleReport(report Report) error {
 		if transition.Passed != (len(transition.Violations) == 0) {
 			return fmt.Errorf("transition %q has inconsistent pass result", transition.ID)
 		}
-		seenViolations := make(map[LifecycleViolation]struct{}, len(transition.Violations))
+		seenViolations := make(map[string]struct{}, len(transition.Violations))
 		for _, violation := range transition.Violations {
 			if err := validateTransitionLifecycleViolation(violation, transition.ID); err != nil {
 				return err
 			}
-			if _, duplicate := seenViolations[violation]; duplicate {
+			if _, duplicate := seenViolations[violation.key()]; duplicate {
 				return fmt.Errorf("transition %q has duplicate lifecycle violation", transition.ID)
 			}
-			seenViolations[violation] = struct{}{}
+			seenViolations[violation.key()] = struct{}{}
 		}
 	}
 	aggregate := report.Lifecycle.Aggregate

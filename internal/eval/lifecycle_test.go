@@ -58,7 +58,7 @@ func TestRequiresBroadLifecycleSearch(t *testing.T) {
 		{name: "current demote", query: Query{
 			Intent:                QueryIntentCurrent,
 			LifecycleExpectations: []LifecycleExpectation{{Decision: PresentationDemote}},
-		}, want: true},
+		}, want: false},
 		{name: "current uncertain", query: Query{
 			Intent:                QueryIntentCurrent,
 			LifecycleExpectations: []LifecycleExpectation{{Decision: PresentationUncertain}},
@@ -164,12 +164,15 @@ func TestLifecycleExpectationScoringUsesExactReasonCodesAndSafeIDs(t *testing.T)
 		ReasonCodes: []LifecycleReasonCode{ReasonCurrentTruth}, Valid: true,
 	}}}
 	scoreLifecycleExpectations(query, &report)
-	if report.Checks != 1 || len(report.Violations) != 1 ||
-		report.Violations[0] != (LifecycleViolation{
-			Scope: ViolationScopeQuery, QueryID: "query-7",
-			CandidateID: "42", Invariant: InvariantReasonCodes,
-		}) {
+	if report.Checks != 1 || len(report.Violations) != 1 {
 		t.Fatalf("scoring = %#v", report)
+	}
+	violation := report.Violations[0]
+	if violation.Scope != ViolationScopeQuery ||
+		violation.QueryID != "query-7" ||
+		violation.CandidateID != "42" ||
+		violation.Invariant != InvariantReasonCodes {
+		t.Fatalf("violation = %#v", violation)
 	}
 }
 

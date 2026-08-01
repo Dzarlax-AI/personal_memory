@@ -1,7 +1,10 @@
 package eval
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"time"
 
@@ -40,6 +43,7 @@ type LifecycleCandidateReport struct {
 	Decision    PresentationDecision  `json:"decision"`
 	ReasonCodes []LifecycleReasonCode `json:"reason_codes"`
 	Valid       bool                  `json:"valid"`
+	present     map[string]bool
 }
 
 // QueryLifecycleReport scores declared lifecycle expectations independently
@@ -49,7 +53,8 @@ type QueryLifecycleReport struct {
 	AsOf       string                     `json:"as_of,omitempty"`
 	Candidates []LifecycleCandidateReport `json:"candidates"`
 	Checks     int                        `json:"checks"`
-	Violations []LifecycleViolation       `json:"violations,omitempty"`
+	Violations []LifecycleViolation       `json:"violations"`
+	present    map[string]bool
 }
 
 // LifecycleViolationScope identifies the lifecycle contract being checked.
@@ -80,6 +85,7 @@ type LifecycleViolation struct {
 	ScenarioID  string                  `json:"scenario_id,omitempty"`
 	CandidateID string                  `json:"candidate_id,omitempty"`
 	Invariant   LifecycleInvariant      `json:"invariant"`
+	present     map[string]bool
 }
 
 func (violation LifecycleViolation) message() string {
@@ -90,12 +96,19 @@ func (violation LifecycleViolation) message() string {
 		violation.QueryID, violation.CandidateID, violation.Invariant)
 }
 
+func (violation LifecycleViolation) key() string {
+	return fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s",
+		violation.Scope, violation.QueryID, violation.ScenarioID,
+		violation.CandidateID, violation.Invariant)
+}
+
 // LifecycleAggregateMetrics does not participate in MRR or nDCG aggregation.
 type LifecycleAggregateMetrics struct {
 	Checks                        int `json:"checks"`
 	Violations                    int `json:"violations"`
 	CanonicalPreferenceChecks     int `json:"canonical_preference_checks"`
 	CanonicalPreferenceViolations int `json:"canonical_preference_violations"`
+	present                       map[string]bool
 }
 
 // TransitionReport records read-only validation of one declared transition.
@@ -104,13 +117,114 @@ type TransitionReport struct {
 	Valid      bool                 `json:"valid"`
 	ReasonCode LifecycleReasonCode  `json:"reason_code"`
 	Passed     bool                 `json:"passed"`
-	Violations []LifecycleViolation `json:"violations,omitempty"`
+	Violations []LifecycleViolation `json:"violations"`
+	present    map[string]bool
 }
 
 // LifecycleReport is the dedicated schema-v2 lifecycle report section.
 type LifecycleReport struct {
 	Aggregate   LifecycleAggregateMetrics `json:"aggregate"`
 	Transitions []TransitionReport        `json:"transitions"`
+	present     map[string]bool
+}
+
+func (candidate *LifecycleCandidateReport) UnmarshalJSON(data []byte) error {
+	type wire LifecycleCandidateReport
+	var decoded wire
+	present, err := decodeLifecycleObject(data, &decoded)
+	if err != nil {
+		return err
+	}
+	*candidate = LifecycleCandidateReport(decoded)
+	candidate.present = present
+	return nil
+}
+
+func (report *QueryLifecycleReport) UnmarshalJSON(data []byte) error {
+	type wire QueryLifecycleReport
+	var decoded wire
+	present, err := decodeLifecycleObject(data, &decoded)
+	if err != nil {
+		return err
+	}
+	*report = QueryLifecycleReport(decoded)
+	report.present = present
+	return nil
+}
+
+func (violation *LifecycleViolation) UnmarshalJSON(data []byte) error {
+	type wire LifecycleViolation
+	var decoded wire
+	present, err := decodeLifecycleObject(data, &decoded)
+	if err != nil {
+		return err
+	}
+	*violation = LifecycleViolation(decoded)
+	violation.present = present
+	return nil
+}
+
+func (metrics *LifecycleAggregateMetrics) UnmarshalJSON(data []byte) error {
+	type wire LifecycleAggregateMetrics
+	var decoded wire
+	present, err := decodeLifecycleObject(data, &decoded)
+	if err != nil {
+		return err
+	}
+	*metrics = LifecycleAggregateMetrics(decoded)
+	metrics.present = present
+	return nil
+}
+
+func (report *TransitionReport) UnmarshalJSON(data []byte) error {
+	type wire TransitionReport
+	var decoded wire
+	present, err := decodeLifecycleObject(data, &decoded)
+	if err != nil {
+		return err
+	}
+	*report = TransitionReport(decoded)
+	report.present = present
+	return nil
+}
+
+func (report *LifecycleReport) UnmarshalJSON(data []byte) error {
+	type wire LifecycleReport
+	var decoded wire
+	present, err := decodeLifecycleObject(data, &decoded)
+	if err != nil {
+		return err
+	}
+	*report = LifecycleReport(decoded)
+	report.present = present
+	return nil
+}
+
+func decodeLifecycleObject(data []byte, target any) (map[string]bool, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return nil, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("lifecycle report object contains trailing JSON")
+		}
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	present := make(map[string]bool, len(fields))
+	for field, raw := range fields {
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return nil, fmt.Errorf("lifecycle report field %q must not be null", field)
+		}
+		present[field] = true
+	}
+	return present, nil
 }
 
 type presentedFacts struct {

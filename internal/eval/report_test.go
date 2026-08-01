@@ -170,7 +170,7 @@ func TestDecodeReportRejectsMalformedV2LifecycleContracts(t *testing.T) {
 		{
 			name: "aggregate mismatch",
 			mutate: func(report *Report) {
-				report.Lifecycle.Aggregate.Checks = 1
+				report.Lifecycle.Aggregate.Checks = 2
 			},
 			want: "aggregate check or violation",
 		},
@@ -194,7 +194,7 @@ func TestDecodeReportRejectsMalformedV2LifecycleContracts(t *testing.T) {
 					Scope: ViolationScopeQuery, QueryID: "q",
 					CandidateID: "1", Invariant: "private_text",
 				}}
-				report.Lifecycle.Aggregate = LifecycleAggregateMetrics{Checks: 1, Violations: 1}
+				report.Lifecycle.Aggregate = LifecycleAggregateMetrics{Checks: 2, Violations: 1}
 			},
 			want: "unknown lifecycle violation invariant",
 		},
@@ -236,6 +236,168 @@ func TestDecodeReportRejectsFreeFormLifecycleViolation(t *testing.T) {
 	}
 }
 
+func TestDecodeReportRequiresV2LifecycleFieldPresence(t *testing.T) {
+	t.Run("invalid candidate required fields", func(t *testing.T) {
+		for _, field := range []string{"id", "canonical", "expired", "decision", "reason_codes", "valid"} {
+			t.Run(field, func(t *testing.T) {
+				report := validV2LifecycleReport()
+				candidate := &report.Queries[0].Lifecycle.Candidates[0]
+				candidate.State = ""
+				candidate.Canonical = false
+				candidate.Valid = false
+				candidate.Decision = PresentationSuppress
+				candidate.ReasonCodes = []LifecycleReasonCode{ReasonInvalidLifecycle}
+				document := reportDocument(t, report)
+				candidateObject := lifecycleCandidateObject(t, document)
+				delete(candidateObject, field)
+				assertReportDecodeFails(t, document, field)
+			})
+		}
+	})
+
+	t.Run("valid candidate state", func(t *testing.T) {
+		document := reportDocument(t, validV2LifecycleReport())
+		delete(lifecycleCandidateObject(t, document), "state")
+		assertReportDecodeFails(t, document, "state")
+	})
+
+	t.Run("query lifecycle zero checks and arrays", func(t *testing.T) {
+		for _, field := range []string{"intent", "candidates", "checks", "violations"} {
+			t.Run(field, func(t *testing.T) {
+				document := reportDocument(t, validV2LifecycleReport())
+				queryLifecycle := reportQueryLifecycleObject(t, document)
+				delete(queryLifecycle, field)
+				assertReportDecodeFails(t, document, field)
+			})
+		}
+	})
+
+	t.Run("zero aggregate counters", func(t *testing.T) {
+		for _, field := range []string{
+			"checks", "violations",
+			"canonical_preference_checks", "canonical_preference_violations",
+		} {
+			t.Run(field, func(t *testing.T) {
+				report := validV2LifecycleReport()
+				report.Lifecycle.Transitions = []TransitionReport{}
+				report.Lifecycle.Aggregate = LifecycleAggregateMetrics{}
+				document := reportDocument(t, report)
+				aggregate := document["lifecycle"].(map[string]any)["aggregate"].(map[string]any)
+				delete(aggregate, field)
+				assertReportDecodeFails(t, document, field)
+			})
+		}
+	})
+
+	t.Run("top lifecycle fields", func(t *testing.T) {
+		for _, field := range []string{"aggregate", "transitions"} {
+			t.Run(field, func(t *testing.T) {
+				document := reportDocument(t, validV2LifecycleReport())
+				delete(document["lifecycle"].(map[string]any), field)
+				assertReportDecodeFails(t, document, field)
+			})
+		}
+	})
+
+	t.Run("false transition result and required fields", func(t *testing.T) {
+		for _, field := range []string{"id", "valid", "reason_code", "passed", "violations"} {
+			t.Run(field, func(t *testing.T) {
+				document := reportDocument(t, validV2LifecycleReport())
+				transition := document["lifecycle"].(map[string]any)["transitions"].([]any)[0].(map[string]any)
+				delete(transition, field)
+				assertReportDecodeFails(t, document, field)
+			})
+		}
+	})
+
+	t.Run("false transition passed", func(t *testing.T) {
+		report := validV2LifecycleReport()
+		transition := &report.Lifecycle.Transitions[0]
+		transition.Passed = false
+		transition.Violations = []LifecycleViolation{{
+			Scope: ViolationScopeTransition, ScenarioID: transition.ID,
+			Invariant: InvariantTransitionValid,
+		}}
+		report.Lifecycle.Aggregate.Violations = 1
+		document := reportDocument(t, report)
+		transitionObject := document["lifecycle"].(map[string]any)["transitions"].([]any)[0].(map[string]any)
+		delete(transitionObject, "passed")
+		assertReportDecodeFails(t, document, "passed")
+	})
+
+	t.Run("structured violation identifiers", func(t *testing.T) {
+		for _, field := range []string{"scope", "query_id", "candidate_id", "invariant"} {
+			t.Run(field, func(t *testing.T) {
+				report := validV2LifecycleReport()
+				report.Queries[0].Lifecycle.Checks = 1
+				report.Queries[0].Lifecycle.Violations = []LifecycleViolation{{
+					Scope: ViolationScopeQuery, QueryID: "q",
+					CandidateID: "2", Invariant: InvariantCandidatePresent,
+				}}
+				report.Lifecycle.Aggregate = LifecycleAggregateMetrics{Checks: 2, Violations: 1}
+				document := reportDocument(t, report)
+				violation := reportQueryLifecycleObject(t, document)["violations"].([]any)[0].(map[string]any)
+				delete(violation, field)
+				assertReportDecodeFails(t, document, field)
+			})
+		}
+	})
+
+	t.Run("structured transition violation identifiers", func(t *testing.T) {
+		for _, field := range []string{"scope", "scenario_id", "invariant"} {
+			t.Run(field, func(t *testing.T) {
+				report := validV2LifecycleReport()
+				transition := &report.Lifecycle.Transitions[0]
+				transition.Passed = false
+				transition.Violations = []LifecycleViolation{{
+					Scope: ViolationScopeTransition, ScenarioID: transition.ID,
+					Invariant: InvariantTransitionReason,
+				}}
+				report.Lifecycle.Aggregate.Violations = 1
+				document := reportDocument(t, report)
+				transitionObject := document["lifecycle"].(map[string]any)["transitions"].([]any)[0].(map[string]any)
+				violation := transitionObject["violations"].([]any)[0].(map[string]any)
+				delete(violation, field)
+				assertReportDecodeFails(t, document, field)
+			})
+		}
+	})
+}
+
+func reportDocument(t *testing.T, report Report) map[string]any {
+	t.Helper()
+	data, err := RenderJSON(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	return document
+}
+
+func reportQueryLifecycleObject(t *testing.T, document map[string]any) map[string]any {
+	t.Helper()
+	return document["queries"].([]any)[0].(map[string]any)["lifecycle"].(map[string]any)
+}
+
+func lifecycleCandidateObject(t *testing.T, document map[string]any) map[string]any {
+	t.Helper()
+	return reportQueryLifecycleObject(t, document)["candidates"].([]any)[0].(map[string]any)
+}
+
+func assertReportDecodeFails(t *testing.T, document map[string]any, field string) {
+	t.Helper()
+	data, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeReport(data); err == nil || !strings.Contains(err.Error(), field) {
+		t.Fatalf("DecodeReport() error = %v, want omitted field %q rejection", err, field)
+	}
+}
+
 func validV2LifecycleReport() Report {
 	return Report{
 		SchemaVersion:  CurrentReportSchemaVersion,
@@ -251,6 +413,13 @@ func validV2LifecycleReport() Report {
 				}},
 			},
 		}},
-		Lifecycle: &LifecycleReport{Transitions: []TransitionReport{}},
+		Lifecycle: &LifecycleReport{
+			Aggregate: LifecycleAggregateMetrics{Checks: 1},
+			Transitions: []TransitionReport{{
+				ID: "invalid-transition", Valid: false,
+				ReasonCode: ReasonTargetInvalid, Passed: true,
+				Violations: []LifecycleViolation{},
+			}},
+		},
 	}
 }

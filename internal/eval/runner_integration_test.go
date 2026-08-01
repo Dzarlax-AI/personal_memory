@@ -196,6 +196,47 @@ func TestLiveV2CurrentIncludeExpectationKeepsCurrentFilter(t *testing.T) {
 	}
 }
 
+func TestLiveV2CurrentDemoteExpectationKeepsCurrentFilter(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write([]byte(`{"result":[
+			{"id":42,"score":0.9,"payload":{"text":"ordinary","lifecycle_state":"current","canonical":false}},
+			{"id":99,"score":0.7,"payload":{"text":"canonical","lifecycle_state":"current","canonical":true}}
+		]}`))
+	}))
+	defer server.Close()
+
+	dataset, err := Load(strings.NewReader(validV2Dataset()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset.Facts = nil
+	expectation := &dataset.Queries[0].LifecycleExpectations[0]
+	expectation.Decision = PresentationDemote
+	expectation.ReasonCodes = []string{string(ReasonCanonicalPreference)}
+	report, err := Run(context.Background(), dataset, RunOptions{Source: "live", QdrantURL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter, filtered := requestBody["filter"].(map[string]any)
+	if !filtered || filter["should"] == nil {
+		t.Fatalf("current demote expectation did not preserve current-only filter: %#v", requestBody)
+	}
+	if len(report.Queries[0].Lifecycle.Violations) != 0 {
+		t.Fatalf("demote lifecycle violations = %#v", report.Queries[0].Lifecycle.Violations)
+	}
+	encoded, err := RenderJSON(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeReport(encoded); err != nil {
+		t.Fatalf("decode generated demote report: %v", err)
+	}
+}
+
 func listEvaluationCollections(t *testing.T, qdrantURL string) []string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

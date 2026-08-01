@@ -89,7 +89,7 @@ func TestCompareRejectsUnsafeLifecycleViolationIdentifiers(t *testing.T) {
 		Scope: ViolationScopeQuery, QueryID: "private query text",
 		CandidateID: "1", Invariant: InvariantCandidatePresent,
 	}}
-	candidate.Lifecycle.Aggregate = LifecycleAggregateMetrics{Checks: 1, Violations: 1}
+	candidate.Lifecycle.Aggregate = LifecycleAggregateMetrics{Checks: 2, Violations: 1}
 	if _, err := Compare(baseline, candidate, false); err == nil ||
 		!strings.Contains(err.Error(), "invalid lifecycle violation identifiers") {
 		t.Fatalf("Compare() error = %v, want safe identifier rejection", err)

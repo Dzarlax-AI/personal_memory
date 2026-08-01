@@ -265,7 +265,6 @@ func requiresBroadLifecycleSearch(query Query) bool {
 	}
 	for _, expectation := range query.LifecycleExpectations {
 		if expectation.Decision == PresentationSuppress ||
-			expectation.Decision == PresentationDemote ||
 			expectation.Decision == PresentationUncertain {
 			return true
 		}
