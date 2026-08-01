@@ -168,7 +168,7 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 		for _, transition := range lifecycleReport.Transitions {
 			lifecycleReport.Aggregate.Checks++
 			lifecycleReport.Aggregate.Violations += len(transition.Violations)
-			lifecycleFailures = append(lifecycleFailures, transition.Violations...)
+			lifecycleFailures = append(lifecycleFailures, lifecycleViolationMessages(transition.Violations)...)
 		}
 	}
 	maxK := dataset.Configuration.TopK[len(dataset.Configuration.TopK)-1]
@@ -191,7 +191,7 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 		case query.Target == "facts":
 			candidateLimit := max(20, maxK*4)
 			var filter map[string]any
-			if len(query.LifecycleExpectations) == 0 {
+			if !requiresBroadLifecycleSearch(query) {
 				filter = currentLifecycleFilter()
 			} else {
 				candidateLimit = max(100, maxK*10)
@@ -218,7 +218,7 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 			lifecycleReport.Aggregate.Violations += presentation.canonical.Violations
 			lifecycleReport.Aggregate.CanonicalPreferenceChecks += presentation.canonical.CanonicalPreferenceChecks
 			lifecycleReport.Aggregate.CanonicalPreferenceViolations += presentation.canonical.CanonicalPreferenceViolations
-			lifecycleFailures = append(lifecycleFailures, presentation.report.Violations...)
+			lifecycleFailures = append(lifecycleFailures, lifecycleViolationMessages(presentation.report.Violations)...)
 		} else if query.Target == "facts" {
 			items = normalizeFactResults(points, now)
 		} else {
@@ -257,6 +257,31 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 		GatesPassed:    len(failures) == 0,
 		GateFailures:   failures,
 	}), nil
+}
+
+func requiresBroadLifecycleSearch(query Query) bool {
+	if query.EffectiveIntent() != QueryIntentCurrent {
+		return true
+	}
+	for _, expectation := range query.LifecycleExpectations {
+		if expectation.Decision == PresentationSuppress ||
+			expectation.Decision == PresentationDemote ||
+			expectation.Decision == PresentationUncertain {
+			return true
+		}
+		if expectation.State != "" && expectation.State != lifecycle.Current {
+			return true
+		}
+	}
+	return false
+}
+
+func lifecycleViolationMessages(violations []LifecycleViolation) []string {
+	messages := make([]string, len(violations))
+	for i, violation := range violations {
+		messages[i] = violation.message()
+	}
+	return messages
 }
 
 func currentLifecycleFilter() map[string]any {

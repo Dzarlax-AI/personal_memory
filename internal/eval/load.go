@@ -91,6 +91,9 @@ func (d *Dataset) Validate() error {
 		if strings.TrimSpace(query.ID) == "" {
 			return fmt.Errorf("query ID is required")
 		}
+		if d.SchemaVersion == CurrentDatasetSchemaVersion && !safeReportIdentifier(query.ID) {
+			return fmt.Errorf("query ID must use safe identifier characters")
+		}
 		if _, duplicate := queryIDs[query.ID]; duplicate {
 			return fmt.Errorf("duplicate query ID %q", query.ID)
 		}
@@ -208,6 +211,9 @@ func (d *Dataset) Validate() error {
 		scenario := &d.TransitionScenarios[i]
 		if strings.TrimSpace(scenario.ID) == "" || scenario.ID != strings.TrimSpace(scenario.ID) {
 			return fmt.Errorf("transition scenario ID must be a non-empty normalized string")
+		}
+		if !safeReportIdentifier(scenario.ID) {
+			return fmt.Errorf("transition scenario ID must use safe identifier characters")
 		}
 		if _, duplicate := transitionIDs[scenario.ID]; duplicate {
 			return fmt.Errorf("duplicate transition scenario ID %q", scenario.ID)

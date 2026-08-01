@@ -53,16 +53,22 @@ func TestCompareKeepsV2LifecycleRegressionsVisible(t *testing.T) {
 		TopK: []int{1}, Configuration: Configuration{Name: "cfg"},
 		Aggregate: AggregateMetrics{HitAt: map[int]float64{1: 1}, NDCGAt: map[int]float64{1: 1}},
 		Queries: []QueryReport{{
-			ID: "q", Metrics: QueryMetrics{HitAt: map[int]float64{1: 1}, NDCGAt: map[int]float64{1: 1}},
-			Lifecycle: &QueryLifecycleReport{},
+			ID: "q", Target: "facts", Metrics: QueryMetrics{HitAt: map[int]float64{1: 1}, NDCGAt: map[int]float64{1: 1}},
+			Lifecycle: &QueryLifecycleReport{Intent: QueryIntentCurrent, Checks: 1},
 		}},
 		Lifecycle:   &LifecycleReport{Aggregate: LifecycleAggregateMetrics{Checks: 1}},
 		GatesPassed: true,
 	}
 	candidate := base
 	candidate.Queries = []QueryReport{{
-		ID: "q", Metrics: QueryMetrics{HitAt: map[int]float64{1: 1}, NDCGAt: map[int]float64{1: 1}},
-		Lifecycle: &QueryLifecycleReport{Violations: []string{"query q candidate 1 invariant decision"}},
+		ID: "q", Target: "facts", Metrics: QueryMetrics{HitAt: map[int]float64{1: 1}, NDCGAt: map[int]float64{1: 1}},
+		Lifecycle: &QueryLifecycleReport{
+			Intent: QueryIntentCurrent, Checks: 1,
+			Violations: []LifecycleViolation{{
+				Scope: ViolationScopeQuery, QueryID: "q",
+				CandidateID: "1", Invariant: InvariantCandidatePresent,
+			}},
+		},
 	}}
 	candidate.Lifecycle = &LifecycleReport{Aggregate: LifecycleAggregateMetrics{Checks: 1, Violations: 1}}
 	comparison, err := Compare(base, candidate, false)
@@ -72,5 +78,20 @@ func TestCompareKeepsV2LifecycleRegressionsVisible(t *testing.T) {
 	if comparison.SchemaVersion != CurrentReportSchemaVersion || comparison.Lifecycle == nil ||
 		len(comparison.Lifecycle.CandidateViolations) != 1 {
 		t.Fatalf("comparison = %#v", comparison)
+	}
+}
+
+func TestCompareRejectsUnsafeLifecycleViolationIdentifiers(t *testing.T) {
+	baseline := validV2LifecycleReport()
+	candidate := validV2LifecycleReport()
+	candidate.Queries[0].Lifecycle.Checks = 1
+	candidate.Queries[0].Lifecycle.Violations = []LifecycleViolation{{
+		Scope: ViolationScopeQuery, QueryID: "private query text",
+		CandidateID: "1", Invariant: InvariantCandidatePresent,
+	}}
+	candidate.Lifecycle.Aggregate = LifecycleAggregateMetrics{Checks: 1, Violations: 1}
+	if _, err := Compare(baseline, candidate, false); err == nil ||
+		!strings.Contains(err.Error(), "invalid lifecycle violation identifiers") {
+		t.Fatalf("Compare() error = %v, want safe identifier rejection", err)
 	}
 }

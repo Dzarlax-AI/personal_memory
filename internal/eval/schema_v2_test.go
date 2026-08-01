@@ -278,6 +278,24 @@ func TestLoadV2RejectsUnknownLifecycleFields(t *testing.T) {
 	}
 }
 
+func TestLoadV2RejectsUnsafeReportIdentifiers(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		replace string
+		with    string
+	}{
+		{"query", `"id": "q1"`, `"id": "private query text"`},
+		{"scenario", `"id": "current-to-historical"`, `"id": "private scenario text"`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load(strings.NewReader(strings.Replace(validV2Dataset(), tt.replace, tt.with, 1)))
+			if err == nil || !strings.Contains(err.Error(), "safe identifier") {
+				t.Fatalf("Load() error = %v, want safe identifier rejection", err)
+			}
+		})
+	}
+}
+
 func TestLoadV1RejectsV2LifecycleFields(t *testing.T) {
 	tests := []struct {
 		name   string

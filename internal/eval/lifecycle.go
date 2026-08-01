@@ -49,7 +49,45 @@ type QueryLifecycleReport struct {
 	AsOf       string                     `json:"as_of,omitempty"`
 	Candidates []LifecycleCandidateReport `json:"candidates"`
 	Checks     int                        `json:"checks"`
-	Violations []string                   `json:"violations,omitempty"`
+	Violations []LifecycleViolation       `json:"violations,omitempty"`
+}
+
+// LifecycleViolationScope identifies the lifecycle contract being checked.
+type LifecycleViolationScope string
+
+const (
+	ViolationScopeQuery      LifecycleViolationScope = "query"
+	ViolationScopeTransition LifecycleViolationScope = "transition"
+)
+
+// LifecycleInvariant is a closed set of safe invariant identifiers.
+type LifecycleInvariant string
+
+const (
+	InvariantCandidatePresent LifecycleInvariant = "candidate_present"
+	InvariantState            LifecycleInvariant = "state"
+	InvariantDecision         LifecycleInvariant = "decision"
+	InvariantReasonCodes      LifecycleInvariant = "reason_codes"
+	InvariantTransitionValid  LifecycleInvariant = "valid"
+	InvariantTransitionReason LifecycleInvariant = "reason_code"
+)
+
+// LifecycleViolation contains identifiers and enum values only. It never
+// carries fact text, query text, or free-form error messages.
+type LifecycleViolation struct {
+	Scope       LifecycleViolationScope `json:"scope"`
+	QueryID     string                  `json:"query_id,omitempty"`
+	ScenarioID  string                  `json:"scenario_id,omitempty"`
+	CandidateID string                  `json:"candidate_id,omitempty"`
+	Invariant   LifecycleInvariant      `json:"invariant"`
+}
+
+func (violation LifecycleViolation) message() string {
+	if violation.Scope == ViolationScopeTransition {
+		return fmt.Sprintf("scenario %s invariant %s", violation.ScenarioID, violation.Invariant)
+	}
+	return fmt.Sprintf("query %s candidate %s invariant %s",
+		violation.QueryID, violation.CandidateID, violation.Invariant)
 }
 
 // LifecycleAggregateMetrics does not participate in MRR or nDCG aggregation.
@@ -62,11 +100,11 @@ type LifecycleAggregateMetrics struct {
 
 // TransitionReport records read-only validation of one declared transition.
 type TransitionReport struct {
-	ID         string              `json:"id"`
-	Valid      bool                `json:"valid"`
-	ReasonCode LifecycleReasonCode `json:"reason_code"`
-	Passed     bool                `json:"passed"`
-	Violations []string            `json:"violations,omitempty"`
+	ID         string               `json:"id"`
+	Valid      bool                 `json:"valid"`
+	ReasonCode LifecycleReasonCode  `json:"reason_code"`
+	Passed     bool                 `json:"passed"`
+	Violations []LifecycleViolation `json:"violations,omitempty"`
 }
 
 // LifecycleReport is the dedicated schema-v2 lifecycle report section.
@@ -115,7 +153,8 @@ func presentFactCandidates(query Query, points []qdrant.Point, now time.Time) pr
 		evidence := decidePresentation(query.EffectiveIntent(), value.view, value.expired, hasCanonicalCurrent)
 		evidence.ID = candidate.PointID
 		output.report.Candidates = append(output.report.Candidates, evidence)
-		if value.view.Valid && !value.expired && value.view.State == lifecycle.Current &&
+		if query.EffectiveIntent() == QueryIntentCurrent &&
+			value.view.Valid && !value.expired && value.view.State == lifecycle.Current &&
 			!value.view.Canonical && hasCanonicalCurrent {
 			output.canonical.CanonicalPreferenceChecks++
 			if evidence.Decision != PresentationDemote ||
@@ -222,16 +261,16 @@ func scoreLifecycleExpectations(query Query, report *QueryLifecycleReport) {
 		candidate, exists := byID[expectation.ID]
 		if !exists {
 			report.Violations = append(report.Violations,
-				lifecycleViolation(query.ID, expectation.ID, "candidate_present"))
+				queryLifecycleViolation(query.ID, expectation.ID, InvariantCandidatePresent))
 			continue
 		}
 		if expectation.State != "" && candidate.State != expectation.State {
 			report.Violations = append(report.Violations,
-				lifecycleViolation(query.ID, expectation.ID, "state"))
+				queryLifecycleViolation(query.ID, expectation.ID, InvariantState))
 		}
 		if candidate.Decision != expectation.Decision {
 			report.Violations = append(report.Violations,
-				lifecycleViolation(query.ID, expectation.ID, "decision"))
+				queryLifecycleViolation(query.ID, expectation.ID, InvariantDecision))
 		}
 		expectedReasons := make([]LifecycleReasonCode, len(expectation.ReasonCodes))
 		for i, reason := range expectation.ReasonCodes {
@@ -239,14 +278,42 @@ func scoreLifecycleExpectations(query Query, report *QueryLifecycleReport) {
 		}
 		if !equalReasonCodes(candidate.ReasonCodes, expectedReasons) {
 			report.Violations = append(report.Violations,
-				lifecycleViolation(query.ID, expectation.ID, "reason_codes"))
+				queryLifecycleViolation(query.ID, expectation.ID, InvariantReasonCodes))
 		}
 	}
-	sort.Strings(report.Violations)
+	sortLifecycleViolations(report.Violations)
 }
 
-func lifecycleViolation(queryID, candidateID, invariant string) string {
-	return fmt.Sprintf("query %s candidate %s invariant %s", queryID, candidateID, invariant)
+func queryLifecycleViolation(queryID, candidateID string, invariant LifecycleInvariant) LifecycleViolation {
+	return LifecycleViolation{
+		Scope: ViolationScopeQuery, QueryID: queryID,
+		CandidateID: candidateID, Invariant: invariant,
+	}
+}
+
+func transitionLifecycleViolation(scenarioID string, invariant LifecycleInvariant) LifecycleViolation {
+	return LifecycleViolation{
+		Scope: ViolationScopeTransition, ScenarioID: scenarioID, Invariant: invariant,
+	}
+}
+
+func sortLifecycleViolations(violations []LifecycleViolation) {
+	sort.Slice(violations, func(i, j int) bool {
+		left, right := violations[i], violations[j]
+		if left.Scope != right.Scope {
+			return left.Scope < right.Scope
+		}
+		if left.QueryID != right.QueryID {
+			return left.QueryID < right.QueryID
+		}
+		if left.ScenarioID != right.ScenarioID {
+			return left.ScenarioID < right.ScenarioID
+		}
+		if left.CandidateID != right.CandidateID {
+			return left.CandidateID < right.CandidateID
+		}
+		return left.Invariant < right.Invariant
+	})
 }
 
 func equalReasonCodes(left, right []LifecycleReasonCode) bool {
@@ -276,12 +343,13 @@ func executeTransitionScenarios(scenarios []TransitionScenario) []TransitionRepo
 		}
 		if valid != scenario.ExpectedValid {
 			report.Violations = append(report.Violations,
-				fmt.Sprintf("scenario %s invariant valid", scenario.ID))
+				transitionLifecycleViolation(scenario.ID, InvariantTransitionValid))
 		}
 		if scenario.ExpectedReasonCode != "" && reason != LifecycleReasonCode(scenario.ExpectedReasonCode) {
 			report.Violations = append(report.Violations,
-				fmt.Sprintf("scenario %s invariant reason_code", scenario.ID))
+				transitionLifecycleViolation(scenario.ID, InvariantTransitionReason))
 		}
+		sortLifecycleViolations(report.Violations)
 		reports = append(reports, report)
 	}
 	sort.Slice(reports, func(i, j int) bool { return reports[i].ID < reports[j].ID })

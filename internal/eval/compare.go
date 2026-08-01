@@ -38,8 +38,8 @@ type Comparison struct {
 type LifecycleComparison struct {
 	BaselineAggregate   LifecycleAggregateMetrics `json:"baseline_aggregate"`
 	CandidateAggregate  LifecycleAggregateMetrics `json:"candidate_aggregate"`
-	BaselineViolations  []string                  `json:"baseline_violations,omitempty"`
-	CandidateViolations []string                  `json:"candidate_violations,omitempty"`
+	BaselineViolations  []LifecycleViolation      `json:"baseline_violations,omitempty"`
+	CandidateViolations []LifecycleViolation      `json:"candidate_violations,omitempty"`
 }
 
 // Compare validates report compatibility and computes candidate deltas.
@@ -49,6 +49,17 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 		baseline.Embedding != candidate.Embedding ||
 		!reflect.DeepEqual(baseline.Configuration, candidate.Configuration) {
 		return Comparison{}, fmt.Errorf("baseline and candidate identities are incompatible")
+	}
+	if baseline.SchemaVersion == CurrentReportSchemaVersion {
+		if baseline.Lifecycle == nil || candidate.Lifecycle == nil {
+			return Comparison{}, fmt.Errorf("schema_version %d reports require lifecycle sections", CurrentReportSchemaVersion)
+		}
+		if err := validateLifecycleReport(baseline); err != nil {
+			return Comparison{}, fmt.Errorf("baseline lifecycle report is invalid: %w", err)
+		}
+		if err := validateLifecycleReport(candidate); err != nil {
+			return Comparison{}, fmt.Errorf("candidate lifecycle report is invalid: %w", err)
+		}
 	}
 	if len(baseline.TopK) != len(candidate.TopK) {
 		return Comparison{}, fmt.Errorf("baseline and candidate top_k differ")
@@ -65,9 +76,6 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 		GatesPassed:    !enforceGates || candidate.GatesPassed,
 	}
 	if baseline.SchemaVersion == CurrentReportSchemaVersion {
-		if baseline.Lifecycle == nil || candidate.Lifecycle == nil {
-			return Comparison{}, fmt.Errorf("schema_version %d reports require lifecycle sections", CurrentReportSchemaVersion)
-		}
 		comparison.Lifecycle = &LifecycleComparison{
 			BaselineAggregate:   baseline.Lifecycle.Aggregate,
 			CandidateAggregate:  candidate.Lifecycle.Aggregate,
@@ -103,8 +111,8 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 	return comparison, nil
 }
 
-func reportLifecycleViolations(report Report) []string {
-	var violations []string
+func reportLifecycleViolations(report Report) []LifecycleViolation {
+	var violations []LifecycleViolation
 	for _, query := range report.Queries {
 		if query.Lifecycle != nil {
 			violations = append(violations, query.Lifecycle.Violations...)
@@ -115,7 +123,7 @@ func reportLifecycleViolations(report Report) []string {
 			violations = append(violations, transition.Violations...)
 		}
 	}
-	sort.Strings(violations)
+	sortLifecycleViolations(violations)
 	return violations
 }
 

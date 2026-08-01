@@ -2,6 +2,7 @@ package eval
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -55,7 +56,7 @@ func TestRenderAndDecodeV2ReportAreDeterministic(t *testing.T) {
 		SchemaVersion: CurrentReportSchemaVersion, DatasetVersion: "2.0.0",
 		TopK: []int{1},
 		Queries: []QueryReport{{
-			ID: "q", Results: []RetrievedItem{},
+			ID: "q", Target: "facts", Results: []RetrievedItem{},
 			Lifecycle: &QueryLifecycleReport{
 				Intent: QueryIntentCurrent,
 				Candidates: []LifecycleCandidateReport{
@@ -106,7 +107,7 @@ func TestDecodeReportRejectsUnknownLifecycleReasonCode(t *testing.T) {
 	report := Report{
 		SchemaVersion: CurrentReportSchemaVersion, DatasetVersion: "2",
 		Queries: []QueryReport{{
-			ID: "q",
+			ID: "q", Target: "facts",
 			Lifecycle: &QueryLifecycleReport{
 				Intent: QueryIntentCurrent,
 				Candidates: []LifecycleCandidateReport{{
@@ -123,5 +124,133 @@ func TestDecodeReportRejectsUnknownLifecycleReasonCode(t *testing.T) {
 	}
 	if _, err := DecodeReport(data); err == nil || !strings.Contains(err.Error(), "unknown reason code") {
 		t.Fatalf("DecodeReport() error = %v, want unknown reason code", err)
+	}
+}
+
+func TestDecodeReportRejectsMalformedV2LifecycleContracts(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Report)
+		want   string
+	}{
+		{
+			name: "historical canonical",
+			mutate: func(report *Report) {
+				candidate := &report.Queries[0].Lifecycle.Candidates[0]
+				candidate.State = "historical"
+				candidate.Decision = PresentationSuppress
+				candidate.ReasonCodes = []LifecycleReasonCode{ReasonHistorical}
+			},
+			want: "lifecycle constraints",
+		},
+		{
+			name: "mismatched reason and decision",
+			mutate: func(report *Report) {
+				candidate := &report.Queries[0].Lifecycle.Candidates[0]
+				candidate.Decision = PresentationSuppress
+			},
+			want: "inconsistent decision or reason",
+		},
+		{
+			name: "missing fact lifecycle",
+			mutate: func(report *Report) {
+				report.Queries[0].Lifecycle = nil
+			},
+			want: "requires lifecycle subsection",
+		},
+		{
+			name: "duplicate candidates",
+			mutate: func(report *Report) {
+				candidate := report.Queries[0].Lifecycle.Candidates[0]
+				report.Queries[0].Lifecycle.Candidates =
+					append(report.Queries[0].Lifecycle.Candidates, candidate)
+			},
+			want: "duplicate candidate",
+		},
+		{
+			name: "aggregate mismatch",
+			mutate: func(report *Report) {
+				report.Lifecycle.Aggregate.Checks = 1
+			},
+			want: "aggregate check or violation",
+		},
+		{
+			name: "canonical aggregate mismatch",
+			mutate: func(report *Report) {
+				report.Queries[0].Lifecycle.Candidates =
+					append(report.Queries[0].Lifecycle.Candidates, LifecycleCandidateReport{
+						ID: "2", State: "current", Valid: true,
+						Decision:    PresentationDemote,
+						ReasonCodes: []LifecycleReasonCode{ReasonCanonicalPreference},
+					})
+			},
+			want: "canonical preference counts",
+		},
+		{
+			name: "unknown structured violation invariant",
+			mutate: func(report *Report) {
+				report.Queries[0].Lifecycle.Checks = 1
+				report.Queries[0].Lifecycle.Violations = []LifecycleViolation{{
+					Scope: ViolationScopeQuery, QueryID: "q",
+					CandidateID: "1", Invariant: "private_text",
+				}}
+				report.Lifecycle.Aggregate = LifecycleAggregateMetrics{Checks: 1, Violations: 1}
+			},
+			want: "unknown lifecycle violation invariant",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := validV2LifecycleReport()
+			tt.mutate(&report)
+			data, err := RenderJSON(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeReport(data); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("DecodeReport() error = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestDecodeReportRejectsFreeFormLifecycleViolation(t *testing.T) {
+	report := validV2LifecycleReport()
+	data, err := RenderJSON(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	query := document["queries"].([]any)[0].(map[string]any)
+	lifecycleSection := query["lifecycle"].(map[string]any)
+	lifecycleSection["violations"] = []any{"private query or fact text"}
+	data, err = json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeReport(data); err == nil {
+		t.Fatal("DecodeReport accepted a free-form lifecycle violation string")
+	}
+}
+
+func validV2LifecycleReport() Report {
+	return Report{
+		SchemaVersion:  CurrentReportSchemaVersion,
+		DatasetVersion: "2",
+		Queries: []QueryReport{{
+			ID: "q", Target: "facts",
+			Lifecycle: &QueryLifecycleReport{
+				Intent: QueryIntentCurrent,
+				Candidates: []LifecycleCandidateReport{{
+					ID: "1", State: "current", Canonical: true, Valid: true,
+					Decision:    PresentationInclude,
+					ReasonCodes: []LifecycleReasonCode{ReasonCurrentTruth},
+				}},
+			},
+		}},
+		Lifecycle: &LifecycleReport{Transitions: []TransitionReport{}},
 	}
 }

@@ -7,6 +7,8 @@ import (
 	"io"
 	"sort"
 	"strings"
+
+	"github.com/Dzarlax-AI/personal-memory/internal/memory/lifecycle"
 )
 
 func normalizeReport(report Report) Report {
@@ -24,8 +26,8 @@ func normalizeReport(report Report) Report {
 			sort.Slice(lifecycleReport.Candidates, func(i, j int) bool {
 				return lifecycleReport.Candidates[i].ID < lifecycleReport.Candidates[j].ID
 			})
-			lifecycleReport.Violations = append([]string(nil), lifecycleReport.Violations...)
-			sort.Strings(lifecycleReport.Violations)
+			lifecycleReport.Violations = append([]LifecycleViolation(nil), lifecycleReport.Violations...)
+			sortLifecycleViolations(lifecycleReport.Violations)
 			for j := range lifecycleReport.Candidates {
 				lifecycleReport.Candidates[j].ReasonCodes =
 					append([]LifecycleReasonCode(nil), lifecycleReport.Candidates[j].ReasonCodes...)
@@ -43,8 +45,8 @@ func normalizeReport(report Report) Report {
 		})
 		for i := range report.Lifecycle.Transitions {
 			report.Lifecycle.Transitions[i].Violations =
-				append([]string(nil), report.Lifecycle.Transitions[i].Violations...)
-			sort.Strings(report.Lifecycle.Transitions[i].Violations)
+				append([]LifecycleViolation(nil), report.Lifecycle.Transitions[i].Violations...)
+			sortLifecycleViolations(report.Lifecycle.Transitions[i].Violations)
 		}
 	}
 	return report
@@ -186,9 +188,27 @@ func DecodeReport(data []byte) (Report, error) {
 func validateLifecycleReport(report Report) error {
 	checks := 0
 	violations := 0
+	canonicalChecks := 0
+	queryIDs := make(map[string]struct{}, len(report.Queries))
 	for _, query := range report.Queries {
+		if !safeReportIdentifier(query.ID) {
+			return fmt.Errorf("query has invalid ID")
+		}
+		if _, duplicate := queryIDs[query.ID]; duplicate {
+			return fmt.Errorf("duplicate query ID %q", query.ID)
+		}
+		queryIDs[query.ID] = struct{}{}
+		if query.Target != "facts" && query.Target != "documents" {
+			return fmt.Errorf("query %q has invalid target", query.ID)
+		}
+		if query.Target == "facts" && query.Lifecycle == nil {
+			return fmt.Errorf("fact query %q requires lifecycle subsection", query.ID)
+		}
 		if query.Lifecycle == nil {
 			continue
+		}
+		if query.Target == "documents" {
+			return fmt.Errorf("document query %q must not contain lifecycle subsection", query.ID)
 		}
 		lifecycleReport := query.Lifecycle
 		if !lifecycleReport.Intent.valid() {
@@ -204,9 +224,13 @@ func validateLifecycleReport(report Report) error {
 		if lifecycleReport.Checks < 0 {
 			return fmt.Errorf("query %q has negative checks", query.ID)
 		}
+		if lifecycleReport.Checks == 0 && len(lifecycleReport.Violations) != 0 {
+			return fmt.Errorf("query %q has violations without checks", query.ID)
+		}
 		checks += lifecycleReport.Checks
 		violations += len(lifecycleReport.Violations)
 		seen := make(map[string]struct{}, len(lifecycleReport.Candidates))
+		hasCanonicalCurrent := false
 		for _, candidate := range lifecycleReport.Candidates {
 			if err := validateNormalizedPointID(candidate.ID); err != nil {
 				return fmt.Errorf("query %q candidate ID is invalid", query.ID)
@@ -215,32 +239,50 @@ func validateLifecycleReport(report Report) error {
 				return fmt.Errorf("query %q has duplicate candidate ID %q", query.ID, candidate.ID)
 			}
 			seen[candidate.ID] = struct{}{}
-			if !candidate.Decision.valid() {
-				return fmt.Errorf("query %q candidate %q has invalid decision", query.ID, candidate.ID)
-			}
-			if candidate.Valid {
-				if !candidate.State.Valid() {
-					return fmt.Errorf("query %q candidate %q has invalid state", query.ID, candidate.ID)
-				}
-			} else if candidate.State != "" {
-				return fmt.Errorf("query %q invalid candidate %q exposes a state", query.ID, candidate.ID)
-			}
-			if len(candidate.ReasonCodes) == 0 {
-				return fmt.Errorf("query %q candidate %q has no reason code", query.ID, candidate.ID)
-			}
-			for _, reason := range candidate.ReasonCodes {
-				if !reason.validPresentation() {
-					return fmt.Errorf("query %q candidate %q has unknown reason code", query.ID, candidate.ID)
-				}
+			if candidate.Valid && !candidate.Expired &&
+				candidate.State == lifecycle.Current && candidate.Canonical {
+				hasCanonicalCurrent = true
 			}
 		}
+		for _, candidate := range lifecycleReport.Candidates {
+			if err := validateLifecycleCandidateTuple(
+				query.ID, lifecycleReport.Intent, candidate, hasCanonicalCurrent,
+			); err != nil {
+				return err
+			}
+			if lifecycleReport.Intent == QueryIntentCurrent &&
+				candidate.Valid && !candidate.Expired &&
+				candidate.State == lifecycle.Current && !candidate.Canonical &&
+				hasCanonicalCurrent {
+				canonicalChecks++
+			}
+		}
+		seenViolations := make(map[LifecycleViolation]struct{}, len(lifecycleReport.Violations))
+		for _, violation := range lifecycleReport.Violations {
+			if err := validateQueryLifecycleViolation(violation, query.ID); err != nil {
+				return err
+			}
+			_, candidateExists := seen[violation.CandidateID]
+			if (violation.Invariant == InvariantCandidatePresent) == candidateExists {
+				return fmt.Errorf("query %q lifecycle violation does not match candidate evidence", query.ID)
+			}
+			if _, duplicate := seenViolations[violation]; duplicate {
+				return fmt.Errorf("query %q has duplicate lifecycle violation", query.ID)
+			}
+			seenViolations[violation] = struct{}{}
+		}
 	}
+	transitionIDs := make(map[string]struct{}, len(report.Lifecycle.Transitions))
 	for _, transition := range report.Lifecycle.Transitions {
 		checks++
 		violations += len(transition.Violations)
-		if strings.TrimSpace(transition.ID) == "" || transition.ID != strings.TrimSpace(transition.ID) {
+		if !safeReportIdentifier(transition.ID) {
 			return fmt.Errorf("transition has invalid scenario ID")
 		}
+		if _, duplicate := transitionIDs[transition.ID]; duplicate {
+			return fmt.Errorf("duplicate transition scenario ID %q", transition.ID)
+		}
+		transitionIDs[transition.ID] = struct{}{}
 		if !transition.ReasonCode.validTransition() {
 			return fmt.Errorf("transition %q has unknown reason code", transition.ID)
 		}
@@ -250,15 +292,117 @@ func validateLifecycleReport(report Report) error {
 		if transition.Passed != (len(transition.Violations) == 0) {
 			return fmt.Errorf("transition %q has inconsistent pass result", transition.ID)
 		}
+		seenViolations := make(map[LifecycleViolation]struct{}, len(transition.Violations))
+		for _, violation := range transition.Violations {
+			if err := validateTransitionLifecycleViolation(violation, transition.ID); err != nil {
+				return err
+			}
+			if _, duplicate := seenViolations[violation]; duplicate {
+				return fmt.Errorf("transition %q has duplicate lifecycle violation", transition.ID)
+			}
+			seenViolations[violation] = struct{}{}
+		}
 	}
 	aggregate := report.Lifecycle.Aggregate
 	if aggregate.Checks != checks || aggregate.Violations != violations {
 		return fmt.Errorf("aggregate check or violation count is inconsistent")
 	}
-	if aggregate.CanonicalPreferenceChecks < 0 ||
-		aggregate.CanonicalPreferenceViolations < 0 ||
-		aggregate.CanonicalPreferenceViolations > aggregate.CanonicalPreferenceChecks {
-		return fmt.Errorf("canonical preference counts are invalid")
+	if aggregate.CanonicalPreferenceChecks != canonicalChecks ||
+		aggregate.CanonicalPreferenceViolations != 0 {
+		return fmt.Errorf("canonical preference counts are inconsistent")
 	}
 	return nil
+}
+
+func validateLifecycleCandidateTuple(
+	queryID string,
+	intent QueryIntent,
+	candidate LifecycleCandidateReport,
+	hasCanonicalCurrent bool,
+) error {
+	if !candidate.Decision.valid() {
+		return fmt.Errorf("query %q candidate %q has invalid decision", queryID, candidate.ID)
+	}
+	if len(candidate.ReasonCodes) == 0 {
+		return fmt.Errorf("query %q candidate %q has no reason code", queryID, candidate.ID)
+	}
+	for _, reason := range candidate.ReasonCodes {
+		if !reason.validPresentation() {
+			return fmt.Errorf("query %q candidate %q has unknown reason code", queryID, candidate.ID)
+		}
+	}
+	var view lifecycle.View
+	if candidate.Valid {
+		view = lifecycle.View{
+			State: candidate.State, Canonical: candidate.Canonical, Valid: true,
+			Supersedes: []string{}, SupersededBy: []string{},
+		}
+		if candidate.State == lifecycle.Superseded {
+			otherID := "0"
+			if candidate.ID == otherID {
+				otherID = "1"
+			}
+			view.SupersededBy = []string{otherID}
+		}
+		if err := lifecycle.Validate(view); err != nil {
+			return fmt.Errorf("query %q candidate %q violates lifecycle constraints", queryID, candidate.ID)
+		}
+	} else {
+		if candidate.State != "" {
+			return fmt.Errorf("query %q invalid candidate %q exposes a state", queryID, candidate.ID)
+		}
+		view = lifecycle.View{Canonical: candidate.Canonical, Valid: false}
+	}
+	expected := decidePresentation(intent, view, candidate.Expired, hasCanonicalCurrent)
+	if candidate.Decision != expected.Decision ||
+		!equalReasonCodes(candidate.ReasonCodes, expected.ReasonCodes) {
+		return fmt.Errorf("query %q candidate %q has inconsistent decision or reason codes", queryID, candidate.ID)
+	}
+	return nil
+}
+
+func validateQueryLifecycleViolation(violation LifecycleViolation, queryID string) error {
+	if violation.Scope != ViolationScopeQuery ||
+		violation.QueryID != queryID ||
+		violation.ScenarioID != "" ||
+		validateNormalizedPointID(violation.CandidateID) != nil {
+		return fmt.Errorf("query %q contains invalid lifecycle violation identifiers", queryID)
+	}
+	switch violation.Invariant {
+	case InvariantCandidatePresent, InvariantState, InvariantDecision, InvariantReasonCodes:
+		return nil
+	default:
+		return fmt.Errorf("query %q contains unknown lifecycle violation invariant", queryID)
+	}
+}
+
+func validateTransitionLifecycleViolation(violation LifecycleViolation, scenarioID string) error {
+	if violation.Scope != ViolationScopeTransition ||
+		violation.ScenarioID != scenarioID ||
+		violation.QueryID != "" ||
+		violation.CandidateID != "" {
+		return fmt.Errorf("transition %q contains invalid lifecycle violation identifiers", scenarioID)
+	}
+	switch violation.Invariant {
+	case InvariantTransitionValid, InvariantTransitionReason:
+		return nil
+	default:
+		return fmt.Errorf("transition %q contains unknown lifecycle violation invariant", scenarioID)
+	}
+}
+
+func safeReportIdentifier(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') ||
+			(char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') ||
+			char == '-' || char == '_' || char == '.' || char == ':' {
+			continue
+		}
+		return false
+	}
+	return true
 }

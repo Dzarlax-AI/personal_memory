@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,54 @@ func TestPresentFactCandidatesCurrentIntent(t *testing.T) {
 	assertCandidate(t, got.report, "argued", lifecycle.Disputed, PresentationSuppress, ReasonDisputed)
 	if got.canonical.CanonicalPreferenceChecks != 1 || got.canonical.CanonicalPreferenceViolations != 0 {
 		t.Fatalf("canonical metrics = %#v", got.canonical)
+	}
+}
+
+func TestRequiresBroadLifecycleSearch(t *testing.T) {
+	tests := []struct {
+		name  string
+		query Query
+		want  bool
+	}{
+		{name: "v1 compatible current", query: Query{}, want: false},
+		{name: "current include omitted state", query: Query{
+			Intent:                QueryIntentCurrent,
+			LifecycleExpectations: []LifecycleExpectation{{Decision: PresentationInclude}},
+		}, want: false},
+		{name: "current include current state", query: Query{
+			Intent: QueryIntentCurrent,
+			LifecycleExpectations: []LifecycleExpectation{{
+				State: lifecycle.Current, Decision: PresentationInclude,
+			}},
+		}, want: false},
+		{name: "current suppress", query: Query{
+			Intent:                QueryIntentCurrent,
+			LifecycleExpectations: []LifecycleExpectation{{Decision: PresentationSuppress}},
+		}, want: true},
+		{name: "current demote", query: Query{
+			Intent:                QueryIntentCurrent,
+			LifecycleExpectations: []LifecycleExpectation{{Decision: PresentationDemote}},
+		}, want: true},
+		{name: "current uncertain", query: Query{
+			Intent:                QueryIntentCurrent,
+			LifecycleExpectations: []LifecycleExpectation{{Decision: PresentationUncertain}},
+		}, want: true},
+		{name: "current non-current state", query: Query{
+			Intent: QueryIntentCurrent,
+			LifecycleExpectations: []LifecycleExpectation{{
+				State: lifecycle.Historical, Decision: PresentationInclude,
+			}},
+		}, want: true},
+		{name: "history", query: Query{Intent: QueryIntentHistory}, want: true},
+		{name: "as of", query: Query{Intent: QueryIntentAsOf}, want: true},
+		{name: "uncertainty", query: Query{Intent: QueryIntentUncertainty}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := requiresBroadLifecycleSearch(tt.query); got != tt.want {
+				t.Fatalf("requiresBroadLifecycleSearch() = %t, want %t", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -93,7 +142,11 @@ func TestPresentFactCandidatesExpiredInvalidAndAsOf(t *testing.T) {
 		!equalReasonCodes(invalid.ReasonCodes, []LifecycleReasonCode{ReasonInvalidLifecycle}) {
 		t.Fatalf("invalid candidate = %#v", invalid)
 	}
-	if strings.Contains(strings.Join(got.report.Violations, " "), "DO-NOT-LEAK") {
+	encoded, err := json.Marshal(got.report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "DO-NOT-LEAK") {
 		t.Fatal("lifecycle failure leaked fact text")
 	}
 }
@@ -112,7 +165,10 @@ func TestLifecycleExpectationScoringUsesExactReasonCodesAndSafeIDs(t *testing.T)
 	}}}
 	scoreLifecycleExpectations(query, &report)
 	if report.Checks != 1 || len(report.Violations) != 1 ||
-		report.Violations[0] != "query query-7 candidate 42 invariant reason_codes" {
+		report.Violations[0] != (LifecycleViolation{
+			Scope: ViolationScopeQuery, QueryID: "query-7",
+			CandidateID: "42", Invariant: InvariantReasonCodes,
+		}) {
 		t.Fatalf("scoring = %#v", report)
 	}
 }
