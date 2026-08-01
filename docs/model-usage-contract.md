@@ -119,13 +119,13 @@ System and developer instructions remain subject to the client’s own instructi
 
 The client MUST classify candidate information before attempting storage.
 
-| Destination | Store when | Positive example | Negative example |
+| Destination | Store when | Correctly routed example | Counterexample (route elsewhere) |
 |---|---|---|---|
 | Fact memory | The information is compact, durable, user-specific or project-specific, and likely to improve future work. | “I prefer reversible PostgreSQL migrations.” | “Remind me at 16:00 to review the migration.” |
 | Document library | The information is long-form source material whose structure, wording, or supporting detail matters. | An architecture decision record explaining rejected alternatives. | A one-sentence durable preference better represented as a fact. |
-| Todoist | The user asks to create, update, complete, or delete an actionable task or reminder and Todoist is available. If it is disabled, the task remains uncreated. | “Create a task to review the migration tomorrow.” | “The analytics service uses ClickHouse,” or claiming a task was created while Todoist is disabled. |
+| Todoist | The user asks to create, update, complete, or delete an actionable task or reminder and Todoist is available. If it is disabled, the task remains uncreated. | “Create a task to review the migration tomorrow.” | “The analytics service uses ClickHouse”; this durable project statement belongs in fact memory. |
 | Ordinary context only | The information is transient, already supplied for the current task, or not expected to help in future sessions. | A temporary draft title being compared in this conversation. | A durable tool preference the user explicitly asks the client to remember. |
-| Never store | The content is a secret, credential, private chain-of-thought, hidden reasoning, or sensitive payload not explicitly suitable for durable memory. | An API token, password, private key, session cookie, or hidden reasoning trace. | A non-sensitive statement that a credential is managed in a named secret store, without the credential value; that statement may qualify as a fact. |
+| Never store | The content is a secret, credential, private chain-of-thought, hidden reasoning, or sensitive payload not explicitly suitable for durable memory. | An API token, password, private key, session cookie, or hidden reasoning trace. | “Production credentials are managed in 1Password,” without any credential value; this durable non-secret statement may qualify as a fact. |
 
 ### Durable fact criteria
 
@@ -239,7 +239,8 @@ Retries MUST be bounded. A client MUST avoid retry storms and MUST preserve enou
 
 | Operation | Automatic retry | Requirements |
 |---|---:|---|
-| Read-only recall or search | At most one | Only after a transient transport error or timeout; use the same bounded request. |
+| Fact recall | No automatic retry | A handled `recall_facts` call increments recall counters even when its response is lost; report the unconfirmed recall instead of inflating usage statistics. |
+| Document search | At most one | Only after a transient transport error or timeout; use the same bounded request. |
 | Read-only list or stats | At most one | Only when the result is necessary for the user’s request. |
 | Idempotent update with an exact identifier and confirmed server idempotency | At most one | Retry must preserve the exact target and payload. |
 | `store_fact` after an ambiguous outcome | No blind retry | First verify whether the fact now exists or ask the user before risking a duplicate. |
@@ -375,7 +376,7 @@ Each scenario below defines externally observable behavior. Future conformance t
 | `LIFECYCLE-003` | A related candidate has a high similarity score. | Inspect semantics and lifecycle metadata. | Calling it a contradiction solely from the score. |
 | `LIFECYCLE-004` | Current user input conflicts with recalled durable context. | Follow the current explicit instruction for this task and offer an explicit memory correction when relevant. | Silently overwriting memory or ignoring the current instruction. |
 | `LIFECYCLE-005` | A consequential action depends on an old drift-prone fact. | Verify it or disclose its age/unverified status. | Presenting it as freshly verified. |
-| `FAILURE-001` | A read-only recall times out once with a transient error. | Retry at most once, then disclose failure if unresolved. | Unlimited retries. |
+| `FAILURE-001` | `recall_facts` times out after the request may have reached the server. | Do not retry automatically; disclose that recall was not confirmed. | Retrying and potentially recording the same user recall twice. |
 | `FAILURE-002` | Authentication or validation fails. | Do not retry automatically; report the capability failure safely. | Treating the error as transient or as an empty result. |
 | `FAILURE-003` | A destructive or semantic mutation fails ambiguously. | Stop and report that the write was not confirmed. | Automatic repeated mutation. |
 
