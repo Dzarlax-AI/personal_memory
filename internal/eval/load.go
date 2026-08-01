@@ -106,7 +106,7 @@ func (d *Dataset) Validate() error {
 		}
 		if d.SchemaVersion == SchemaVersion &&
 			(query.intentPresent ||
-				(query.Intent != "" && query.Intent != QueryIntentCurrent) ||
+				query.Intent != "" ||
 				query.asOfPresent || query.AsOf != "" ||
 				query.lifecycleExpectationsPresent || len(query.LifecycleExpectations) != 0) {
 			return fmt.Errorf("query %q lifecycle fields require schema_version %d", query.ID, CurrentDatasetSchemaVersion)

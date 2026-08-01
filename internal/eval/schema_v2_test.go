@@ -58,6 +58,9 @@ func TestLoadV1RoundTripPreservesOmittedIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := dataset.Validate(); err != nil {
+		t.Fatalf("validate programmatic v1 dataset with omitted intent: %v", err)
+	}
 	encoded, err := json.Marshal(dataset)
 	if err != nil {
 		t.Fatal(err)
@@ -67,6 +70,17 @@ func TestLoadV1RoundTripPreservesOmittedIntent(t *testing.T) {
 	}
 	if _, err := Load(strings.NewReader(string(encoded))); err != nil {
 		t.Fatalf("reload marshaled v1 dataset: %v", err)
+	}
+}
+
+func TestValidateV1RejectsProgrammaticCurrentIntent(t *testing.T) {
+	dataset, err := Load(strings.NewReader(validDataset))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset.Queries[0].Intent = QueryIntentCurrent
+	if err := dataset.Validate(); err == nil || !strings.Contains(err.Error(), "schema_version 2") {
+		t.Fatalf("Validate() error = %v, want schema_version 2 requirement", err)
 	}
 }
 
