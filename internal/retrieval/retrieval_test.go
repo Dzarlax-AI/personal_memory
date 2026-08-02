@@ -341,6 +341,39 @@ func TestRankKeepsExplicitDenseOnlyCandidate(t *testing.T) {
 	}
 }
 
+func TestRankAllReturnsEntireBoundedPoolWithoutChangingRankLimit(t *testing.T) {
+	candidates := make([]Candidate, MaxCandidates)
+	for i := range candidates {
+		candidates[i] = candidate(normalizedNumericID(i), 1-float64(i)/MaxCandidates, "text")
+	}
+	all, err := RankAll("text", candidates, 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != MaxCandidates {
+		t.Fatalf("RankAll() result count = %d, want %d", len(all), MaxCandidates)
+	}
+	limited, err := Rank("text", candidates, Options{
+		RRFConstant: 60, Limit: MaxResults,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(all[:MaxResults], limited) {
+		t.Fatal("RankAll() ordering or diagnostics differ from Rank()")
+	}
+	if _, err := Rank("text", candidates, Options{
+		RRFConstant: 60, Limit: MaxResults + 1,
+	}); err == nil {
+		t.Fatal("Rank() accepted output above MaxResults")
+	}
+	tooMany := append(append([]Candidate(nil), candidates...),
+		candidate("overflow", 0, "text"))
+	if _, err := RankAll("text", tooMany, 60); err == nil {
+		t.Fatal("RankAll() accepted candidates above MaxCandidates")
+	}
+}
+
 func normalizedNumericID(i int) string {
 	const digits = "0123456789"
 	if i == 0 {

@@ -80,7 +80,28 @@ func Rank(rawQuery string, candidates []Candidate, options Options) ([]Result, e
 	if err := validateCandidates(candidates); err != nil {
 		return nil, err
 	}
+	return rankValidated(normalizedQuery, candidates, options.RRFConstant, options.Limit), nil
+}
 
+// RankAll applies the same validated deterministic fusion as Rank but returns
+// the entire bounded candidate pool. It is intended for internal policy
+// layers, such as lifecycle authority, that must run before final top-K
+// truncation. Normal result callers should continue using Rank.
+func RankAll(rawQuery string, candidates []Candidate, rrfConstant int) ([]Result, error) {
+	normalizedQuery := Normalize(rawQuery)
+	if normalizedQuery == "" {
+		return nil, errInvalidQuery
+	}
+	if rrfConstant <= 0 || rrfConstant > MaxRRFConstant {
+		return nil, errInvalidOptions
+	}
+	if err := validateCandidates(candidates); err != nil {
+		return nil, err
+	}
+	return rankValidated(normalizedQuery, candidates, rrfConstant, len(candidates)), nil
+}
+
+func rankValidated(normalizedQuery string, candidates []Candidate, rrfConstant, limit int) []Result {
 	ranked := make([]rankedCandidate, len(candidates))
 	for index, candidate := range candidates {
 		ranked[index] = rankedCandidate{candidate: candidate}
@@ -114,14 +135,14 @@ func Rank(rawQuery string, candidates []Candidate, options Options) ([]Result, e
 	}
 	assignLexicalRanks(ranked)
 	for index := range ranked {
-		ranked[index].fusedScore = rrfTerm(ranked[index].denseRank, options.RRFConstant)
+		ranked[index].fusedScore = rrfTerm(ranked[index].denseRank, rrfConstant)
 		if ranked[index].lexicalRank > 0 {
-			ranked[index].fusedScore += rrfTerm(ranked[index].lexicalRank, options.RRFConstant)
+			ranked[index].fusedScore += rrfTerm(ranked[index].lexicalRank, rrfConstant)
 		}
 	}
 	sortFused(ranked)
 
-	limit := min(options.Limit, len(ranked))
+	limit = min(limit, len(ranked))
 	results := make([]Result, limit)
 	for index := range results {
 		results[index] = Result{
@@ -132,7 +153,7 @@ func Rank(rawQuery string, candidates []Candidate, options Options) ([]Result, e
 			Lexical:     ranked[index].lexical.diagnostics,
 		}
 	}
-	return results, nil
+	return results
 }
 
 func validateOptions(options Options) error {

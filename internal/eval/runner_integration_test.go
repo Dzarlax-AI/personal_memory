@@ -16,6 +16,7 @@ import (
 
 	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
 	"github.com/Dzarlax-AI/personal-memory/internal/memory/lifecycle"
+	"github.com/Dzarlax-AI/personal-memory/internal/retrieval"
 )
 
 func TestPublicV2FixtureRunnerIntegration(t *testing.T) {
@@ -650,6 +651,71 @@ func TestLiveV3HybridLifecycleAuthorityUsesPoolBeforeTopK(t *testing.T) {
 				t.Fatalf("authority results = %+v", results)
 			}
 		})
+	}
+}
+
+func TestLiveV3HybridLifecyclePromotesCanonicalBeyondRankOneHundred(t *testing.T) {
+	searchLimit := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/collections/memory" {
+			writeLiveIdentityCollection(w, 101)
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/search" {
+			var body struct {
+				Limit int `json:"limit"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode search: %v", err)
+			}
+			searchLimit = body.Limit
+			points := make([]map[string]any, 0, 101)
+			for i := 0; i < 100; i++ {
+				points = append(points, map[string]any{
+					"id": 1000 + i, "score": .99 - float64(i)/1000,
+					"payload": map[string]any{
+						"text": "PM-1427 lexical candidate", "lifecycle_state": "current",
+						"canonical": false, "supersedes": []any{}, "superseded_by": []any{},
+					},
+				})
+			}
+			points = append(points, map[string]any{
+				"id": 42, "score": .001,
+				"payload": map[string]any{
+					"text": "unrelated canonical", "lifecycle_state": "current",
+					"canonical": true, "supersedes": []any{}, "superseded_by": []any{},
+				},
+			})
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": points})
+			return
+		}
+		http.Error(w, "unexpected request", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	dataset, err := Load(strings.NewReader(validV3Dataset()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset.Embedding.Provider = "tei"
+	dataset.Facts = nil
+	dataset.Queries[0].Text = "PM-1427"
+	dataset.Queries[0].LifecycleExpectations = nil
+	dataset.Queries[0].ForbiddenIDs = nil
+	dataset.Configuration.RetrievalStrategy = RetrievalHybridRRF
+	dataset.Configuration.DenseCandidateLimit = retrieval.MaxCandidates
+	dataset.Configuration.RRFConstant = 60
+	report, err := Run(context.Background(), dataset, RunOptions{
+		Source: "live", QdrantURL: server.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if searchLimit != retrieval.MaxCandidates {
+		t.Fatalf("dense search limit = %d, want %d", searchLimit, retrieval.MaxCandidates)
+	}
+	results := report.Queries[0].Results
+	if len(results) != 3 || results[0].ID != "42" || results[0].Score != .001 {
+		t.Fatalf("authority results = %+v", results)
 	}
 }
 

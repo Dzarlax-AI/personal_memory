@@ -367,11 +367,11 @@ func executeQueriesTimed(ctx context.Context, dataset *Dataset, clients collecti
 			}
 			points, err = clients.facts.Search(ctx, query.Vector, candidateLimit, filter, nil)
 			if err == nil {
-				rerankLimit := maxK
 				if dataset.Configuration.RetrievalStrategy == RetrievalHybridRRF {
-					rerankLimit = min(len(points), retrieval.MaxResults)
+					points, err = rerankAllPoints(query.Text, points, dataset.Configuration, "facts", documentsRoot)
+				} else {
+					points, err = rerankPoints(query.Text, points, maxK, dataset.Configuration, "facts", documentsRoot)
 				}
-				points, err = rerankPoints(query.Text, points, rerankLimit, dataset.Configuration, "facts", documentsRoot)
 			}
 		case query.Mode == "flat":
 			candidateLimit := searchLimit
@@ -596,15 +596,7 @@ func rerankPoints(rawQuery string, points []qdrant.Point, limit int, cfg Configu
 	if cfg.RetrievalStrategy != RetrievalHybridRRF || len(points) == 0 {
 		return points, nil
 	}
-	byID := make(map[string]qdrant.Point, len(points))
-	candidates := make([]retrieval.Candidate, 0, len(points))
-	for _, point := range points {
-		fields := lexicalFields(point.Payload, kind, documentsRoot)
-		byID[point.ID] = point
-		candidates = append(candidates, retrieval.Candidate{
-			ID: point.ID, DenseScore: point.Score, Fields: fields, DenseOnly: len(fields) == 0,
-		})
-	}
+	byID, candidates := retrievalCandidates(points, kind, documentsRoot)
 	ranked, err := retrieval.Rank(rawQuery, candidates, retrieval.Options{
 		RRFConstant: cfg.RRFConstant, Limit: min(limit, retrieval.MaxResults),
 	})
@@ -616,6 +608,35 @@ func rerankPoints(rawQuery string, points []qdrant.Point, limit int, cfg Configu
 		result[i] = byID[ranked[i].Candidate.ID]
 	}
 	return result, nil
+}
+
+func rerankAllPoints(rawQuery string, points []qdrant.Point, cfg Configuration, kind, documentsRoot string) ([]qdrant.Point, error) {
+	if cfg.RetrievalStrategy != RetrievalHybridRRF || len(points) == 0 {
+		return points, nil
+	}
+	byID, candidates := retrievalCandidates(points, kind, documentsRoot)
+	ranked, err := retrieval.RankAll(rawQuery, candidates, cfg.RRFConstant)
+	if err != nil {
+		return nil, fmt.Errorf("hybrid rank full %s candidate pool: %w", kind, err)
+	}
+	result := make([]qdrant.Point, len(ranked))
+	for i := range ranked {
+		result[i] = byID[ranked[i].Candidate.ID]
+	}
+	return result, nil
+}
+
+func retrievalCandidates(points []qdrant.Point, kind, documentsRoot string) (map[string]qdrant.Point, []retrieval.Candidate) {
+	byID := make(map[string]qdrant.Point, len(points))
+	candidates := make([]retrieval.Candidate, 0, len(points))
+	for _, point := range points {
+		fields := lexicalFields(point.Payload, kind, documentsRoot)
+		byID[point.ID] = point
+		candidates = append(candidates, retrieval.Candidate{
+			ID: point.ID, DenseScore: point.Score, Fields: fields, DenseOnly: len(fields) == 0,
+		})
+	}
+	return byID, candidates
 }
 
 func lexicalFields(payload map[string]any, kind, documentsRoot string) []retrieval.Field {
