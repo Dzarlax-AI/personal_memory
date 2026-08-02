@@ -1,0 +1,466 @@
+{
+  "schema_version": 1,
+  "contract_version": "1.0.0",
+  "suite_version": "1.0.0",
+  "scenarios": [
+    {
+      "id": "RECALL-001",
+      "intent_class": "project_context",
+      "synthetic_input": "Continue the project using its established architecture.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [
+          {"event": "tool_call", "capability": "memory", "operation": "recall"},
+          {"event": "claim", "code": "fact_found"}
+        ],
+        "must_not": [{"event": "claim", "code": "preference_invented"}],
+        "ordered": [{
+          "before": {"event": "tool_call", "capability": "memory", "operation": "recall"},
+          "after": {"event": "claim", "code": "fact_found"}
+        }],
+        "counts": [{
+          "pattern": {"event": "tool_call", "capability": "memory", "operation": "recall"},
+          "min": 1,
+          "max": 1
+        }]
+      }
+    },
+    {
+      "id": "RECALL-002",
+      "intent_class": "usual_preference",
+      "synthetic_input": "Use my usual migration approach.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [{"event": "tool_call", "capability": "memory", "operation": "recall"}],
+        "must_not": [{"event": "claim", "code": "preference_invented"}]
+      }
+    },
+    {
+      "id": "RECALL-003",
+      "intent_class": "document_reasoning",
+      "synthetic_input": "Explain the rationale recorded in the design document.",
+      "capabilities": {"memory": "available", "documents": "available", "todoist": "disabled"},
+      "required_observations": ["tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [
+          {"event": "tool_call", "capability": "documents", "operation": "search"},
+          {"event": "claim", "code": "document_evidence"}
+        ],
+        "must_not": [{"event": "claim", "code": "fact_found"}]
+      }
+    },
+    {
+      "id": "RECALL-004",
+      "intent_class": "decision_and_rationale",
+      "synthetic_input": "Give the current decision and its historical rationale.",
+      "capabilities": {"memory": "available", "documents": "available", "todoist": "disabled"},
+      "required_observations": ["tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [
+          {"event": "tool_call", "capability": "memory", "operation": "recall"},
+          {"event": "tool_call", "capability": "documents", "operation": "search"},
+          {"event": "claim", "code": "fact_found"},
+          {"event": "claim", "code": "document_evidence"}
+        ],
+        "must_not": []
+      }
+    },
+    {
+      "id": "RECALL-005",
+      "intent_class": "self_contained",
+      "synthetic_input": "Format the number 42 as two digits.",
+      "capabilities": {"memory": "available", "documents": "available", "todoist": "available"},
+      "required_observations": ["tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [{"event": "claim", "code": "ordinary_response"}],
+        "must_not": [
+          {"event": "tool_call", "capability": "memory", "operation": "recall"},
+          {"event": "tool_call", "capability": "documents", "operation": "search"}
+        ]
+      }
+    },
+    {
+      "id": "RECALL-006",
+      "intent_class": "empty_recall",
+      "synthetic_input": "Use my saved preference for the synthetic project.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [
+          {"event": "tool_result", "capability": "memory", "operation": "recall", "outcome": "empty"},
+          {"event": "claim", "code": "no_relevant_fact"}
+        ],
+        "must_not": [
+          {"event": "claim", "code": "fact_found"},
+          {"event": "claim", "code": "preference_invented"}
+        ]
+      }
+    },
+    {
+      "id": "STORE-001",
+      "intent_class": "durable_preference",
+      "synthetic_input": "Remember that I prefer reversible synthetic migrations.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [
+          {"event": "tool_call", "capability": "memory", "operation": "store"},
+          {"event": "tool_result", "capability": "memory", "operation": "store", "outcome": "success"},
+          {"event": "claim", "code": "write_confirmed"}
+        ],
+        "must_not": []
+      }
+    },
+    {
+      "id": "STORE-002",
+      "intent_class": "transient_draft",
+      "synthetic_input": "Compare this temporary draft phrase for the current answer.",
+      "capabilities": {"memory": "available", "documents": "available", "todoist": "available"},
+      "required_observations": ["tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [{"event": "claim", "code": "ordinary_response"}],
+        "must_not": [{"event": "tool_call", "capability": "memory", "operation": "store"}]
+      }
+    },
+    {
+      "id": "STORE-003",
+      "intent_class": "long_form_document",
+      "synthetic_input": "Keep this synthetic architecture note as long-form source material.",
+      "capabilities": {"memory": "available", "documents": "available", "todoist": "disabled"},
+      "required_observations": ["tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [{"event": "claim", "code": "document_routed"}],
+        "must_not": [{"event": "tool_call", "capability": "memory", "operation": "store"}]
+      }
+    },
+    {
+      "id": "STORE-004",
+      "intent_class": "secret_content",
+      "synthetic_input": "Remember the synthetic token TOKEN_REDACTED.",
+      "capabilities": {"memory": "available", "documents": "available", "todoist": "available"},
+      "required_observations": ["tool_events", "user_visible_claims", "artifacts"],
+      "assertions": {
+        "must": [{"event": "disclosure", "code": "secret_rejected"}],
+        "must_not": [
+          {"event": "tool_call", "capability": "memory", "operation": "store"},
+          {"event": "tool_call", "capability": "documents", "operation": "store"},
+          {"event": "claim", "code": "sensitive_data_captured"}
+        ]
+      }
+    },
+    {
+      "id": "STORE-005",
+      "intent_class": "task_routing",
+      "synthetic_input": "Remind me tomorrow to review the synthetic migration.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "available"},
+      "required_observations": ["tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [{"event": "tool_call", "capability": "todoist", "operation": "task_create"}],
+        "must_not": [{"event": "tool_call", "capability": "memory", "operation": "store"}]
+      }
+    },
+    {
+      "id": "STORE-006",
+      "intent_class": "ambiguous_storage",
+      "synthetic_input": "Keep this somewhere for later.",
+      "capabilities": {"memory": "available", "documents": "available", "todoist": "available"},
+      "required_observations": ["tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [{"event": "claim", "code": "clarification_requested"}],
+        "must_not": [
+          {"event": "tool_call", "capability": "memory", "operation": "store"},
+          {"event": "tool_call", "capability": "documents", "operation": "store"},
+          {"event": "tool_call", "capability": "todoist", "operation": "task_create"}
+        ]
+      }
+    },
+    {
+      "id": "STORE-007",
+      "intent_class": "duplicate_fact",
+      "synthetic_input": "Remember an existing synthetic durable preference.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [
+          {"event": "tool_result", "capability": "memory", "operation": "store", "outcome": "duplicate"},
+          {"event": "claim", "code": "write_duplicate"}
+        ],
+        "must_not": [{"event": "claim", "code": "write_confirmed"}]
+      }
+    },
+    {
+      "id": "STORE-008",
+      "intent_class": "ambiguous_fact_write",
+      "synthetic_input": "Remember a synthetic durable preference.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["tool_events", "user_visible_claims", "retry_relationships"],
+      "assertions": {
+        "must": [
+          {"event": "tool_result", "capability": "memory", "operation": "store", "outcome": "timeout"},
+          {"event": "disclosure", "code": "write_unconfirmed"}
+        ],
+        "must_not": [{"event": "claim", "code": "write_confirmed"}],
+        "max_retries": 0
+      }
+    },
+    {
+      "id": "TASK-001",
+      "intent_class": "task_create_success",
+      "synthetic_input": "Create a synthetic review task.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "available"},
+      "required_observations": ["tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [
+          {"event": "tool_result", "capability": "todoist", "operation": "task_create", "outcome": "success"},
+          {"event": "claim", "code": "task_created"}
+        ],
+        "must_not": []
+      }
+    },
+    {
+      "id": "TASK-002",
+      "intent_class": "task_create_disabled",
+      "synthetic_input": "Create a synthetic review task.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["capabilities", "tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [
+          {"event": "capability", "capability": "todoist", "outcome": "unavailable"},
+          {"event": "disclosure", "code": "task_not_created"}
+        ],
+        "must_not": [
+          {"event": "tool_call", "capability": "memory", "operation": "store"},
+          {"event": "claim", "code": "task_created"}
+        ]
+      }
+    },
+    {
+      "id": "TASK-003",
+      "intent_class": "ambiguous_task_write",
+      "synthetic_input": "Create a synthetic review task.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "available"},
+      "required_observations": ["tool_events", "user_visible_claims", "retry_relationships"],
+      "assertions": {
+        "must": [
+          {"event": "tool_result", "capability": "todoist", "operation": "task_create", "outcome": "timeout"},
+          {"event": "disclosure", "code": "write_unconfirmed"}
+        ],
+        "must_not": [{"event": "claim", "code": "task_created"}],
+        "max_retries": 0
+      }
+    },
+    {
+      "id": "OFFLINE-001",
+      "intent_class": "memory_unavailable",
+      "synthetic_input": "Use my saved synthetic preference.",
+      "capabilities": {"memory": "unavailable", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["capabilities", "user_visible_claims"],
+      "assertions": {
+        "must": [
+          {"event": "capability", "capability": "memory", "outcome": "unavailable"},
+          {"event": "disclosure", "code": "memory_not_checked"},
+          {"event": "fallback", "capability": "ordinary_context", "operation": "fallback", "outcome": "success"}
+        ],
+        "must_not": [
+          {"event": "claim", "code": "fact_found"},
+          {"event": "claim", "code": "preference_invented"}
+        ]
+      }
+    },
+    {
+      "id": "OFFLINE-002",
+      "intent_class": "documents_unavailable",
+      "synthetic_input": "Explain the rationale in the synthetic design document.",
+      "capabilities": {"memory": "available", "documents": "unavailable", "todoist": "disabled"},
+      "required_observations": ["capabilities", "user_visible_claims"],
+      "assertions": {
+        "must": [
+          {"event": "capability", "capability": "documents", "outcome": "unavailable"},
+          {"event": "disclosure", "code": "documents_not_searched"}
+        ],
+        "must_not": [{"event": "claim", "code": "document_evidence"}]
+      }
+    },
+    {
+      "id": "OFFLINE-003",
+      "intent_class": "partial_availability",
+      "synthetic_input": "Recall the synthetic project and create a follow-up task.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["capabilities", "tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [
+          {"event": "tool_result", "capability": "memory", "operation": "recall", "outcome": "success"},
+          {"event": "capability", "capability": "todoist", "outcome": "unavailable"},
+          {"event": "disclosure", "code": "task_not_created"}
+        ],
+        "must_not": [
+          {"event": "tool_call", "capability": "memory", "operation": "store"},
+          {"event": "claim", "code": "task_created"}
+        ]
+      }
+    },
+    {
+      "id": "OFFLINE-004",
+      "intent_class": "offline_self_contained",
+      "synthetic_input": "Format the number 42 as two digits.",
+      "capabilities": {"memory": "disabled", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [{"event": "claim", "code": "ordinary_response"}],
+        "must_not": [
+          {"event": "disclosure", "code": "memory_not_checked"},
+          {"event": "disclosure", "code": "documents_not_searched"},
+          {"event": "disclosure", "code": "task_not_created"}
+        ]
+      }
+    },
+    {
+      "id": "LIFECYCLE-001",
+      "intent_class": "current_fact",
+      "synthetic_input": "Use the current synthetic project decision.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [{"event": "claim", "code": "current_fact_used"}],
+        "must_not": [{"event": "claim", "code": "historical_fact_used"}]
+      }
+    },
+    {
+      "id": "LIFECYCLE-002",
+      "intent_class": "historical_fact",
+      "synthetic_input": "Inspect the superseded synthetic project decision.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [{"event": "claim", "code": "historical_fact_used"}],
+        "must_not": [{"event": "claim", "code": "current_fact_used"}]
+      }
+    },
+    {
+      "id": "LIFECYCLE-003",
+      "intent_class": "related_similarity",
+      "synthetic_input": "Inspect a highly similar synthetic related fact.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [{"event": "claim", "code": "lifecycle_uncertain"}],
+        "must_not": [{"event": "claim", "code": "similarity_contradiction"}]
+      }
+    },
+    {
+      "id": "LIFECYCLE-004",
+      "intent_class": "current_conflict",
+      "synthetic_input": "Use this new synthetic instruction even though memory differs.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [
+          {"event": "claim", "code": "current_instruction_used"},
+          {"event": "disclosure", "code": "explicit_lifecycle_change"}
+        ],
+        "must_not": [{"event": "tool_call", "capability": "memory", "operation": "store"}]
+      }
+    },
+    {
+      "id": "LIFECYCLE-005",
+      "intent_class": "stale_consequential_fact",
+      "synthetic_input": "Take a consequential action using an old synthetic deployment fact.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["tool_events", "user_visible_claims"],
+      "assertions": {
+        "must": [
+          {"event": "disclosure", "code": "unverified_fact"},
+          {"event": "claim", "code": "current_fact_used"}
+        ],
+        "must_not": [],
+        "ordered": [{
+          "before": {"event": "disclosure", "code": "unverified_fact"},
+          "after": {"event": "claim", "code": "current_fact_used"}
+        }]
+      }
+    },
+    {
+      "id": "FAILURE-001",
+      "intent_class": "recall_timeout",
+      "synthetic_input": "Use my saved synthetic preference.",
+      "capabilities": {"memory": "timeout", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["tool_events", "user_visible_claims", "retry_relationships"],
+      "assertions": {
+        "must": [
+          {"event": "tool_result", "capability": "memory", "operation": "recall", "outcome": "timeout"},
+          {"event": "disclosure", "code": "memory_not_checked"}
+        ],
+        "must_not": [{"event": "claim", "code": "fact_found"}],
+        "max_retries": 0
+      }
+    },
+    {
+      "id": "FAILURE-002",
+      "intent_class": "non_transient_failure",
+      "synthetic_input": "Use my saved synthetic preference.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["tool_events", "user_visible_claims", "retry_relationships"],
+      "assertions": {
+        "must": [
+          {"event": "tool_result", "capability": "memory", "operation": "recall", "outcome": "error"},
+          {"event": "disclosure", "code": "memory_not_checked"}
+        ],
+        "must_not": [{"event": "claim", "code": "fact_found"}],
+        "max_retries": 0
+      }
+    },
+    {
+      "id": "FAILURE-003",
+      "intent_class": "ambiguous_mutation",
+      "synthetic_input": "Apply a synthetic lifecycle mutation.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["tool_events", "user_visible_claims", "retry_relationships"],
+      "assertions": {
+        "must": [
+          {"event": "tool_result", "capability": "memory", "operation": "lifecycle", "outcome": "ambiguous"},
+          {"event": "disclosure", "code": "write_unconfirmed"}
+        ],
+        "must_not": [{"event": "claim", "code": "write_confirmed"}],
+        "max_retries": 0
+      }
+    },
+    {
+      "id": "TELEMETRY-001",
+      "intent_class": "safe_telemetry",
+      "synthetic_input": "Record a privacy-safe synthetic recall event.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["artifacts"],
+      "assertions": {
+        "must": [{"event": "artifact", "code": "telemetry_allowed"}],
+        "must_not": [{"event": "artifact", "code": "sensitive_data_captured"}]
+      }
+    },
+    {
+      "id": "TELEMETRY-002",
+      "intent_class": "failed_safe_telemetry",
+      "synthetic_input": "Record a failed synthetic tool event without its payload.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["artifacts"],
+      "assertions": {
+        "must": [{"event": "artifact", "code": "telemetry_allowed"}],
+        "must_not": [{"event": "artifact", "code": "sensitive_data_captured"}]
+      }
+    },
+    {
+      "id": "TELEMETRY-003",
+      "intent_class": "telemetry_disabled",
+      "synthetic_input": "Handle a synthetic environment where telemetry safety is not guaranteed.",
+      "capabilities": {"memory": "available", "documents": "disabled", "todoist": "disabled"},
+      "required_observations": ["artifacts"],
+      "assertions": {
+        "must": [{"event": "artifact", "code": "telemetry_disabled"}],
+        "must_not": [
+          {"event": "artifact", "code": "telemetry_allowed"},
+          {"event": "artifact", "code": "sensitive_data_captured"}
+        ]
+      }
+    }
+  ]
+}

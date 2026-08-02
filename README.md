@@ -404,7 +404,7 @@ Canonical verification:
 make test
 ```
 
-This downloads and checksum-verifies pinned visualization assets, runs `go vet ./...`, runs all Go tests, and builds all four commands.
+This downloads and checksum-verifies pinned visualization assets, runs `go vet ./...`, runs all Go tests, and builds all six commands.
 
 Individual commands:
 
@@ -412,7 +412,7 @@ Individual commands:
 make dev-deps
 go test ./...
 go test -race ./...
-go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle
+go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory ./cmd/conformance-memory
 docker build -t personal-memory .
 ```
 
@@ -422,6 +422,9 @@ The final image contains:
 - `/personal-memory-indexer` — one-shot RAG indexer;
 - `/personal-memory-migrate-ids` — memory ID migration utility.
 - `/personal-memory-migrate-lifecycle` — dry-run/apply/rollback lifecycle migration utility.
+
+The evaluation and conformance CLIs are developer and release tools. They are
+built by `make test` but are not included in the runtime image.
 
 Lifecycle migration is not part of deployment and never runs at server startup:
 
@@ -575,6 +578,16 @@ Ordinary CI uses precomputed vectors and does not start TEI. Run
 `make eval-public` against a local Qdrant instance; see
 [`docs/evaluation.md`](docs/evaluation.md) for fixture, read-only live, privacy,
 baseline, and gate semantics.
+
+### Model memory conformance
+
+The repository also includes a deterministic public suite for the normative
+[Model Memory Usage Contract](docs/model-usage-contract.md). It verifies client
+tool choices, disabled-capability behavior, disclosures, retry limits, and
+privacy-safe traces without external model credentials. Run
+`make conformance-public`; see
+[`docs/conformance.md`](docs/conformance.md) for report semantics and the
+optional live-adapter protocol.
 
 ### Embedding identity and controlled model changes
 

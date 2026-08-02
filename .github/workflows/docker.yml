@@ -10,7 +10,10 @@ on:
       - "go.mod"
       - "go.sum"
       - "Dockerfile"
+      - "Makefile"
       - "evaldata/public/**"
+      - "conformancedata/public/**"
+      - "docs/model-usage-contract.md"
       - "internal/viz/static/**"
       - ".github/workflows/docker.yml"
   pull_request:
@@ -19,7 +22,10 @@ on:
       - "go.mod"
       - "go.sum"
       - "Dockerfile"
+      - "Makefile"
       - "evaldata/public/**"
+      - "conformancedata/public/**"
+      - "docs/model-usage-contract.md"
       - "internal/viz/static/**"
       - ".github/workflows/docker.yml"
 
@@ -151,6 +157,60 @@ jobs:
             eval-results/public.json
             eval-results/public.md
             eval-results/comparison.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Run public model memory conformance
+        run: make conformance-public
+
+      - name: Publish model memory conformance summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Model memory conformance"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if ! jq -e '
+            type == "object" and
+            .schema_version == 1 and
+            (.gates_passed | type == "boolean") and
+            (.aggregate | type == "object") and
+            (.results | type == "array")
+          ' conformance-results/public.json >/dev/null 2>&1; then
+            {
+              echo "The conformance report is missing or invalid. See the conformance step and uploaded artifacts."
+              echo
+              echo "| Gates | Pass | Fail | Inconclusive | Error |"
+              echo "| --- | ---: | ---: | ---: | ---: |"
+              echo "| unavailable | — | — | — | — |"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          gates=$(jq -r 'if .gates_passed == true then "passed" elif .gates_passed == false then "failed" else "unavailable" end' conformance-results/public.json)
+          pass=$(jq -r '.aggregate.pass // "—"' conformance-results/public.json)
+          fail=$(jq -r '.aggregate.fail // "—"' conformance-results/public.json)
+          inconclusive=$(jq -r '.aggregate.inconclusive // "—"' conformance-results/public.json)
+          errors=$(jq -r '.aggregate.error // "—"' conformance-results/public.json)
+
+          {
+            echo "| Gates | Pass | Fail | Inconclusive | Error |"
+            echo "| --- | ---: | ---: | ---: | ---: |"
+            echo "| ${gates} | ${pass} | ${fail} | ${inconclusive} | ${errors} |"
+            echo
+            echo "The complete JSON and Markdown reports are attached as the \`model-memory-conformance\` artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload model memory conformance report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: model-memory-conformance
+          path: |
+            conformance-results/public.json
+            conformance-results/public.md
           if-no-files-found: warn
           retention-days: 14
 
