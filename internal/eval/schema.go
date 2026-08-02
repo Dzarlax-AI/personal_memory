@@ -16,11 +16,34 @@ import (
 // SchemaVersion is the original dataset and report schema version.
 const SchemaVersion = 1
 
-// CurrentDatasetSchemaVersion is the latest accepted dataset schema.
-const CurrentDatasetSchemaVersion = 2
+// LifecycleSchemaVersion added lifecycle evaluation contracts.
+const LifecycleSchemaVersion = 2
 
-// CurrentReportSchemaVersion is the report schema emitted for v2 datasets.
-const CurrentReportSchemaVersion = 2
+// CurrentDatasetSchemaVersion is the latest accepted dataset schema.
+const CurrentDatasetSchemaVersion = 3
+
+// CurrentReportSchemaVersion is the latest emitted report schema.
+const CurrentReportSchemaVersion = 3
+
+// InputProfile is the visible, versioned transformation applied before
+// embedding. These IDs intentionally mirror the production contract without
+// coupling immutable evaluation schemas to runtime configuration.
+type InputProfile string
+
+const (
+	LegacyRawV1      InputProfile = "legacy-raw-v1"
+	MultilingualE5V1 InputProfile = "multilingual-e5-v1"
+)
+
+const multilingualE5SmallModelID = "intfloat/multilingual-e5-small"
+
+// RetrievalStrategy identifies the ranking strategy under evaluation.
+type RetrievalStrategy string
+
+const (
+	RetrievalVectorOnly RetrievalStrategy = "vector-only"
+	RetrievalHybridRRF  RetrievalStrategy = "hybrid-rrf"
+)
 
 // PointID preserves whether a fixture ID was encoded as a JSON number or
 // string while exposing one normalized string form for relevance scoring.
@@ -100,23 +123,108 @@ func (id PointID) MarshalJSON() ([]byte, error) {
 
 // EmbeddingIdentity identifies the vector space used by a dataset.
 type EmbeddingIdentity struct {
-	Provider      string `json:"provider"`
-	ModelID       string `json:"model_id"`
-	ModelRevision string `json:"model_revision"`
-	DType         string `json:"dtype"`
-	Pooling       string `json:"pooling"`
-	VectorSize    int    `json:"vector_size"`
+	Provider      string       `json:"provider"`
+	ModelID       string       `json:"model_id"`
+	ModelRevision string       `json:"model_revision"`
+	DType         string       `json:"dtype"`
+	Pooling       string       `json:"pooling"`
+	VectorSize    int          `json:"vector_size"`
+	InputProfile  InputProfile `json:"input_profile,omitempty"`
+
+	inputProfilePresent bool
+}
+
+func (identity *EmbeddingIdentity) UnmarshalJSON(data []byte) error {
+	type wire EmbeddingIdentity
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var decoded wire
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if raw, exists := fields["input_profile"]; exists &&
+		bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("input_profile must be a string")
+	}
+	*identity = EmbeddingIdentity(decoded)
+	_, identity.inputProfilePresent = fields["input_profile"]
+	return nil
 }
 
 // Configuration captures retrieval settings that participate in report identity.
 type Configuration struct {
-	Name             string  `json:"name"`
-	FactCollection   string  `json:"fact_collection"`
-	ChunkCollection  string  `json:"chunk_collection"`
-	FolderCollection string  `json:"folder_collection"`
-	FolderTopK       int     `json:"folder_top_k"`
-	FolderThreshold  float64 `json:"folder_threshold"`
-	TopK             []int   `json:"top_k"`
+	Name                string            `json:"name"`
+	FactCollection      string            `json:"fact_collection"`
+	ChunkCollection     string            `json:"chunk_collection"`
+	FolderCollection    string            `json:"folder_collection"`
+	FolderTopK          int               `json:"folder_top_k"`
+	FolderThreshold     float64           `json:"folder_threshold"`
+	TopK                []int             `json:"top_k"`
+	RetrievalStrategy   RetrievalStrategy `json:"retrieval_strategy,omitempty"`
+	DenseCandidateLimit int               `json:"dense_candidate_limit,omitempty"`
+	RRFConstant         int               `json:"rrf_constant,omitempty"`
+
+	present map[string]bool
+}
+
+func (configuration *Configuration) UnmarshalJSON(data []byte) error {
+	type wire Configuration
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var decoded wire
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for _, field := range []string{"retrieval_strategy", "dense_candidate_limit", "rrf_constant"} {
+		if raw, exists := fields[field]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return fmt.Errorf("%s must not be null", field)
+		}
+	}
+	*configuration = Configuration(decoded)
+	configuration.present = make(map[string]bool, len(fields))
+	for field := range fields {
+		configuration.present[field] = true
+	}
+	return nil
+}
+
+func (configuration Configuration) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Name                string             `json:"name"`
+		FactCollection      string             `json:"fact_collection"`
+		ChunkCollection     string             `json:"chunk_collection"`
+		FolderCollection    string             `json:"folder_collection"`
+		FolderTopK          int                `json:"folder_top_k"`
+		FolderThreshold     float64            `json:"folder_threshold"`
+		TopK                []int              `json:"top_k"`
+		RetrievalStrategy   *RetrievalStrategy `json:"retrieval_strategy,omitempty"`
+		DenseCandidateLimit *int               `json:"dense_candidate_limit,omitempty"`
+		RRFConstant         *int               `json:"rrf_constant,omitempty"`
+	}
+	encoded := wire{
+		Name: configuration.Name, FactCollection: configuration.FactCollection,
+		ChunkCollection:  configuration.ChunkCollection,
+		FolderCollection: configuration.FolderCollection,
+		FolderTopK:       configuration.FolderTopK, FolderThreshold: configuration.FolderThreshold,
+		TopK: configuration.TopK,
+	}
+	if configuration.RetrievalStrategy != "" ||
+		configuration.present["retrieval_strategy"] ||
+		configuration.present["dense_candidate_limit"] ||
+		configuration.present["rrf_constant"] {
+		encoded.RetrievalStrategy = &configuration.RetrievalStrategy
+		encoded.DenseCandidateLimit = &configuration.DenseCandidateLimit
+		encoded.RRFConstant = &configuration.RRFConstant
+	}
+	return json.Marshal(encoded)
 }
 
 // FixturePoint is a synthetic Qdrant point used by fixture mode.
@@ -267,10 +375,12 @@ type Query struct {
 	Intent                QueryIntent            `json:"intent,omitempty"`
 	AsOf                  string                 `json:"as_of,omitempty"`
 	LifecycleExpectations []LifecycleExpectation `json:"lifecycle_expectations,omitempty"`
+	Cohorts               []QueryCohort          `json:"cohorts,omitempty"`
 
 	intentPresent                bool
 	asOfPresent                  bool
 	lifecycleExpectationsPresent bool
+	cohortsPresent               bool
 }
 
 // EffectiveIntent returns the normalized query intent without changing the
@@ -307,12 +417,28 @@ func (query *Query) UnmarshalJSON(data []byte) error {
 	if raw, exists := fields["lifecycle_expectations"]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return fmt.Errorf("query lifecycle_expectations must be an array")
 	}
+	if raw, exists := fields["cohorts"]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("query cohorts must be an array")
+	}
 	*query = Query(decoded)
 	_, query.intentPresent = fields["intent"]
 	_, query.asOfPresent = fields["as_of"]
 	_, query.lifecycleExpectationsPresent = fields["lifecycle_expectations"]
+	_, query.cohortsPresent = fields["cohorts"]
 	return nil
 }
+
+// QueryCohort identifies a stable query slice. Cohorts describe retrieval
+// shape only; lifecycle state remains a separate evaluation dimension.
+type QueryCohort string
+
+const (
+	CohortGeneralSemantic QueryCohort = "general-semantic"
+	CohortMultilingual    QueryCohort = "multilingual"
+	CohortExactName       QueryCohort = "exact-name"
+	CohortIdentifierPath  QueryCohort = "identifier-path"
+	CohortLifecycle       QueryCohort = "lifecycle"
+)
 
 // LifecyclePayload is the strict evaluation representation of lifecycle.Input.
 // Presence metadata lets validation require complete transition targets without
@@ -504,22 +630,67 @@ type QueryReport struct {
 	ID        string                `json:"id"`
 	Target    string                `json:"target"`
 	Mode      string                `json:"mode"`
+	Cohorts   []QueryCohort         `json:"cohorts,omitempty"`
 	Results   []RetrievedItem       `json:"results"`
 	Metrics   QueryMetrics          `json:"metrics"`
 	Lifecycle *QueryLifecycleReport `json:"lifecycle,omitempty"`
 }
 
+// CohortAggregateMetrics is a deterministic ranking aggregate for one cohort.
+type CohortAggregateMetrics struct {
+	Cohort              QueryCohort     `json:"cohort"`
+	QueryCount          int             `json:"query_count"`
+	HitAt               map[int]float64 `json:"hit_at"`
+	MRR                 float64         `json:"mrr"`
+	NDCGAt              map[int]float64 `json:"ndcg_at"`
+	InvariantViolations int             `json:"invariant_violations"`
+
+	present map[string]bool
+}
+
+func (metrics *CohortAggregateMetrics) UnmarshalJSON(data []byte) error {
+	type wire CohortAggregateMetrics
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var decoded wire
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for _, field := range []string{
+		"cohort", "query_count", "hit_at", "mrr", "ndcg_at", "invariant_violations",
+	} {
+		raw, exists := fields[field]
+		if !exists {
+			return fmt.Errorf("cohort aggregate field %s is required", field)
+		}
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return fmt.Errorf("cohort aggregate field %s must not be null", field)
+		}
+	}
+	*metrics = CohortAggregateMetrics(decoded)
+	metrics.present = make(map[string]bool, len(fields))
+	for field := range fields {
+		metrics.present[field] = true
+	}
+	return nil
+}
+
 // Report is the deterministic canonical evaluation output.
 type Report struct {
-	SchemaVersion  int               `json:"schema_version"`
-	DatasetVersion string            `json:"dataset_version"`
-	Mode           string            `json:"mode"`
-	Embedding      EmbeddingIdentity `json:"embedding"`
-	Configuration  Configuration     `json:"configuration"`
-	TopK           []int             `json:"top_k"`
-	Aggregate      AggregateMetrics  `json:"aggregate"`
-	Queries        []QueryReport     `json:"queries"`
-	Lifecycle      *LifecycleReport  `json:"lifecycle,omitempty"`
-	GatesPassed    bool              `json:"gates_passed"`
-	GateFailures   []string          `json:"gate_failures,omitempty"`
+	SchemaVersion  int                      `json:"schema_version"`
+	DatasetVersion string                   `json:"dataset_version"`
+	Mode           string                   `json:"mode"`
+	Embedding      EmbeddingIdentity        `json:"embedding"`
+	Configuration  Configuration            `json:"configuration"`
+	TopK           []int                    `json:"top_k"`
+	Aggregate      AggregateMetrics         `json:"aggregate"`
+	Cohorts        []CohortAggregateMetrics `json:"cohorts,omitempty"`
+	Queries        []QueryReport            `json:"queries"`
+	Lifecycle      *LifecycleReport         `json:"lifecycle,omitempty"`
+	GatesPassed    bool                     `json:"gates_passed"`
+	GateFailures   []string                 `json:"gate_failures,omitempty"`
 }

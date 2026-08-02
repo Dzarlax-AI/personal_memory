@@ -16,8 +16,21 @@ func normalizeReport(report Report) Report {
 	sort.Ints(report.TopK)
 	report.Queries = append([]QueryReport(nil), report.Queries...)
 	for i := range report.Queries {
+		report.Queries[i].Cohorts = append([]QueryCohort(nil), report.Queries[i].Cohorts...)
+		sort.Slice(report.Queries[i].Cohorts, func(a, b int) bool {
+			return report.Queries[i].Cohorts[a] < report.Queries[i].Cohorts[b]
+		})
 		report.Queries[i].Lifecycle = cloneQueryLifecycleReport(report.Queries[i].Lifecycle)
 	}
+	report.Cohorts = append([]CohortAggregateMetrics(nil), report.Cohorts...)
+	for i := range report.Cohorts {
+		report.Cohorts[i].HitAt = cloneMetricMap(report.Cohorts[i].HitAt)
+		report.Cohorts[i].NDCGAt = cloneMetricMap(report.Cohorts[i].NDCGAt)
+		report.Cohorts[i].present = clonePresence(report.Cohorts[i].present)
+	}
+	sort.Slice(report.Cohorts, func(i, j int) bool {
+		return report.Cohorts[i].Cohort < report.Cohorts[j].Cohort
+	})
 	report.Lifecycle = cloneLifecycleReport(report.Lifecycle)
 	sort.Slice(report.Queries, func(i, j int) bool { return report.Queries[i].ID < report.Queries[j].ID })
 	report.GateFailures = append([]string(nil), report.GateFailures...)
@@ -54,6 +67,17 @@ func normalizeReport(report Report) Report {
 		}
 	}
 	return report
+}
+
+func cloneMetricMap(source map[int]float64) map[int]float64 {
+	if source == nil {
+		return nil
+	}
+	cloned := make(map[int]float64, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func cloneQueryLifecycleReport(source *QueryLifecycleReport) *QueryLifecycleReport {
@@ -124,6 +148,10 @@ func RenderMarkdown(report Report) string {
 	fmt.Fprintf(&out, "- Mode: `%s`\n", report.Mode)
 	fmt.Fprintf(&out, "- Configuration: `%s`\n", report.Configuration.Name)
 	fmt.Fprintf(&out, "- Embedding: `%s@%s` (%s, %s, %d dimensions)\n", report.Embedding.ModelID, report.Embedding.ModelRevision, report.Embedding.DType, report.Embedding.Pooling, report.Embedding.VectorSize)
+	if report.SchemaVersion == CurrentReportSchemaVersion {
+		fmt.Fprintf(&out, "- Input profile: `%s`\n", report.Embedding.InputProfile)
+		fmt.Fprintf(&out, "- Retrieval strategy: `%s`\n", report.Configuration.RetrievalStrategy)
+	}
 	fmt.Fprintf(&out, "- Gates: `%t`\n\n", report.GatesPassed)
 	out.WriteString("## Aggregate\n\n")
 	out.WriteString("| Metric | Value |\n| --- | ---: |\n")
@@ -133,6 +161,16 @@ func RenderMarkdown(report Report) string {
 		fmt.Fprintf(&out, "| nDCG@%d | %.6f |\n", k, report.Aggregate.NDCGAt[k])
 	}
 	fmt.Fprintf(&out, "| Invariant violations | %d |\n", report.Aggregate.InvariantViolations)
+	if len(report.Cohorts) > 0 {
+		out.WriteString("\n## Cohorts\n\n")
+		out.WriteString("| Cohort | Queries | MRR | Invariant violations |\n")
+		out.WriteString("| --- | ---: | ---: | ---: |\n")
+		for _, cohort := range report.Cohorts {
+			fmt.Fprintf(&out, "| %s | %d | %.6f | %d |\n",
+				escapeMarkdown(string(cohort.Cohort)), cohort.QueryCount,
+				cohort.MRR, cohort.InvariantViolations)
+		}
+	}
 	if report.Lifecycle != nil {
 		out.WriteString("\n## Lifecycle\n\n")
 		out.WriteString("| Metric | Value |\n| --- | ---: |\n")
@@ -216,33 +254,46 @@ func DecodeReport(data []byte) (Report, error) {
 		}
 		return Report{}, fmt.Errorf("decode report trailing JSON: %w", err)
 	}
-	if (report.SchemaVersion != SchemaVersion && report.SchemaVersion != CurrentReportSchemaVersion) ||
+	if (report.SchemaVersion != SchemaVersion &&
+		report.SchemaVersion != LifecycleSchemaVersion &&
+		report.SchemaVersion != CurrentReportSchemaVersion) ||
 		strings.TrimSpace(report.DatasetVersion) == "" {
 		return Report{}, fmt.Errorf("report schema_version and dataset_version are invalid")
 	}
 	if report.SchemaVersion == SchemaVersion && report.Lifecycle != nil {
-		return Report{}, fmt.Errorf("report lifecycle section requires schema_version %d", CurrentReportSchemaVersion)
+		return Report{}, fmt.Errorf("report lifecycle section requires schema_version %d", LifecycleSchemaVersion)
 	}
 	if report.SchemaVersion == SchemaVersion {
 		for _, query := range report.Queries {
 			if query.Lifecycle != nil {
-				return Report{}, fmt.Errorf("query lifecycle section requires schema_version %d", CurrentReportSchemaVersion)
+				return Report{}, fmt.Errorf("query lifecycle section requires schema_version %d", LifecycleSchemaVersion)
 			}
 		}
 	}
-	if report.SchemaVersion == CurrentReportSchemaVersion && report.Lifecycle == nil {
-		return Report{}, fmt.Errorf("schema_version %d report requires lifecycle section", CurrentReportSchemaVersion)
+	if report.SchemaVersion >= LifecycleSchemaVersion && report.Lifecycle == nil {
+		return Report{}, fmt.Errorf("schema_version %d report requires lifecycle section", report.SchemaVersion)
 	}
 	if err := validateReportQueryContracts(report); err != nil {
 		return Report{}, fmt.Errorf("decode report query contract: %w", err)
 	}
-	if report.SchemaVersion == CurrentReportSchemaVersion {
+	if report.SchemaVersion >= LifecycleSchemaVersion {
 		if err := validateLifecycleReportPresence(report); err != nil {
 			return Report{}, fmt.Errorf("decode report lifecycle fields: %w", err)
 		}
 		if err := validateLifecycleReport(report); err != nil {
 			return Report{}, fmt.Errorf("decode report lifecycle: %w", err)
 		}
+	}
+	if report.SchemaVersion == CurrentReportSchemaVersion {
+		if err := validateV3Report(report); err != nil {
+			return Report{}, fmt.Errorf("decode report v3: %w", err)
+		}
+	} else if report.Embedding.inputProfilePresent ||
+		report.Configuration.present["retrieval_strategy"] ||
+		report.Configuration.present["dense_candidate_limit"] ||
+		report.Configuration.present["rrf_constant"] ||
+		report.Cohorts != nil {
+		return Report{}, fmt.Errorf("report v3 identity and cohort fields require schema_version %d", CurrentReportSchemaVersion)
 	}
 	return normalizeReport(report), nil
 }
@@ -269,15 +320,23 @@ func validateReportQueryContracts(report Report) error {
 		switch report.SchemaVersion {
 		case SchemaVersion:
 			if query.Lifecycle != nil {
-				return fmt.Errorf("query %q field lifecycle requires schema_version %d", query.ID, CurrentReportSchemaVersion)
+				return fmt.Errorf("query %q field lifecycle requires schema_version %d", query.ID, LifecycleSchemaVersion)
 			}
-		case CurrentReportSchemaVersion:
+		case LifecycleSchemaVersion, CurrentReportSchemaVersion:
 			if query.Target == "facts" && query.Lifecycle == nil {
 				return fmt.Errorf("query %q field lifecycle is required for facts", query.ID)
 			}
 			if query.Target == "documents" && query.Lifecycle != nil {
 				return fmt.Errorf("query %q field lifecycle must be omitted for documents", query.ID)
 			}
+		}
+		if report.SchemaVersion == CurrentReportSchemaVersion {
+			if err := validateQueryCohorts(query.ID, query.Cohorts, query.Cohorts != nil); err != nil {
+				return err
+			}
+		} else if query.Cohorts != nil {
+			return fmt.Errorf("query %q field cohorts requires schema_version %d",
+				query.ID, CurrentReportSchemaVersion)
 		}
 		if query.Lifecycle == nil {
 			continue
@@ -295,6 +354,86 @@ func validateReportQueryContracts(report Report) error {
 		}
 	}
 	return nil
+}
+
+func validateV3Report(report Report) error {
+	if report.Mode != "fixture" && report.Mode != "live" {
+		return fmt.Errorf("mode must be fixture or live")
+	}
+	if err := validateEmbeddingIdentity(report.Embedding, true); err != nil {
+		return err
+	}
+	configuration := report.Configuration
+	if err := validateBaseConfiguration(configuration); err != nil {
+		return err
+	}
+	topK := append([]int(nil), configuration.TopK...)
+	if err := normalizeTopK(&topK); err != nil {
+		return fmt.Errorf("configuration: %w", err)
+	}
+	if !equalInts(topK, configuration.TopK) {
+		return fmt.Errorf("configuration top_k must be sorted and unique")
+	}
+	if err := validateRetrievalConfiguration(configuration, true); err != nil {
+		return err
+	}
+	reportTopK := append([]int(nil), report.TopK...)
+	if err := normalizeTopK(&reportTopK); err != nil {
+		return fmt.Errorf("report: %w", err)
+	}
+	if !equalInts(reportTopK, report.TopK) || !equalInts(report.TopK, configuration.TopK) {
+		return fmt.Errorf("report top_k must be sorted, unique, and match configuration top_k")
+	}
+	if err := validateCohortAggregates(report); err != nil {
+		return err
+	}
+	queryMetrics := make([]QueryMetrics, len(report.Queries))
+	for i := range report.Queries {
+		if err := validateV3QueryMetrics(report.Queries[i].ID, report.Queries[i].Metrics, report.TopK); err != nil {
+			return err
+		}
+		queryMetrics[i] = report.Queries[i].Metrics
+	}
+	expectedAggregate := Aggregate(queryMetrics, report.TopK)
+	if report.Aggregate.InvariantViolations != expectedAggregate.InvariantViolations ||
+		!metricClose(report.Aggregate.MRR, expectedAggregate.MRR) ||
+		!metricMapClose(report.Aggregate.HitAt, expectedAggregate.HitAt, report.TopK) ||
+		!metricMapClose(report.Aggregate.NDCGAt, expectedAggregate.NDCGAt, report.TopK) {
+		return fmt.Errorf("aggregate metrics do not match query reports")
+	}
+	return nil
+}
+
+func validateV3QueryMetrics(queryID string, metrics QueryMetrics, topK []int) error {
+	if metrics.MRR < 0 || metrics.MRR > 1 ||
+		!metricClose(metrics.MRR, metrics.MRR) {
+		return fmt.Errorf("query %q MRR must be finite and between 0 and 1", queryID)
+	}
+	if len(metrics.HitAt) != len(topK) || len(metrics.NDCGAt) != len(topK) {
+		return fmt.Errorf("query %q metric maps must exactly match top_k", queryID)
+	}
+	for _, k := range topK {
+		hit, hitExists := metrics.HitAt[k]
+		ndcg, ndcgExists := metrics.NDCGAt[k]
+		if !hitExists || !ndcgExists ||
+			hit < 0 || hit > 1 || ndcg < 0 || ndcg > 1 ||
+			!metricClose(hit, hit) || !metricClose(ndcg, ndcg) {
+			return fmt.Errorf("query %q metrics for k=%d must be finite and between 0 and 1", queryID, k)
+		}
+	}
+	return nil
+}
+
+func equalInts(left, right []int) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func validateLifecycleReportPresence(report Report) error {

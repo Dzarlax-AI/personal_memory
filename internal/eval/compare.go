@@ -7,6 +7,10 @@ import (
 	"strconv"
 )
 
+// ComparisonEpsilon absorbs insignificant floating-point representation noise
+// while keeping evaluation gates conservative.
+const ComparisonEpsilon = 1e-12
+
 // MetricDelta stores candidate-minus-baseline ranking metric changes.
 type MetricDelta struct {
 	MRR    float64         `json:"mrr"`
@@ -24,13 +28,26 @@ type QueryDelta struct {
 
 // Comparison is the deterministic baseline/candidate comparison output.
 type Comparison struct {
-	SchemaVersion  int                  `json:"schema_version"`
-	DatasetVersion string               `json:"dataset_version"`
-	Aggregate      MetricDelta          `json:"aggregate"`
-	Queries        []QueryDelta         `json:"queries"`
-	Lifecycle      *LifecycleComparison `json:"lifecycle,omitempty"`
-	GatesPassed    bool                 `json:"gates_passed"`
-	GateFailures   []string             `json:"gate_failures,omitempty"`
+	SchemaVersion          int                  `json:"schema_version"`
+	DatasetVersion         string               `json:"dataset_version"`
+	BaselineEmbedding      *EmbeddingIdentity   `json:"baseline_embedding,omitempty"`
+	CandidateEmbedding     *EmbeddingIdentity   `json:"candidate_embedding,omitempty"`
+	BaselineConfiguration  *Configuration       `json:"baseline_configuration,omitempty"`
+	CandidateConfiguration *Configuration       `json:"candidate_configuration,omitempty"`
+	Aggregate              MetricDelta          `json:"aggregate"`
+	Cohorts                []CohortComparison   `json:"cohorts,omitempty"`
+	Queries                []QueryDelta         `json:"queries"`
+	Lifecycle              *LifecycleComparison `json:"lifecycle,omitempty"`
+	GatesPassed            bool                 `json:"gates_passed"`
+	GateFailures           []string             `json:"gate_failures,omitempty"`
+}
+
+// CohortComparison keeps protected and exploratory cohort results auditable.
+type CohortComparison struct {
+	Cohort    QueryCohort            `json:"cohort"`
+	Baseline  CohortAggregateMetrics `json:"baseline"`
+	Candidate CohortAggregateMetrics `json:"candidate"`
+	Metrics   MetricDelta            `json:"metrics"`
 }
 
 // LifecycleComparison keeps lifecycle regressions visible without blending
@@ -45,9 +62,16 @@ type LifecycleComparison struct {
 // Compare validates report compatibility and computes candidate deltas.
 func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) {
 	if baseline.SchemaVersion != candidate.SchemaVersion ||
-		baseline.DatasetVersion != candidate.DatasetVersion ||
-		baseline.Embedding != candidate.Embedding ||
-		!reflect.DeepEqual(baseline.Configuration, candidate.Configuration) {
+		baseline.DatasetVersion != candidate.DatasetVersion {
+		return Comparison{}, fmt.Errorf("baseline and candidate identities are incompatible")
+	}
+	if baseline.SchemaVersion == CurrentReportSchemaVersion {
+		if !baseEmbeddingIdentityEqual(baseline.Embedding, candidate.Embedding) ||
+			!baseConfigurationEqual(baseline.Configuration, candidate.Configuration) {
+			return Comparison{}, fmt.Errorf("baseline and candidate identities are incompatible")
+		}
+	} else if !strictEmbeddingIdentityEqual(baseline.Embedding, candidate.Embedding) ||
+		!strictConfigurationEqual(baseline.Configuration, candidate.Configuration) {
 		return Comparison{}, fmt.Errorf("baseline and candidate identities are incompatible")
 	}
 	if err := validateMatchedQueryContracts(baseline, candidate); err != nil {
@@ -59,9 +83,9 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 	if err := validateReportQueryContracts(candidate); err != nil {
 		return Comparison{}, fmt.Errorf("candidate report query contract is invalid: %w", err)
 	}
-	if baseline.SchemaVersion == CurrentReportSchemaVersion {
+	if baseline.SchemaVersion >= LifecycleSchemaVersion {
 		if baseline.Lifecycle == nil || candidate.Lifecycle == nil {
-			return Comparison{}, fmt.Errorf("schema_version %d reports require lifecycle sections", CurrentReportSchemaVersion)
+			return Comparison{}, fmt.Errorf("schema_version %d reports require lifecycle sections", baseline.SchemaVersion)
 		}
 		if err := validateLifecycleReport(baseline); err != nil {
 			return Comparison{}, fmt.Errorf("baseline lifecycle report is invalid: %w", err)
@@ -85,6 +109,23 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 		GatesPassed:    !enforceGates || candidate.GatesPassed,
 	}
 	if baseline.SchemaVersion == CurrentReportSchemaVersion {
+		if err := validateV3Report(baseline); err != nil {
+			return Comparison{}, fmt.Errorf("baseline v3 report is invalid: %w", err)
+		}
+		if err := validateV3Report(candidate); err != nil {
+			return Comparison{}, fmt.Errorf("candidate v3 report is invalid: %w", err)
+		}
+		baselineEmbedding := baseline.Embedding
+		candidateEmbedding := candidate.Embedding
+		baselineConfiguration := cloneConfiguration(baseline.Configuration)
+		candidateConfiguration := cloneConfiguration(candidate.Configuration)
+		comparison.BaselineEmbedding = &baselineEmbedding
+		comparison.CandidateEmbedding = &candidateEmbedding
+		comparison.BaselineConfiguration = &baselineConfiguration
+		comparison.CandidateConfiguration = &candidateConfiguration
+		comparison.Cohorts = compareCohorts(baseline, candidate)
+	}
+	if baseline.SchemaVersion >= LifecycleSchemaVersion {
 		comparison.Lifecycle = &LifecycleComparison{
 			BaselineAggregate:   baseline.Lifecycle.Aggregate,
 			CandidateAggregate:  candidate.Lifecycle.Aggregate,
@@ -93,7 +134,17 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 		}
 	}
 	if enforceGates {
-		comparison.GateFailures = append([]string(nil), candidate.GateFailures...)
+		if baseline.SchemaVersion == CurrentReportSchemaVersion {
+			if !candidate.GatesPassed || len(candidate.GateFailures) != 0 {
+				comparison.GateFailures = append(comparison.GateFailures, "candidate dataset gates failed")
+			}
+			comparison.GateFailures = append(comparison.GateFailures,
+				evaluateV3ComparisonGates(baseline, candidate)...)
+			comparison.GateFailures = uniqueSorted(comparison.GateFailures)
+			comparison.GatesPassed = len(comparison.GateFailures) == 0
+		} else {
+			comparison.GateFailures = append([]string(nil), candidate.GateFailures...)
+		}
 		sort.Strings(comparison.GateFailures)
 	}
 	baseQueries := make(map[string]QueryReport, len(baseline.Queries))
@@ -142,7 +193,7 @@ func validateMatchedQueryContracts(baseline, candidate Report) error {
 		if (baselineQuery.Lifecycle == nil) != (candidateQuery.Lifecycle == nil) {
 			return queryContractMismatch(candidateQuery.ID, "lifecycle")
 		}
-		if baseline.SchemaVersion == CurrentReportSchemaVersion && baselineQuery.Lifecycle != nil {
+		if baseline.SchemaVersion >= LifecycleSchemaVersion && baselineQuery.Lifecycle != nil {
 			if baselineQuery.Lifecycle.Intent != candidateQuery.Lifecycle.Intent {
 				return queryContractMismatch(candidateQuery.ID, "intent")
 			}
@@ -150,12 +201,54 @@ func validateMatchedQueryContracts(baseline, candidate Report) error {
 				return queryContractMismatch(candidateQuery.ID, "as_of")
 			}
 		}
+		if baseline.SchemaVersion == CurrentReportSchemaVersion &&
+			!reflect.DeepEqual(baselineQuery.Cohorts, candidateQuery.Cohorts) {
+			return queryContractMismatch(candidateQuery.ID, "cohorts")
+		}
 		delete(baselineQueries, candidateQuery.ID)
 	}
 	if len(baselineQueries) != 0 {
 		return fmt.Errorf("candidate report is missing %d baseline queries", len(baselineQueries))
 	}
 	return nil
+}
+
+func baseEmbeddingIdentityEqual(left, right EmbeddingIdentity) bool {
+	return left.Provider == right.Provider &&
+		left.ModelID == right.ModelID &&
+		left.ModelRevision == right.ModelRevision &&
+		left.DType == right.DType &&
+		left.Pooling == right.Pooling &&
+		left.VectorSize == right.VectorSize
+}
+
+func strictEmbeddingIdentityEqual(left, right EmbeddingIdentity) bool {
+	return baseEmbeddingIdentityEqual(left, right) &&
+		left.InputProfile == right.InputProfile
+}
+
+func baseConfigurationEqual(left, right Configuration) bool {
+	return left.FactCollection == right.FactCollection &&
+		left.ChunkCollection == right.ChunkCollection &&
+		left.FolderCollection == right.FolderCollection &&
+		left.FolderTopK == right.FolderTopK &&
+		left.FolderThreshold == right.FolderThreshold
+}
+
+func strictConfigurationEqual(left, right Configuration) bool {
+	return left.Name == right.Name &&
+		baseConfigurationEqual(left, right) &&
+		equalInts(left.TopK, right.TopK) &&
+		left.RetrievalStrategy == right.RetrievalStrategy &&
+		left.DenseCandidateLimit == right.DenseCandidateLimit &&
+		left.RRFConstant == right.RRFConstant
+}
+
+func cloneConfiguration(source Configuration) Configuration {
+	cloned := source
+	cloned.TopK = append([]int(nil), source.TopK...)
+	cloned.present = clonePresence(source.present)
+	return cloned
 }
 
 func queryContractMismatch(queryID, field string) error {

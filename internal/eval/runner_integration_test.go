@@ -40,7 +40,7 @@ func TestPublicV2FixtureRunnerIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.SchemaVersion != CurrentReportSchemaVersion || len(report.Queries) != 16 ||
+	if report.SchemaVersion != LifecycleSchemaVersion || len(report.Queries) != 16 ||
 		report.Aggregate.HitAt[1] != 1 || !report.GatesPassed || report.Lifecycle == nil {
 		t.Fatalf("report = %#v", report)
 	}
@@ -108,7 +108,7 @@ func TestPublicV2DatasetLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dataset.SchemaVersion != CurrentDatasetSchemaVersion ||
+	if dataset.SchemaVersion != LifecycleSchemaVersion ||
 		dataset.DatasetVersion != "2.0.0" ||
 		dataset.Embedding.Provider != "synthetic" ||
 		dataset.Embedding.ModelID != "personal-memory-golden-v2" ||
@@ -216,7 +216,7 @@ func TestPublicV2BaselineLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.SchemaVersion != CurrentReportSchemaVersion ||
+	if report.SchemaVersion != LifecycleSchemaVersion ||
 		report.DatasetVersion != "2.0.0" ||
 		!report.GatesPassed ||
 		report.Lifecycle == nil ||
@@ -354,7 +354,7 @@ func TestLiveV2LifecycleEvidenceUsesExactReadWithoutChangingRanking(t *testing.T
 	if _, filtered := requestBody["filter"]; !filtered {
 		t.Fatalf("ranking search omitted current-only filter: %#v", requestBody)
 	}
-	if report.SchemaVersion != CurrentReportSchemaVersion || report.Lifecycle == nil {
+	if report.SchemaVersion != LifecycleSchemaVersion || report.Lifecycle == nil {
 		t.Fatalf("v2 lifecycle report missing: %#v", report)
 	}
 	if got := resultIDs(report.Queries[0].Results); len(got) != 1 || got[0] != "42" ||

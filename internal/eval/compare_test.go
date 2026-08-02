@@ -51,7 +51,7 @@ func TestEvaluateGatesReportsMalformedKeys(t *testing.T) {
 
 func TestCompareKeepsV2LifecycleRegressionsVisible(t *testing.T) {
 	base := Report{
-		SchemaVersion: CurrentReportSchemaVersion, DatasetVersion: "2",
+		SchemaVersion: LifecycleSchemaVersion, DatasetVersion: "2",
 		TopK: []int{1}, Configuration: Configuration{Name: "cfg"},
 		Aggregate: AggregateMetrics{HitAt: map[int]float64{1: 1}, NDCGAt: map[int]float64{1: 1}},
 		Queries: []QueryReport{{
@@ -77,7 +77,7 @@ func TestCompareKeepsV2LifecycleRegressionsVisible(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if comparison.SchemaVersion != CurrentReportSchemaVersion || comparison.Lifecycle == nil ||
+	if comparison.SchemaVersion != LifecycleSchemaVersion || comparison.Lifecycle == nil ||
 		len(comparison.Lifecycle.CandidateViolations) != 1 {
 		t.Fatalf("comparison = %#v", comparison)
 	}

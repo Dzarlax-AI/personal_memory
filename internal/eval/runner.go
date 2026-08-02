@@ -161,7 +161,7 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 	metrics := make([]QueryMetrics, 0, len(queries))
 	var lifecycleReport *LifecycleReport
 	var lifecycleFailures []string
-	if dataset.SchemaVersion == CurrentDatasetSchemaVersion {
+	if dataset.SchemaVersion >= LifecycleSchemaVersion {
 		lifecycleReport = &LifecycleReport{
 			Transitions: executeTransitionScenarios(dataset.TransitionScenarios),
 		}
@@ -208,7 +208,7 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 		}
 		var items []RetrievedItem
 		var queryLifecycle *QueryLifecycleReport
-		if query.Target == "facts" && dataset.SchemaVersion == CurrentDatasetSchemaVersion {
+		if query.Target == "facts" && dataset.SchemaVersion >= LifecycleSchemaVersion {
 			evidencePoints := points
 			if requiresBroadLifecycleSearch(query) {
 				evidencePoints, err = fetchLifecycleEvidence(ctx, clients.facts, query, points)
@@ -242,7 +242,7 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 		queryMetrics := ScoreQuery(query, items, dataset.Configuration.TopK)
 		queryReports = append(queryReports, QueryReport{
 			ID: query.ID, Target: query.Target, Mode: query.Mode, Results: items, Metrics: queryMetrics,
-			Lifecycle: queryLifecycle,
+			Lifecycle: queryLifecycle, Cohorts: append([]QueryCohort(nil), query.Cohorts...),
 		})
 		metrics = append(metrics, queryMetrics)
 	}
@@ -252,9 +252,10 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 		failures = append(failures, lifecycleFailures...)
 		sort.Strings(failures)
 	}
-	reportSchema := SchemaVersion
+	reportSchema := dataset.SchemaVersion
+	var cohortMetrics []CohortAggregateMetrics
 	if dataset.SchemaVersion == CurrentDatasetSchemaVersion {
-		reportSchema = CurrentReportSchemaVersion
+		cohortMetrics = AggregateCohorts(queryReports, dataset.Configuration.TopK)
 	}
 	return normalizeReport(Report{
 		SchemaVersion:  reportSchema,
@@ -264,6 +265,7 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 		Configuration:  dataset.Configuration,
 		TopK:           dataset.Configuration.TopK,
 		Aggregate:      aggregate,
+		Cohorts:        cohortMetrics,
 		Queries:        queryReports,
 		Lifecycle:      lifecycleReport,
 		GatesPassed:    len(failures) == 0,

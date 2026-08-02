@@ -44,7 +44,7 @@ func TestRenderReportIsDeterministic(t *testing.T) {
 
 func TestRenderMarkdownEscapesLifecycleCandidateFields(t *testing.T) {
 	report := Report{
-		SchemaVersion: CurrentReportSchemaVersion,
+		SchemaVersion: LifecycleSchemaVersion,
 		Lifecycle:     &LifecycleReport{Aggregate: LifecycleAggregateMetrics{}, Transitions: []TransitionReport{}},
 		Queries: []QueryReport{{
 			ID: "query|id", Target: "facts", Mode: "flat",
@@ -82,7 +82,7 @@ func TestDecodeReportRejectsTrailingJSON(t *testing.T) {
 
 func TestRenderAndDecodeV2ReportAreDeterministic(t *testing.T) {
 	report := Report{
-		SchemaVersion: CurrentReportSchemaVersion, DatasetVersion: "2.0.0",
+		SchemaVersion: LifecycleSchemaVersion, DatasetVersion: "2.0.0",
 		TopK: []int{1},
 		Queries: []QueryReport{{
 			ID: "q", Target: "facts", Mode: "flat", Results: []RetrievedItem{},
@@ -119,7 +119,7 @@ func TestRenderAndDecodeV2ReportAreDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decoded.SchemaVersion != CurrentReportSchemaVersion || decoded.Lifecycle == nil {
+	if decoded.SchemaVersion != LifecycleSchemaVersion || decoded.Lifecycle == nil {
 		t.Fatalf("decoded report = %#v", decoded)
 	}
 	if bytes.Index(first, []byte(`"id": "1"`)) > bytes.Index(first, []byte(`"id": "99"`)) {
@@ -200,7 +200,7 @@ func TestDecodeReportEnforcesLifecycleSectionBySchema(t *testing.T) {
 
 func TestDecodeReportRejectsUnknownLifecycleReasonCode(t *testing.T) {
 	report := Report{
-		SchemaVersion: CurrentReportSchemaVersion, DatasetVersion: "2",
+		SchemaVersion: LifecycleSchemaVersion, DatasetVersion: "2",
 		Queries: []QueryReport{{
 			ID: "q", Target: "facts", Mode: "flat",
 			Lifecycle: &QueryLifecycleReport{
@@ -552,7 +552,7 @@ func assertReportDecodeFails(t *testing.T, document map[string]any, field string
 
 func validV2LifecycleReport() Report {
 	return Report{
-		SchemaVersion:  CurrentReportSchemaVersion,
+		SchemaVersion:  LifecycleSchemaVersion,
 		DatasetVersion: "2",
 		Queries: []QueryReport{{
 			ID: "q", Target: "facts", Mode: "flat",
