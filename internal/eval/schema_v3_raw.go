@@ -9,6 +9,22 @@ import (
 )
 
 func validateV3DatasetRaw(data []byte) error {
+	return validateV3DatasetRawWithOptions(data, false)
+}
+
+func validateMaterializationDatasetRaw(data []byte) error {
+	root, isV3 := rawVersionedRoot(data, CurrentDatasetSchemaVersion)
+	if !isV3 {
+		if root == nil {
+			return fmt.Errorf("materialization input must be a JSON object with schema_version %d",
+				CurrentDatasetSchemaVersion)
+		}
+		return fmt.Errorf("materialization requires schema_version %d", CurrentDatasetSchemaVersion)
+	}
+	return validateV3DatasetRawWithOptions(data, true)
+}
+
+func validateV3DatasetRawWithOptions(data []byte, allowMissingPointVectors bool) error {
 	root, isV3 := rawVersionedRoot(data, CurrentDatasetSchemaVersion)
 	if !isV3 {
 		return nil
@@ -76,9 +92,14 @@ func validateV3DatasetRaw(data []byte) error {
 			if err != nil {
 				return err
 			}
-			if err := requireRawFields(point, fmt.Sprintf("%s[%d]", field, i),
-				"id", "vector", "payload",
-			); err != nil {
+			required := []string{"id", "payload"}
+			if !allowMissingPointVectors {
+				required = append(required, "vector")
+			}
+			if err := requireRawFields(point, fmt.Sprintf("%s[%d]", field, i), required...); err != nil {
+				return err
+			}
+			if err := rejectRawNulls(point, fmt.Sprintf("%s[%d]", field, i), "vector"); err != nil {
 				return err
 			}
 		}

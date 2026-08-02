@@ -262,20 +262,30 @@ func runTEIFixture(ctx context.Context, dataset *Dataset, options RunOptions) (R
 	if options.Embedder == nil {
 		return Report{}, fmt.Errorf("tei-fixture requires a purpose-aware embedder")
 	}
-	copyDataset := cloneDataset(dataset)
 	timings := newTimingCollector(options.Now)
-	start := timings.now()
-	count, err := embedFixtureCorpus(ctx, &copyDataset, options.Embedder)
+	materializationTimings := &timedMaterializationEmbedder{
+		delegate: options.Embedder,
+		now:      timings.now,
+	}
+	materialized, preparation, err := Materialize(
+		ctx, dataset, materializationTimings, MaterializeOptions{},
+	)
 	if err != nil {
 		return Report{}, err
 	}
-	corpusUS := elapsedUS(start, timings.now())
-	for i := range copyDataset.Queries {
-		copyDataset.Queries[i].Vector = nil
+	queryUS := materializationTimings.queryUS / int64(len(materialized.Queries))
+	for range materialized.Queries {
+		timings.embed = append(timings.embed, queryUS)
 	}
-	report, err := runFixtureTimedWithEmbedder(ctx, &copyDataset, options.QdrantURL, "tei-fixture", timings, options.DocumentsRoot, options.CleanupTimeout, options.Embedder)
+	report, err := runFixtureTimedWithEmbedder(
+		ctx, materialized, options.QdrantURL, "tei-fixture", timings,
+		options.DocumentsRoot, options.CleanupTimeout, nil,
+	)
 	if err == nil {
-		report.Diagnostics.Corpus = &CorpusDiagnostics{EmbeddingDurationUS: corpusUS, EmbeddingCount: count}
+		report.Diagnostics.Corpus = &CorpusDiagnostics{
+			EmbeddingDurationUS: materializationTimings.corpusUS,
+			EmbeddingCount:      preparation.Facts + preparation.Chunks + preparation.Folders,
+		}
 	}
 	return report, err
 }
@@ -321,8 +331,7 @@ func executeQueriesTimed(ctx context.Context, dataset *Dataset, clients collecti
 		if timings != nil {
 			queryStart = timings.now()
 		}
-		if dataset.SchemaVersion == CurrentDatasetSchemaVersion &&
-			(mode == "tei-fixture" || len(query.Vector) == 0) {
+		if dataset.SchemaVersion == CurrentDatasetSchemaVersion && len(query.Vector) == 0 {
 			if queryEmbedder == nil {
 				return Report{}, fmt.Errorf("query %q has no vector and no purpose-aware embedder was configured", query.ID)
 			}
@@ -800,6 +809,43 @@ type timingCollector struct {
 	search []int64
 }
 
+type timedMaterializationEmbedder struct {
+	delegate PurposeEmbedder
+	now      func() time.Time
+	corpusUS int64
+	queryUS  int64
+}
+
+func (embedder *timedMaterializationEmbedder) EmbedWithPurpose(
+	ctx context.Context,
+	text string,
+	purpose embeddings.Purpose,
+	profile embeddings.InputProfile,
+	modelID string,
+) ([]float32, error) {
+	return embedder.delegate.EmbedWithPurpose(ctx, text, purpose, profile, modelID)
+}
+
+func (embedder *timedMaterializationEmbedder) EmbedBatchWithPurpose(
+	ctx context.Context,
+	texts []string,
+	purpose embeddings.Purpose,
+	profile embeddings.InputProfile,
+	modelID string,
+) ([][]float32, error) {
+	start := embedder.now()
+	vectors, err := embedder.delegate.EmbedBatchWithPurpose(
+		ctx, texts, purpose, profile, modelID,
+	)
+	duration := elapsedUS(start, embedder.now())
+	if purpose == embeddings.RetrievalQuery {
+		embedder.queryUS += duration
+	} else {
+		embedder.corpusUS += duration
+	}
+	return vectors, err
+}
+
 func newTimingCollector(now func() time.Time) *timingCollector {
 	if now == nil {
 		now = time.Now
@@ -847,6 +893,10 @@ func cloneDataset(source *Dataset) Dataset {
 	cloned.Configuration.present = clonePresence(source.Configuration.present)
 	cloned.Gates.MinimumHitAt = cloneStringMetricMap(source.Gates.MinimumHitAt)
 	cloned.Gates.MinimumNDCGAt = cloneStringMetricMap(source.Gates.MinimumNDCGAt)
+	if source.Gates.MinimumMRR != nil {
+		minimumMRR := *source.Gates.MinimumMRR
+		cloned.Gates.MinimumMRR = &minimumMRR
+	}
 	cloned.Facts = cloneFixturePoints(source.Facts)
 	cloned.Chunks = cloneFixturePoints(source.Chunks)
 	cloned.Folders = cloneFixturePoints(source.Folders)
@@ -858,8 +908,40 @@ func cloneDataset(source *Dataset) Dataset {
 		cloned.Queries[i].Cohorts = append([]QueryCohort(nil), source.Queries[i].Cohorts...)
 		cloned.Queries[i].LifecycleExpectations =
 			append([]LifecycleExpectation(nil), source.Queries[i].LifecycleExpectations...)
+		for j := range cloned.Queries[i].LifecycleExpectations {
+			cloned.Queries[i].LifecycleExpectations[j].ReasonCodes = append(
+				[]string(nil), source.Queries[i].LifecycleExpectations[j].ReasonCodes...)
+		}
+	}
+	cloned.TransitionScenarios = append(
+		[]TransitionScenario(nil), source.TransitionScenarios...,
+	)
+	for i := range cloned.TransitionScenarios {
+		cloned.TransitionScenarios[i].SourceLifecycle =
+			cloneLifecyclePayload(source.TransitionScenarios[i].SourceLifecycle)
+		cloned.TransitionScenarios[i].TargetLifecycle =
+			cloneLifecyclePayload(source.TransitionScenarios[i].TargetLifecycle)
 	}
 	return cloned
+}
+
+func cloneLifecyclePayload(source LifecyclePayload) LifecyclePayload {
+	cloned := source
+	cloned.Supersedes = cloneStrings(source.Supersedes)
+	cloned.SupersededBy = cloneStrings(source.SupersededBy)
+	cloned.present = clonePresence(source.present)
+	if source.Provenance != nil {
+		provenance := *source.Provenance
+		cloned.Provenance = &provenance
+	}
+	return cloned
+}
+
+func cloneStrings(source []string) []string {
+	if source == nil {
+		return nil
+	}
+	return append([]string{}, source...)
 }
 
 func cloneStringMetricMap(source map[string]float64) map[string]float64 {
@@ -886,71 +968,32 @@ func cloneFixturePoints(points []FixturePoint) []FixturePoint {
 func clonePayload(source map[string]any) map[string]any {
 	cloned := make(map[string]any, len(source))
 	for key, value := range source {
-		switch typed := value.(type) {
-		case map[string]any:
-			cloned[key] = clonePayload(typed)
-		case []string:
-			cloned[key] = append([]string(nil), typed...)
-		case []any:
-			items := make([]any, len(typed))
-			copy(items, typed)
-			cloned[key] = items
-		default:
-			cloned[key] = value
-		}
+		cloned[key] = clonePayloadValue(value)
 	}
 	return cloned
 }
 
-func embedFixtureCorpus(ctx context.Context, dataset *Dataset, embedder PurposeEmbedder) (int, error) {
-	total := 0
-	groups := []struct {
-		name    string
-		points  []FixturePoint
-		purpose embeddings.Purpose
-	}{
-		{"facts", dataset.Facts, embeddings.FactPassage},
-		{"chunks", dataset.Chunks, embeddings.ChunkPassage},
-		{"folders", dataset.Folders, embeddings.FolderPassage},
+func clonePayloadValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return clonePayload(typed)
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		items := make([]any, len(typed))
+		for i := range typed {
+			items[i] = clonePayloadValue(typed[i])
+		}
+		return items
+	default:
+		return value
 	}
-	for _, group := range groups {
-		texts := make([]string, len(group.points))
-		for i := range group.points {
-			text, ok := corpusText(group.points[i].Payload, group.name)
-			if !ok {
-				return 0, fmt.Errorf("%s point %q has no usable corpus text", group.name, group.points[i].ID.String())
-			}
-			texts[i] = text
-		}
-		vectors, err := embedder.EmbedBatchWithPurpose(ctx, texts, group.purpose,
-			embeddings.InputProfile(dataset.Embedding.InputProfile), dataset.Embedding.ModelID)
-		if err != nil {
-			return 0, fmt.Errorf("embed %s: %w", group.name, err)
-		}
-		if len(vectors) != len(group.points) {
-			return 0, fmt.Errorf("embed %s: result count mismatch", group.name)
-		}
-		for i := range vectors {
-			if err := validateVector(vectors[i], dataset.Embedding.VectorSize); err != nil {
-				return 0, fmt.Errorf("%s point %q: %w", group.name, group.points[i].ID.String(), err)
-			}
-			group.points[i].Vector = append(Vector(nil), vectors[i]...)
-		}
-		total += len(vectors)
-	}
-	return total, nil
 }
 
-func corpusText(payload map[string]any, group string) (string, bool) {
-	names := []string{"text"}
-	if group == "folders" {
-		names = append(names, "summary")
-	}
-	for _, name := range names {
-		value, ok := payload[name].(string)
-		if ok && strings.TrimSpace(value) != "" {
-			return value, true
-		}
+func corpusText(payload map[string]any) (string, bool) {
+	value, ok := payload["text"].(string)
+	if ok && strings.TrimSpace(value) != "" {
+		return value, true
 	}
 	return "", false
 }

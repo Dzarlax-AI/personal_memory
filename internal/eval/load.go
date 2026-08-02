@@ -19,6 +19,44 @@ const maxDatasetBytes int64 = 32 << 20
 
 // Load decodes and source-neutrally validates a bounded dataset document.
 func Load(reader io.Reader) (*Dataset, error) {
+	data, err := readDataset(reader)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateV3DatasetRaw(data); err != nil {
+		return nil, err
+	}
+	dataset, err := decodeDataset(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := dataset.Validate(); err != nil {
+		return nil, err
+	}
+	return dataset, nil
+}
+
+// LoadForMaterialization decodes a strict schema-v3 dataset whose vectors may
+// be omitted or empty because Materialize will replace every vector.
+func LoadForMaterialization(reader io.Reader) (*Dataset, error) {
+	data, err := readDataset(reader)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateMaterializationDatasetRaw(data); err != nil {
+		return nil, err
+	}
+	dataset, err := decodeDataset(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := dataset.ValidateForMaterialization(); err != nil {
+		return nil, err
+	}
+	return dataset, nil
+}
+
+func readDataset(reader io.Reader) ([]byte, error) {
 	limited := &io.LimitedReader{R: reader, N: maxDatasetBytes + 1}
 	data, err := io.ReadAll(limited)
 	if err != nil {
@@ -27,9 +65,10 @@ func Load(reader io.Reader) (*Dataset, error) {
 	if int64(len(data)) > maxDatasetBytes {
 		return nil, fmt.Errorf("fixture exceeds %d bytes", maxDatasetBytes)
 	}
-	if err := validateV3DatasetRaw(data); err != nil {
-		return nil, err
-	}
+	return data, nil
+}
+
+func decodeDataset(data []byte) (*Dataset, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var dataset Dataset
@@ -43,15 +82,16 @@ func Load(reader io.Reader) (*Dataset, error) {
 		}
 		return nil, fmt.Errorf("decode trailing JSON: %w", err)
 	}
-	if err := dataset.Validate(); err != nil {
-		return nil, err
-	}
 	return &dataset, nil
 }
 
 // Validate checks schema, vectors, IDs, queries, metrics, and gates without
 // requiring live query IDs to exist in fixture point arrays.
 func (d *Dataset) Validate() error {
+	return d.validate(false)
+}
+
+func (d *Dataset) validate(allowEmptyCorpusVectors bool) error {
 	if d.SchemaVersion != SchemaVersion &&
 		d.SchemaVersion != LifecycleSchemaVersion &&
 		d.SchemaVersion != CurrentDatasetSchemaVersion {
@@ -101,6 +141,9 @@ func (d *Dataset) Validate() error {
 				return fmt.Errorf("duplicate %s point ID %q", name, point.ID.String())
 			}
 			ids[point.ID.String()] = struct{}{}
+			if allowEmptyCorpusVectors && len(point.Vector) == 0 {
+				continue
+			}
 			if err := validateVector(point.Vector, identity.VectorSize); err != nil {
 				return fmt.Errorf("%s point %q: %w", name, point.ID.String(), err)
 			}
@@ -287,6 +330,36 @@ func (d *Dataset) Validate() error {
 	}
 	if d.Gates.MinimumMRR != nil && (*d.Gates.MinimumMRR < 0 || *d.Gates.MinimumMRR > 1 || math.IsNaN(*d.Gates.MinimumMRR)) {
 		return fmt.Errorf("minimum_mrr must be between 0 and 1")
+	}
+	return nil
+}
+
+// ValidateForMaterialization retains the strict schema-v3 contract while
+// permitting only corpus/query vectors that Materialize will replace.
+func (d *Dataset) ValidateForMaterialization() error {
+	if d == nil {
+		return fmt.Errorf("dataset is required")
+	}
+	if d.SchemaVersion != CurrentDatasetSchemaVersion {
+		return fmt.Errorf("materialization requires schema_version %d", CurrentDatasetSchemaVersion)
+	}
+	if err := d.validate(true); err != nil {
+		return err
+	}
+	for _, group := range []struct {
+		name   string
+		points []FixturePoint
+	}{
+		{name: "facts", points: d.Facts},
+		{name: "chunks", points: d.Chunks},
+		{name: "folders", points: d.Folders},
+	} {
+		for _, point := range group.points {
+			if _, ok := corpusText(point.Payload); !ok {
+				return fmt.Errorf("%s point %q has no usable corpus text",
+					group.name, point.ID.String())
+			}
+		}
 	}
 	return nil
 }

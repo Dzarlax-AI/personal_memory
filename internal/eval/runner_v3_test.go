@@ -429,24 +429,27 @@ func TestTEIFixtureCorpusEmbeddingUsesPurposeOrderWithoutMutatingSource(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	cloned := cloneDataset(dataset)
 	embedder := &recordingPurposeEmbedder{}
-	count, err := embedFixtureCorpus(context.Background(), &cloned, embedder)
+	materialized, diagnostics, err := Materialize(
+		context.Background(), dataset, embedder, MaterializeOptions{},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	count := diagnostics.Facts + diagnostics.Chunks + diagnostics.Folders
 	if count != len(dataset.Facts)+len(dataset.Chunks)+len(dataset.Folders) {
 		t.Fatalf("embedded count = %d", count)
 	}
 	wantPurposes := []embeddings.Purpose{
-		embeddings.FactPassage, embeddings.ChunkPassage, embeddings.FolderPassage,
+		embeddings.FactPassage, embeddings.ChunkPassage,
+		embeddings.FolderPassage, embeddings.RetrievalQuery,
 	}
 	for i, want := range wantPurposes {
 		if embedder.calls[i] != want {
 			t.Fatalf("purpose call %d = %v, want %v", i, embedder.calls[i], want)
 		}
 	}
-	if dataset.Facts[1].Vector[0] != 0 || cloned.Facts[1].Vector[0] != 1 {
+	if dataset.Facts[1].Vector[0] != 0 || materialized.Facts[1].Vector[0] != 1 {
 		t.Fatal("TEI fixture corpus preparation mutated the source or failed to replace clone vectors")
 	}
 }
@@ -457,7 +460,9 @@ func TestTEIFixtureCorpusEmbeddingRejectsMissingText(t *testing.T) {
 		t.Fatal(err)
 	}
 	dataset.Facts[0].Payload["text"] = 42
-	if _, err := embedFixtureCorpus(context.Background(), dataset, &recordingPurposeEmbedder{}); err == nil ||
+	if _, _, err := Materialize(
+		context.Background(), dataset, &recordingPurposeEmbedder{}, MaterializeOptions{},
+	); err == nil ||
 		!strings.Contains(err.Error(), `facts point "42"`) ||
 		strings.Contains(err.Error(), "numeric") {
 		t.Fatalf("missing corpus text error = %v", err)
@@ -645,7 +650,7 @@ func TestTEIFixtureDiagnosticsUsePerQueryOnlineTiming(t *testing.T) {
 	}
 	if report.Diagnostics.Query.Embed.Min != 1 ||
 		report.Diagnostics.Query.Search.Min != 1 ||
-		report.Diagnostics.Query.Total.Min != 5 {
+		report.Diagnostics.Query.Total.Min != 3 {
 		t.Fatalf("diagnostic timings = %#v", report.Diagnostics.Query)
 	}
 	wantPurposes := []embeddings.Purpose{
@@ -662,7 +667,7 @@ func TestTEIFixtureDiagnosticsUsePerQueryOnlineTiming(t *testing.T) {
 	}
 }
 
-func TestTEIFixtureQueryFailureCleansAllTemporaryCollections(t *testing.T) {
+func TestTEIFixtureQueryMaterializationFailureStopsBeforeTemporaryCollections(t *testing.T) {
 	fake := &fixtureQdrant{exists: make(map[string]bool)}
 	server := httptest.NewServer(http.HandlerFunc(fake.handler))
 	defer server.Close()
@@ -674,11 +679,11 @@ func TestTEIFixtureQueryFailureCleansAllTemporaryCollections(t *testing.T) {
 		Source: "tei-fixture", QdrantURL: server.URL,
 		Embedder: &recordingPurposeEmbedder{failPurpose: embeddings.RetrievalQuery},
 	})
-	if err == nil || !strings.Contains(err.Error(), "embed query") {
+	if err == nil || !strings.Contains(err.Error(), "embed queries") {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if len(fake.deleted) != 3 || len(fake.exists) != 0 {
-		t.Fatalf("cleanup deleted=%v leaked=%v", fake.deleted, fake.exists)
+	if fake.createCount != 0 || len(fake.deleted) != 0 || len(fake.exists) != 0 {
+		t.Fatalf("external temporary state changed: %#v", fake)
 	}
 }
 

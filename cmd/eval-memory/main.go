@@ -31,15 +31,17 @@ func main() {
 
 func runCLI(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: eval-memory <run|compare> [flags]")
+		return fmt.Errorf("usage: eval-memory <run|compare|materialize> [flags]")
 	}
 	switch args[0] {
 	case "run":
 		return runCommand(args[1:], stdout, stderr)
 	case "compare":
 		return compareCommand(args[1:], stdout, stderr)
+	case "materialize":
+		return materializeCommand(args[1:], stdout, stderr)
 	default:
-		return fmt.Errorf("unknown subcommand %q; want run or compare", args[0])
+		return fmt.Errorf("unknown subcommand %q; want run, compare, or materialize", args[0])
 	}
 }
 
@@ -170,6 +172,95 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
+func materializeCommand(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("materialize", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	datasetPath := flags.String("dataset", "", "strict schema-v3 materialization input")
+	outputPath := flags.String("output", "", "materialized dataset JSON path")
+	embedURL := flags.String("embed-url", "", "TEI base URL")
+	embedModel := flags.String("embed-model", "", "optional TEI model ID assertion")
+	inputProfile := flags.String("input-profile", "", "optional materialized input profile")
+	timeout := flags.Duration("timeout", defaultTimeout, "overall materialization timeout")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("materialize accepts no positional arguments")
+	}
+	if *datasetPath == "" || *outputPath == "" || strings.TrimSpace(*embedURL) == "" {
+		return fmt.Errorf("--dataset, --output, and --embed-url are required")
+	}
+	samePath, err := sameOutputPath(*datasetPath, *outputPath)
+	if err != nil {
+		return fmt.Errorf("compare materialization paths: %w", err)
+	}
+	if samePath {
+		return fmt.Errorf("--dataset and --output must refer to different files")
+	}
+	if *timeout <= 0 {
+		return fmt.Errorf("--timeout must be positive")
+	}
+	dataset, err := loadMaterializationDatasetFile(*datasetPath)
+	if err != nil {
+		return err
+	}
+	if dataset.Embedding.Provider != "tei" {
+		return fmt.Errorf("materialization requires a TEI dataset embedding identity")
+	}
+	if *inputProfile != "" {
+		if err := embeddings.ValidateInputProfile(
+			embeddings.InputProfile(*inputProfile), dataset.Embedding.ModelID,
+		); err != nil {
+			return fmt.Errorf("invalid --input-profile")
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	client := embeddings.NewClient(strings.TrimRight(*embedURL, "/"))
+	info, err := client.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("read TEI identity failed")
+	}
+	if info.ModelID != dataset.Embedding.ModelID ||
+		info.ModelSHA != dataset.Embedding.ModelRevision ||
+		info.ModelDType != dataset.Embedding.DType ||
+		info.ModelType.Embedding.Pooling != dataset.Embedding.Pooling {
+		return fmt.Errorf("TEI identity does not match dataset embedding identity")
+	}
+	if *embedModel != "" && *embedModel != info.ModelID {
+		return fmt.Errorf("TEI model does not match --embed-model")
+	}
+
+	var options memoryeval.MaterializeOptions
+	if *inputProfile != "" {
+		profile := memoryeval.InputProfile(*inputProfile)
+		options.InputProfile = &profile
+	}
+	materialized, diagnostics, err := memoryeval.Materialize(ctx, dataset, client, options)
+	if err != nil {
+		var embedErr *memoryeval.MaterializationEmbeddingError
+		if errors.As(err, &embedErr) {
+			return fmt.Errorf("materialize dataset: embed %s failed", embedErr.Batch)
+		}
+		return fmt.Errorf("materialize dataset: %w", err)
+	}
+	data, err := memoryeval.RenderDatasetJSON(materialized)
+	if err != nil {
+		return fmt.Errorf("render materialized dataset: %w", err)
+	}
+	if err := writeAtomic(*outputPath, data, 0o644); err != nil {
+		return fmt.Errorf("write materialized dataset: %w", err)
+	}
+	fmt.Fprintf(
+		stdout,
+		"materialized facts=%d chunks=%d folders=%d queries=%d profile=%s\n",
+		diagnostics.Facts, diagnostics.Chunks, diagnostics.Folders,
+		diagnostics.Queries, diagnostics.InputProfile,
+	)
+	return nil
+}
+
 func sameOutputPath(left, right string) (bool, error) {
 	leftPath, err := filepath.Abs(filepath.Clean(left))
 	if err != nil {
@@ -250,6 +341,22 @@ func loadDatasetFile(path string) (*memoryeval.Dataset, error) {
 	}
 	if closeErr != nil {
 		return nil, fmt.Errorf("close dataset: %w", closeErr)
+	}
+	return dataset, nil
+}
+
+func loadMaterializationDatasetFile(path string) (*memoryeval.Dataset, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open materialization dataset: %w", err)
+	}
+	dataset, loadErr := memoryeval.LoadForMaterialization(file)
+	closeErr := file.Close()
+	if loadErr != nil {
+		return nil, fmt.Errorf("load materialization dataset: %w", loadErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close materialization dataset: %w", closeErr)
 	}
 	return dataset, nil
 }

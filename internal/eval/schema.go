@@ -558,6 +558,26 @@ func (gates *Gates) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func (gates Gates) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		ForbidInvariantViolations bool               `json:"forbid_invariant_violations"`
+		ForbidLifecycleViolations *bool              `json:"forbid_lifecycle_violations,omitempty"`
+		MinimumHitAt              map[string]float64 `json:"minimum_hit_at,omitempty"`
+		MinimumMRR                *float64           `json:"minimum_mrr,omitempty"`
+		MinimumNDCGAt             map[string]float64 `json:"minimum_ndcg_at,omitempty"`
+	}
+	encoded := wire{
+		ForbidInvariantViolations: gates.ForbidInvariantViolations,
+		MinimumHitAt:              gates.MinimumHitAt,
+		MinimumMRR:                gates.MinimumMRR,
+		MinimumNDCGAt:             gates.MinimumNDCGAt,
+	}
+	if gates.forbidLifecycleViolationsPresent {
+		encoded.ForbidLifecycleViolations = &gates.ForbidLifecycleViolations
+	}
+	return json.Marshal(encoded)
+}
+
 // Dataset is the versioned input contract for fixture and live evaluation.
 type Dataset struct {
 	SchemaVersion       int                  `json:"schema_version"`
