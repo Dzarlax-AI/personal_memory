@@ -59,6 +59,7 @@ func main() {
 	identity, err := embeddingidentity.Ensure(ctx, ec, embeddingCollections, embeddingidentity.Expected{
 		ModelID:       cfg.EmbedModelID,
 		ModelRevision: cfg.EmbedModelRevision,
+		InputProfile:  cfg.EmbedInputProfile,
 	}, cfg.AdoptExistingEmbeddingIdentity)
 	if err != nil {
 		slog.Error("embedding identity verification failed", "error", err)
@@ -69,6 +70,7 @@ func main() {
 		"revision", identity.ModelRevision,
 		"dtype", identity.ModelDType,
 		"pooling", identity.Pooling,
+		"input_profile", identity.InputProfile,
 		"vector_size", identity.VectorSize,
 		"collections", collectionNames(embeddingCollections),
 	)

@@ -102,6 +102,23 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 	return vecs[0], nil
 }
 
+// EmbedWithPurpose embeds raw literal text using a versioned, purpose-aware
+// input profile. The profile owns all model-specific prefixes.
+func (c *Client) EmbedWithPurpose(ctx context.Context, rawText string, purpose Purpose, profile InputProfile, modelID string) ([]float32, error) {
+	transformed, err := TransformInput(rawText, purpose, profile, modelID)
+	if err != nil {
+		return nil, err
+	}
+	vecs, err := c.embed(ctx, []string{transformed})
+	if err != nil {
+		return nil, err
+	}
+	if len(vecs) == 0 {
+		return nil, fmt.Errorf("empty embed response")
+	}
+	return vecs[0], nil
+}
+
 // EmbedBatch embeds many texts in one or more HTTP calls (chunked by
 // defaultBatchSize). Preserves input order.
 func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
@@ -115,6 +132,45 @@ func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, e
 			end = len(texts)
 		}
 		vecs, err := c.embed(ctx, texts[i:end])
+		if err != nil {
+			return nil, err
+		}
+		if len(vecs) != end-i {
+			return nil, fmt.Errorf("embed batch size mismatch: asked %d, got %d", end-i, len(vecs))
+		}
+		result = append(result, vecs...)
+	}
+	return result, nil
+}
+
+// EmbedBatchWithPurpose embeds raw literal texts with the same purpose and
+// input profile, preserving input order.
+func (c *Client) EmbedBatchWithPurpose(ctx context.Context, rawTexts []string, purpose Purpose, profile InputProfile, modelID string) ([][]float32, error) {
+	if err := validatePurpose(purpose); err != nil {
+		return nil, err
+	}
+	if err := ValidateInputProfile(profile, modelID); err != nil {
+		return nil, err
+	}
+	if len(rawTexts) == 0 {
+		return nil, nil
+	}
+	transformed := make([]string, len(rawTexts))
+	for i, rawText := range rawTexts {
+		input, err := TransformInput(rawText, purpose, profile, modelID)
+		if err != nil {
+			return nil, err
+		}
+		transformed[i] = input
+	}
+
+	result := make([][]float32, 0, len(rawTexts))
+	for i := 0; i < len(transformed); i += defaultBatchSize {
+		end := i + defaultBatchSize
+		if end > len(transformed) {
+			end = len(transformed)
+		}
+		vecs, err := c.embed(ctx, transformed[i:end])
 		if err != nil {
 			return nil, err
 		}

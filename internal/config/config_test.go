@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
 )
 
 func TestLoadOAuthConfigDefaultsResourceFromMemoryDomain(t *testing.T) {
@@ -410,6 +412,7 @@ func TestLoadEmbeddingIdentityDefaults(t *testing.T) {
 	setSecureTestEnv(t)
 	t.Setenv("EMBED_MODEL", "")
 	t.Setenv("EMBED_MODEL_REVISION", "")
+	t.Setenv("EMBED_INPUT_PROFILE", "")
 	t.Setenv("ADOPT_EXISTING_EMBEDDING_IDENTITY", "")
 
 	cfg, err := Load()
@@ -422,9 +425,43 @@ func TestLoadEmbeddingIdentityDefaults(t *testing.T) {
 	if cfg.EmbedModelRevision != defaultEmbedModelRevision {
 		t.Fatalf("EmbedModelRevision = %q, want %q", cfg.EmbedModelRevision, defaultEmbedModelRevision)
 	}
+	if cfg.EmbedInputProfile != embeddings.LegacyRawV1 {
+		t.Fatalf("EmbedInputProfile = %q, want %q", cfg.EmbedInputProfile, embeddings.LegacyRawV1)
+	}
 	if cfg.AdoptExistingEmbeddingIdentity {
 		t.Fatal("AdoptExistingEmbeddingIdentity must default to false")
 	}
+}
+
+func TestLoadEmbeddingInputProfile(t *testing.T) {
+	t.Run("supported", func(t *testing.T) {
+		setSecureTestEnv(t)
+		t.Setenv("EMBED_INPUT_PROFILE", string(embeddings.MultilingualE5V1))
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.EmbedInputProfile != embeddings.MultilingualE5V1 {
+			t.Fatalf("EmbedInputProfile = %q", cfg.EmbedInputProfile)
+		}
+	})
+
+	t.Run("unknown", func(t *testing.T) {
+		setSecureTestEnv(t)
+		t.Setenv("EMBED_INPUT_PROFILE", "future-v9")
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "EMBED_INPUT_PROFILE") {
+			t.Fatalf("Load() error = %v, want EMBED_INPUT_PROFILE validation error", err)
+		}
+	})
+
+	t.Run("unsupported model", func(t *testing.T) {
+		setSecureTestEnv(t)
+		t.Setenv("EMBED_MODEL", "example/other-model")
+		t.Setenv("EMBED_INPUT_PROFILE", string(embeddings.MultilingualE5V1))
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "EMBED_INPUT_PROFILE") {
+			t.Fatalf("Load() error = %v, want model/profile validation error", err)
+		}
+	})
 }
 
 func TestLoadRejectsMutableOrMalformedEmbeddingRevision(t *testing.T) {
@@ -462,6 +499,7 @@ func TestLoadIndexerIncludesEmbeddingIdentityContract(t *testing.T) {
 	t.Setenv("ENABLE_RAG", "true")
 	t.Setenv("EMBED_MODEL", "example/model")
 	t.Setenv("EMBED_MODEL_REVISION", strings.Repeat("b", 40))
+	t.Setenv("EMBED_INPUT_PROFILE", string(embeddings.LegacyRawV1))
 	t.Setenv("ADOPT_EXISTING_EMBEDDING_IDENTITY", "true")
 
 	cfg, err := LoadIndexer()
@@ -471,8 +509,16 @@ func TestLoadIndexerIncludesEmbeddingIdentityContract(t *testing.T) {
 	if cfg.EmbedModelID != "example/model" || cfg.EmbedModelRevision != strings.Repeat("b", 40) {
 		t.Fatalf("unexpected embedding identity config: %#v", cfg)
 	}
+	if cfg.EmbedInputProfile != embeddings.LegacyRawV1 {
+		t.Fatalf("EmbedInputProfile = %q", cfg.EmbedInputProfile)
+	}
 	if !cfg.AdoptExistingEmbeddingIdentity {
 		t.Fatal("standalone indexer did not load adoption flag")
+	}
+
+	t.Setenv("EMBED_INPUT_PROFILE", "future-v9")
+	if _, err := LoadIndexer(); err == nil || !strings.Contains(err.Error(), "EMBED_INPUT_PROFILE") {
+		t.Fatalf("LoadIndexer() error = %v, want EMBED_INPUT_PROFILE validation error", err)
 	}
 }
 
@@ -502,6 +548,7 @@ func setSecureTestEnv(t *testing.T) {
 	t.Setenv("OAUTH_AUTHORIZATION_SERVERS", "")
 	t.Setenv("EMBED_MODEL", defaultEmbedModelID)
 	t.Setenv("EMBED_MODEL_REVISION", defaultEmbedModelRevision)
+	t.Setenv("EMBED_INPUT_PROFILE", string(embeddings.LegacyRawV1))
 	t.Setenv("ADOPT_EXISTING_EMBEDDING_IDENTITY", "false")
 }
 

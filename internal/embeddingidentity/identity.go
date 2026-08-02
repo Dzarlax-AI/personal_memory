@@ -25,23 +25,25 @@ const (
 type Expected struct {
 	ModelID       string
 	ModelRevision string
+	InputProfile  embeddings.InputProfile
 }
 
 // Record is the canonical vector-space identity persisted in collection
 // metadata. Every field participates in strict equality.
 type Record struct {
-	SchemaVersion int    `json:"schema_version"`
-	Provider      string `json:"provider"`
-	ModelID       string `json:"model_id"`
-	ModelRevision string `json:"model_revision"`
-	ModelDType    string `json:"model_dtype"`
-	Pooling       string `json:"pooling"`
-	VectorSize    int    `json:"vector_size"`
+	SchemaVersion int                     `json:"schema_version"`
+	Provider      string                  `json:"provider"`
+	ModelID       string                  `json:"model_id"`
+	ModelRevision string                  `json:"model_revision"`
+	ModelDType    string                  `json:"model_dtype"`
+	Pooling       string                  `json:"pooling"`
+	VectorSize    int                     `json:"vector_size"`
+	InputProfile  embeddings.InputProfile `json:"input_profile"`
 }
 
 type modelClient interface {
 	Info(context.Context) (embeddings.ModelInfo, error)
-	Embed(context.Context, string) ([]float32, error)
+	EmbedWithPurpose(context.Context, string, embeddings.Purpose, embeddings.InputProfile, string) ([]float32, error)
 }
 
 type collectionClient interface {
@@ -173,6 +175,10 @@ func activeRecord(ctx context.Context, embed modelClient, expected Expected) (Re
 	}
 	expected.ModelID = strings.TrimSpace(expected.ModelID)
 	expected.ModelRevision = strings.ToLower(strings.TrimSpace(expected.ModelRevision))
+	expected.InputProfile = embeddings.NormalizeInputProfile(expected.InputProfile)
+	if err := embeddings.ValidateInputProfile(expected.InputProfile, expected.ModelID); err != nil {
+		return Record{}, fmt.Errorf("validate embedding input profile: %w", err)
+	}
 
 	info, err := embed.Info(ctx)
 	if err != nil {
@@ -183,7 +189,7 @@ func activeRecord(ctx context.Context, embed modelClient, expected Expected) (Re
 		return Record{}, fmt.Errorf("TEI model identity mismatch: configured model=%q revision=%q, active model=%q revision=%q", expected.ModelID, expected.ModelRevision, info.ModelID, activeRevision)
 	}
 
-	probe, err := embed.Embed(ctx, identityProbeText)
+	probe, err := embed.EmbedWithPurpose(ctx, identityProbeText, embeddings.RetrievalQuery, expected.InputProfile, expected.ModelID)
 	if err != nil {
 		return Record{}, fmt.Errorf("embed identity probe: %w", err)
 	}
@@ -198,6 +204,7 @@ func activeRecord(ctx context.Context, embed modelClient, expected Expected) (Re
 		ModelDType:    strings.TrimSpace(info.ModelDType),
 		Pooling:       strings.TrimSpace(info.ModelType.Embedding.Pooling),
 		VectorSize:    len(probe),
+		InputProfile:  expected.InputProfile,
 	}, nil
 }
 
@@ -222,8 +229,12 @@ func decodeRecord(raw any) (Record, error) {
 	if err := json.Unmarshal(encoded, &record); err != nil {
 		return Record{}, err
 	}
+	record.InputProfile = embeddings.NormalizeInputProfile(record.InputProfile)
 	if record.SchemaVersion != identityVersion || record.Provider != identityProvider || record.ModelID == "" || record.ModelRevision == "" || record.ModelDType == "" || record.Pooling == "" || record.VectorSize < 1 {
 		return Record{}, fmt.Errorf("incomplete or unsupported identity record")
+	}
+	if err := embeddings.ValidateInputProfile(record.InputProfile, record.ModelID); err != nil {
+		return Record{}, fmt.Errorf("invalid embedding input profile: %w", err)
 	}
 	return record, nil
 }
@@ -236,6 +247,7 @@ func formatRecord(record Record) string {
 		"revision=" + record.ModelRevision,
 		"dtype=" + record.ModelDType,
 		"pooling=" + record.Pooling,
+		"input_profile=" + string(record.InputProfile),
 		fmt.Sprintf("size=%d", record.VectorSize),
 	}
 	sort.Strings(parts)

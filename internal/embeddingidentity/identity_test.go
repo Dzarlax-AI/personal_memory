@@ -40,6 +40,15 @@ func (m *fakeModel) Embed(_ context.Context, text string) ([]float32, error) {
 	return m.vector, m.embedErr
 }
 
+func (m *fakeModel) EmbedWithPurpose(_ context.Context, text string, purpose embeddings.Purpose, profile embeddings.InputProfile, modelID string) ([]float32, error) {
+	transformed, err := embeddings.TransformInput(text, purpose, profile, modelID)
+	if err != nil {
+		return nil, err
+	}
+	m.probe = transformed
+	return m.vector, m.embedErr
+}
+
 type fakeCollection struct {
 	name          string
 	info          qdrant.CollectionInfo
@@ -81,11 +90,11 @@ func (c *fakeCollection) UpdateCollectionMetadata(_ context.Context, metadata ma
 }
 
 func expectedModel() Expected {
-	return Expected{ModelID: "intfloat/multilingual-e5-small", ModelRevision: testRevision}
+	return Expected{ModelID: "intfloat/multilingual-e5-small", ModelRevision: testRevision, InputProfile: embeddings.LegacyRawV1}
 }
 
 func testRecord() Record {
-	return Record{SchemaVersion: 1, Provider: "tei", ModelID: expectedModel().ModelID, ModelRevision: testRevision, ModelDType: "float32", Pooling: "mean", VectorSize: 3}
+	return Record{SchemaVersion: 1, Provider: "tei", ModelID: expectedModel().ModelID, ModelRevision: testRevision, ModelDType: "float32", Pooling: "mean", VectorSize: 3, InputProfile: embeddings.LegacyRawV1}
 }
 
 func existingCollection(name string, points uint64, metadata map[string]any) *fakeCollection {
@@ -173,6 +182,7 @@ func TestEnsureRejectsEveryIdentityMismatchEvenWithAdoption(t *testing.T) {
 		{name: "dtype", mutate: func(r *Record) { r.ModelDType = "float16" }},
 		{name: "pooling", mutate: func(r *Record) { r.Pooling = "cls" }},
 		{name: "size", mutate: func(r *Record) { r.VectorSize = 4 }},
+		{name: "input profile", mutate: func(r *Record) { r.InputProfile = embeddings.MultilingualE5V1 }},
 	}
 	for _, tt := range mutations {
 		t.Run(tt.name, func(t *testing.T) {
@@ -190,6 +200,65 @@ func TestEnsureRejectsEveryIdentityMismatchEvenWithAdoption(t *testing.T) {
 	}
 }
 
+func TestEnsureNormalizesStoredIdentityWithoutProfileAsLegacy(t *testing.T) {
+	stored := testRecord()
+	legacyMetadata := map[string]any{
+		MetadataKey: map[string]any{
+			"schema_version": stored.SchemaVersion,
+			"provider":       stored.Provider,
+			"model_id":       stored.ModelID,
+			"model_revision": stored.ModelRevision,
+			"model_dtype":    stored.ModelDType,
+			"pooling":        stored.Pooling,
+			"vector_size":    stored.VectorSize,
+		},
+	}
+	collection := existingCollection("memory", 556, legacyMetadata)
+
+	record, err := ensure(context.Background(), newFakeModel(), []collectionClient{collection}, expectedModel(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.InputProfile != embeddings.LegacyRawV1 {
+		t.Fatalf("InputProfile = %q", record.InputProfile)
+	}
+	if collection.updated != 0 || collection.created != 0 {
+		t.Fatal("normalized legacy identity caused a write")
+	}
+}
+
+func TestEnsureProfilesIdentityProbeAndPersistsProfile(t *testing.T) {
+	model := newFakeModel()
+	collection := &fakeCollection{name: "memory"}
+	expected := expectedModel()
+	expected.InputProfile = embeddings.MultilingualE5V1
+
+	record, err := ensure(context.Background(), model, []collectionClient{collection}, expected, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.InputProfile != embeddings.MultilingualE5V1 {
+		t.Fatalf("InputProfile = %q", record.InputProfile)
+	}
+	if model.probe != "query: "+identityProbeText {
+		t.Fatalf("probe = %q", model.probe)
+	}
+}
+
+func TestEnsureRejectsUnsupportedInputProfileBeforeCollectionWrites(t *testing.T) {
+	first := existingCollection("memory", 0, nil)
+	expected := expectedModel()
+	expected.InputProfile = embeddings.InputProfile("future-v9")
+
+	_, err := ensure(context.Background(), newFakeModel(), []collectionClient{first}, expected, true)
+	if err == nil || !strings.Contains(err.Error(), "input profile") {
+		t.Fatalf("error = %v", err)
+	}
+	if first.updated != 0 || first.created != 0 {
+		t.Fatal("invalid profile caused a collection write")
+	}
+}
+
 func TestEnsureRejectsCollectionVectorSizeMismatch(t *testing.T) {
 	collection := existingCollection("memory", 0, nil)
 	collection.info.VectorSize = 384
@@ -201,7 +270,9 @@ func TestEnsureRejectsCollectionVectorSizeMismatch(t *testing.T) {
 
 func TestEnsurePreflightFailurePerformsNoEarlierWrites(t *testing.T) {
 	first := existingCollection("memory", 0, nil)
-	second := existingCollection("doc_chunks", 1, identityMetadata(Record{SchemaVersion: 2}))
+	mismatched := testRecord()
+	mismatched.InputProfile = embeddings.MultilingualE5V1
+	second := existingCollection("doc_chunks", 1, identityMetadata(mismatched))
 	_, err := ensure(context.Background(), newFakeModel(), []collectionClient{first, second}, expectedModel(), true)
 	if err == nil {
 		t.Fatal("expected preflight error")
