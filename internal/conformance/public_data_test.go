@@ -76,6 +76,52 @@ func TestPublicV1FailingTracesExerciseValidatorReasons(t *testing.T) {
 			t.Errorf("%s result = %#v, want %s/%s", key, got, want.status, want.reason)
 		}
 	}
+	catalog := loadCatalogPath(t, filepath.Join(root, "docs", "model-usage-contract.md"))
+	report, err := Run(suite, bundle, catalog, "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.GatesPassed {
+		t.Fatalf("failing bundle passed the gate: %#v", report.Aggregate)
+	}
+}
+
+func TestPublicV1AlternativeAndVerificationPaths(t *testing.T) {
+	root := filepath.Join("..", "..")
+	suite := loadSuitePath(t, filepath.Join(root, "conformancedata", "public", "v1", "scenarios.json"))
+	bundle := loadTraceBundlePath(t,
+		filepath.Join(root, "conformancedata", "public", "v1", "traces", "passing.json"))
+	scenarios := make(map[string]Scenario, len(suite.Scenarios))
+	for _, scenario := range suite.Scenarios {
+		scenarios[scenario.ID] = scenario
+	}
+	traces := make(map[string]Trace, len(bundle.Traces))
+	for _, trace := range bundle.Traces {
+		traces[trace.ScenarioID] = trace
+	}
+
+	verified := traces["LIFECYCLE-005"]
+	verified.Events = append([]Event{}, verified.Events...)
+	verified.Events[2] = Event{Sequence: 3, Event: EventClaim, Code: CodeFactVerified}
+	if got := ValidateScenario(scenarios["LIFECYCLE-005"], verified, suite.ContractVersion); got.Status != StatusPass {
+		t.Fatalf("verified lifecycle alternative = %#v, want pass", got)
+	}
+
+	noLookup := traces["TASK-003"]
+	noLookup.Events = []Event{noLookup.Events[0], noLookup.Events[1], noLookup.Events[4]}
+	noLookup.Events[2].Sequence = 3
+	if got := ValidateScenario(scenarios["TASK-003"], noLookup, suite.ContractVersion); got.Status != StatusFail ||
+		!containsReason(got.Reasons, ReasonRequiredEventMissing) {
+		t.Fatalf("task trace without lookup = %#v, want required-event failure", got)
+	}
+
+	noFailureEvent := traces["TELEMETRY-002"]
+	noFailureEvent.Events = []Event{noFailureEvent.Events[2]}
+	noFailureEvent.Events[0].Sequence = 1
+	if got := ValidateScenario(scenarios["TELEMETRY-002"], noFailureEvent, suite.ContractVersion); got.Status != StatusFail ||
+		!containsReason(got.Reasons, ReasonRequiredEventMissing) {
+		t.Fatalf("telemetry trace without failed result = %#v, want required-event failure", got)
+	}
 }
 
 func loadSuitePath(t *testing.T, path string) *Suite {

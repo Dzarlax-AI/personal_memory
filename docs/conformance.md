@@ -23,6 +23,11 @@ conformancedata/public/v1/
 that the validator detects required-event, forbidden-event, order, count, retry,
 and observability failures.
 
+Suite version 1.1.0 adds `assertions.any_of`, whose branches contain required
+events and optional ordering rules. A scenario passes this assertion only when
+at least one complete branch passes. This represents normative alternatives
+without weakening ordering requirements on the disclosure branch.
+
 Run the release gate:
 
 ```bash
@@ -149,6 +154,12 @@ Environment variables are inherited only when their names are supplied through
 `--adapter-env`. Adapter stdout is bounded and strictly decoded. Stderr, malformed
 stdout, and process errors are not copied into reports. The overall run is
 bounded by `--timeout`.
+
+The selected variables completely replace the child process environment; an
+empty selection starts the adapter with an empty environment. Every normalized
+`tool_result` must have a preceding unmatched `tool_call` with the same
+capability and operation. Duplicate traces for the same client and scenario are
+rejected.
 
 Supported client-family profiles are `codex`, `claude`, `chatgpt`, and
 `generic_mcp`. A client-specific wrapper is responsible for observing its native

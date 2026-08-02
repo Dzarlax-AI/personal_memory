@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -12,15 +13,18 @@ import (
 
 const defaultAdapterOutputLimit = 1 << 20
 
+// Adapter produces normalized traces for one client family.
 type Adapter interface {
 	ClientFamily() ClientFamily
 	Trace(context.Context, Scenario, string) (Trace, error)
 }
 
+// ClientProfile identifies a live client supported by the common adapter protocol.
 type ClientProfile struct {
 	Family ClientFamily
 }
 
+// ClientProfiles returns the supported live client families in stable order.
 func ClientProfiles() []ClientProfile {
 	return []ClientProfile{
 		{Family: ClientCodex},
@@ -30,14 +34,19 @@ func ClientProfiles() []ClientProfile {
 	}
 }
 
+// FixtureAdapter reads traces from a validated fixture bundle.
 type FixtureAdapter struct {
 	client ClientFamily
 	traces map[string]Trace
 }
 
+// NewFixtureAdapter selects one client family's traces from a fixture bundle.
 func NewFixtureAdapter(bundle *TraceBundle, client ClientFamily) (*FixtureAdapter, error) {
 	if !validClientFamily(client) {
 		return nil, fmt.Errorf("fixture adapter client family is invalid")
+	}
+	if bundle == nil {
+		return nil, fmt.Errorf("fixture bundle must not be nil")
 	}
 	traces := make(map[string]Trace)
 	for _, trace := range bundle.Traces {
@@ -51,8 +60,10 @@ func NewFixtureAdapter(bundle *TraceBundle, client ClientFamily) (*FixtureAdapte
 	return &FixtureAdapter{client: client, traces: traces}, nil
 }
 
+// ClientFamily returns the adapter's normalized client family.
 func (adapter *FixtureAdapter) ClientFamily() ClientFamily { return adapter.client }
 
+// Trace returns the fixture trace for a scenario.
 func (adapter *FixtureAdapter) Trace(_ context.Context, scenario Scenario, _ string) (Trace, error) {
 	trace, exists := adapter.traces[scenario.ID]
 	if !exists {
@@ -61,6 +72,7 @@ func (adapter *FixtureAdapter) Trace(_ context.Context, scenario Scenario, _ str
 	return trace, nil
 }
 
+// CommandAdapter runs an external adapter through the normalized JSON protocol.
 type CommandAdapter struct {
 	client      ClientFamily
 	executable  string
@@ -69,14 +81,17 @@ type CommandAdapter struct {
 	outputLimit int
 }
 
+// CommandAdapterOptions configures a fail-closed external command adapter.
 type CommandAdapterOptions struct {
 	ClientFamily ClientFamily
 	Executable   string
 	Args         []string
-	Environment  []string
-	OutputLimit  int
+	// Environment completely replaces the child process environment, including when empty.
+	Environment []string
+	OutputLimit int
 }
 
+// AdapterRequest is the privacy-safe scenario request sent to a live adapter.
 type AdapterRequest struct {
 	SchemaVersion   int                            `json:"schema_version"`
 	ContractVersion string                         `json:"contract_version"`
@@ -87,6 +102,7 @@ type AdapterRequest struct {
 	Capabilities    map[Capability]CapabilityState `json:"capabilities"`
 }
 
+// NewCommandAdapter validates options and constructs an external command adapter.
 func NewCommandAdapter(options CommandAdapterOptions) (*CommandAdapter, error) {
 	if !validLiveClientFamily(options.ClientFamily) {
 		return nil, fmt.Errorf("command adapter client family is invalid")
@@ -108,8 +124,10 @@ func NewCommandAdapter(options CommandAdapterOptions) (*CommandAdapter, error) {
 	}, nil
 }
 
+// ClientFamily returns the adapter's normalized client family.
 func (adapter *CommandAdapter) ClientFamily() ClientFamily { return adapter.client }
 
+// Trace runs the adapter once and strictly validates its normalized trace.
 func (adapter *CommandAdapter) Trace(ctx context.Context, scenario Scenario, contract string) (Trace, error) {
 	request := AdapterRequest{
 		SchemaVersion: CurrentSchemaVersion, ContractVersion: contract,
@@ -129,7 +147,14 @@ func (adapter *CommandAdapter) Trace(ctx context.Context, scenario Scenario, con
 	command.Stdout = output
 	command.Stderr = io.Discard
 	if err := command.Run(); err != nil {
-		return Trace{}, fmt.Errorf("adapter process failed")
+		if contextErr := ctx.Err(); contextErr != nil {
+			return Trace{}, fmt.Errorf("adapter process context failed: %w", contextErr)
+		}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return Trace{}, fmt.Errorf("adapter process exited unsuccessfully: %w", exitErr)
+		}
+		return Trace{}, fmt.Errorf("adapter process failed: %w", err)
 	}
 	trace, err := DecodeTrace(output.Bytes())
 	if err != nil {

@@ -45,7 +45,6 @@ func TestLoadSuiteStrictlyValidatesSchema(t *testing.T) {
 		want string
 	}{
 		{"unknown field", `"suite_version": "1.0.0",`, `"suite_version": "1.0.0", "private_prompt": "no",`, "unknown field"},
-		{"null scenarios", `"scenarios": [{`, `"scenarios": null, "ignored": [{`, "unknown field"},
 		{"invalid ID", `"TASK-002"`, `"private scenario"`, "scenario ID"},
 		{"missing capability", `"documents":"disabled",`, ``, "capability \"documents\" is required"},
 		{"unknown event code", `"task_not_created"`, `"raw response text"`, "code"},
@@ -59,6 +58,18 @@ func TestLoadSuiteStrictlyValidatesSchema(t *testing.T) {
 				t.Fatalf("LoadSuite() error = %v, want containing %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestLoadSuiteRejectsNullScenarios(t *testing.T) {
+	start := strings.Index(validSuiteJSON, `"scenarios":`)
+	if start < 0 {
+		t.Fatal("valid suite fixture has no scenarios field")
+	}
+	value := validSuiteJSON[:start] + `"scenarios": null` + "\n}"
+	_, err := LoadSuite(strings.NewReader(value))
+	if err == nil || !strings.Contains(err.Error(), "non-empty array") {
+		t.Fatalf("LoadSuite() error = %v, want non-empty array failure", err)
 	}
 }
 
@@ -90,6 +101,19 @@ func TestDecodeTraceRejectsPrivateAndMalformedFields(t *testing.T) {
 	}
 }
 
+func TestDecodeTraceRejectsOrphanToolResult(t *testing.T) {
+	value := strings.Replace(
+		validTraceJSON,
+		`{"sequence":1,"event":"capability","capability":"todoist","outcome":"unavailable"}`,
+		`{"sequence":1,"event":"tool_result","capability":"todoist","operation":"task_create","outcome":"success"}`,
+		1,
+	)
+	_, err := DecodeTrace([]byte(value))
+	if err == nil || !strings.Contains(err.Error(), "no matching preceding tool_call") {
+		t.Fatalf("DecodeTrace() error = %v, want orphan result failure", err)
+	}
+}
+
 func TestLoadContractCatalogAndCoverage(t *testing.T) {
 	contract := `# Contract
 Contract version: **1.0.0**
@@ -98,7 +122,7 @@ Contract version: **1.0.0**
 | --- |
 | ` + "`RECALL-001`" + ` |
 | ` + "`TASK-002`" + ` |
-## Contract evolution
+## Additional guidance
 Mention ` + "`IGNORED-999`" + ` later.
 `
 	catalog, err := LoadContractCatalog(strings.NewReader(contract))

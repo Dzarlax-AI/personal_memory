@@ -2,6 +2,7 @@ package conformance
 
 import "sort"
 
+// ResultStatus is the normalized result of evaluating one client-scenario pair.
 type ResultStatus string
 
 const (
@@ -11,6 +12,7 @@ const (
 	StatusError        ResultStatus = "error"
 )
 
+// ReasonCode identifies a stable, privacy-safe validation failure reason.
 type ReasonCode string
 
 const (
@@ -25,11 +27,13 @@ const (
 	ReasonAdapter              ReasonCode = "adapter_error"
 )
 
+// ValidationResult contains one scenario status and its normalized reasons.
 type ValidationResult struct {
 	Status  ResultStatus
 	Reasons []ReasonCode
 }
 
+// ValidateScenario evaluates a trace against one scenario.
 func ValidateScenario(scenario Scenario, trace Trace, contractVersion string) ValidationResult {
 	if trace.ContractVersion != contractVersion {
 		return validationResult(StatusError, ReasonContractVersion)
@@ -56,6 +60,21 @@ func ValidateScenario(scenario Scenario, trace Trace, contractVersion string) Va
 	for _, pattern := range scenario.Assertions.MustNot {
 		if countMatches(trace.Events, pattern) != 0 {
 			reasons = append(reasons, ReasonForbiddenEvent)
+		}
+	}
+	if len(scenario.Assertions.AnyOf) != 0 {
+		alternativePassed := false
+		alternativeReasons := make([]ReasonCode, 0)
+		for _, alternative := range scenario.Assertions.AnyOf {
+			current := validateAlternative(trace.Events, alternative)
+			if len(current) == 0 {
+				alternativePassed = true
+				break
+			}
+			alternativeReasons = append(alternativeReasons, current...)
+		}
+		if !alternativePassed {
+			reasons = append(reasons, alternativeReasons...)
 		}
 	}
 	for _, assertion := range scenario.Assertions.Counts {
@@ -89,6 +108,23 @@ func ValidateScenario(scenario Scenario, trace Trace, contractVersion string) Va
 	sort.Slice(reasons, func(i, j int) bool { return reasons[i] < reasons[j] })
 	reasons = compactReasons(reasons)
 	return ValidationResult{Status: StatusFail, Reasons: reasons}
+}
+
+func validateAlternative(events []Event, alternative AssertionAlternative) []ReasonCode {
+	reasons := make([]ReasonCode, 0)
+	for _, pattern := range alternative.Must {
+		if countMatches(events, pattern) == 0 {
+			reasons = append(reasons, ReasonRequiredEventMissing)
+		}
+	}
+	for _, assertion := range alternative.Ordered {
+		before, beforeFound := firstMatch(events, assertion.Before)
+		after, afterFound := firstMatch(events, assertion.After)
+		if !beforeFound || !afterFound || before.Sequence >= after.Sequence {
+			reasons = append(reasons, ReasonEventOrder)
+		}
+	}
+	return reasons
 }
 
 func validationResult(status ResultStatus, reason ReasonCode) ValidationResult {

@@ -21,6 +21,7 @@ var (
 	contractID      = regexp.MustCompile("`([A-Z]+-[0-9]{3})`")
 )
 
+// LoadSuite strictly decodes and validates a conformance suite.
 func LoadSuite(reader io.Reader) (*Suite, error) {
 	var suite Suite
 	if err := decodeStrict(reader, &suite); err != nil {
@@ -32,6 +33,7 @@ func LoadSuite(reader io.Reader) (*Suite, error) {
 	return &suite, nil
 }
 
+// LoadTraceBundle strictly decodes and validates normalized traces.
 func LoadTraceBundle(reader io.Reader) (*TraceBundle, error) {
 	var bundle TraceBundle
 	if err := decodeStrict(reader, &bundle); err != nil {
@@ -61,6 +63,7 @@ func LoadTraceBundle(reader io.Reader) (*TraceBundle, error) {
 	return &bundle, nil
 }
 
+// DecodeTrace strictly decodes and validates one normalized trace.
 func DecodeTrace(data []byte) (Trace, error) {
 	var trace Trace
 	if err := decodeStrict(bytes.NewReader(data), &trace); err != nil {
@@ -72,6 +75,7 @@ func DecodeTrace(data []byte) (Trace, error) {
 	return trace, nil
 }
 
+// LoadContractCatalog extracts the contract version and published scenario IDs.
 func LoadContractCatalog(reader io.Reader) (ContractCatalog, error) {
 	data, err := readLimited(reader)
 	if err != nil {
@@ -93,13 +97,12 @@ func LoadContractCatalog(reader io.Reader) (ContractCatalog, error) {
 				version = match[1]
 			}
 		}
-		switch line {
-		case "## Conformance scenarios":
-			inScenarios = true
-			foundStart = true
-			continue
-		case "## Contract evolution":
-			inScenarios = false
+		if strings.HasPrefix(line, "## ") {
+			inScenarios = line == "## Conformance scenarios"
+			if inScenarios {
+				foundStart = true
+				continue
+			}
 		}
 		if !inScenarios {
 			continue
@@ -129,6 +132,7 @@ func LoadContractCatalog(reader io.Reader) (ContractCatalog, error) {
 	return ContractCatalog{Version: version, ScenarioIDs: ids}, nil
 }
 
+// ValidateCoverage requires exact agreement between suite and contract scenarios.
 func ValidateCoverage(suite *Suite, catalog ContractCatalog) error {
 	if suite.ContractVersion != catalog.Version {
 		return fmt.Errorf("suite contract version %q does not match contract %q",
@@ -182,6 +186,9 @@ func readLimited(reader io.Reader) ([]byte, error) {
 }
 
 func validateSuite(suite *Suite) error {
+	if suite == nil {
+		return fmt.Errorf("suite must not be nil")
+	}
 	if suite.SchemaVersion != CurrentSchemaVersion {
 		return fmt.Errorf("suite schema_version must be %d", CurrentSchemaVersion)
 	}
@@ -191,7 +198,7 @@ func validateSuite(suite *Suite) error {
 	if !semver.MatchString(suite.SuiteVersion) {
 		return fmt.Errorf("suite suite_version must be semantic version")
 	}
-	if suite.Scenarios == nil || len(suite.Scenarios) == 0 {
+	if len(suite.Scenarios) == 0 {
 		return fmt.Errorf("suite scenarios must be a non-empty array")
 	}
 	seen := make(map[string]struct{}, len(suite.Scenarios))
@@ -233,7 +240,7 @@ func validateScenario(scenario *Scenario) error {
 	if len(scenario.Capabilities) != 3 {
 		return fmt.Errorf("scenario %q capabilities contain unknown key", scenario.ID)
 	}
-	if scenario.RequiredObservations == nil || len(scenario.RequiredObservations) == 0 {
+	if len(scenario.RequiredObservations) == 0 {
 		return fmt.Errorf("scenario %q required_observations must be non-empty", scenario.ID)
 	}
 	seenObservations := map[Observation]struct{}{}
@@ -278,17 +285,26 @@ func validateScenario(scenario *Scenario) error {
 		}
 	}
 	for _, order := range scenario.Assertions.Ordered {
-		if err := validatePattern(order.Before); err != nil {
-			return fmt.Errorf("scenario %q order before: %w", scenario.ID, err)
-		}
-		if err := requirePatternObservation(scenario.ID, order.Before, seenObservations); err != nil {
+		if err := validateOrderAssertion(scenario.ID, order, seenObservations); err != nil {
 			return err
 		}
-		if err := validatePattern(order.After); err != nil {
-			return fmt.Errorf("scenario %q order after: %w", scenario.ID, err)
+	}
+	for i, alternative := range scenario.Assertions.AnyOf {
+		if len(alternative.Must) == 0 {
+			return fmt.Errorf("scenario %q any_of alternative %d must be non-empty", scenario.ID, i)
 		}
-		if err := requirePatternObservation(scenario.ID, order.After, seenObservations); err != nil {
-			return err
+		for _, pattern := range alternative.Must {
+			if err := validatePattern(pattern); err != nil {
+				return fmt.Errorf("scenario %q any_of alternative %d: %w", scenario.ID, i, err)
+			}
+			if err := requirePatternObservation(scenario.ID, pattern, seenObservations); err != nil {
+				return err
+			}
+		}
+		for _, order := range alternative.Ordered {
+			if err := validateOrderAssertion(scenario.ID, order, seenObservations); err != nil {
+				return err
+			}
 		}
 	}
 	if scenario.Assertions.MaxRetries != nil && *scenario.Assertions.MaxRetries < 0 {
@@ -300,6 +316,23 @@ func validateScenario(scenario *Scenario) error {
 		}
 	}
 	return nil
+}
+
+func validateOrderAssertion(
+	scenarioID string,
+	order OrderAssertion,
+	observed map[Observation]struct{},
+) error {
+	if err := validatePattern(order.Before); err != nil {
+		return fmt.Errorf("scenario %q order before: %w", scenarioID, err)
+	}
+	if err := requirePatternObservation(scenarioID, order.Before, observed); err != nil {
+		return err
+	}
+	if err := validatePattern(order.After); err != nil {
+		return fmt.Errorf("scenario %q order after: %w", scenarioID, err)
+	}
+	return requirePatternObservation(scenarioID, order.After, observed)
 }
 
 func requirePatternObservation(
@@ -354,6 +387,7 @@ func validateTrace(trace *Trace, contract string) error {
 		return fmt.Errorf("trace events must be an array")
 	}
 	sequences := map[int]Event{}
+	pendingCalls := map[string]int{}
 	previous := 0
 	for i, event := range trace.Events {
 		if event.Sequence <= previous {
@@ -364,6 +398,16 @@ func validateTrace(trace *Trace, contract string) error {
 		}
 		if err := validateEvent(event); err != nil {
 			return fmt.Errorf("trace event %d: %w", i, err)
+		}
+		toolKey := string(event.Capability) + "\x00" + string(event.Operation)
+		switch event.Event {
+		case EventToolCall:
+			pendingCalls[toolKey]++
+		case EventToolResult:
+			if pendingCalls[toolKey] == 0 {
+				return fmt.Errorf("trace event %d tool_result has no matching preceding tool_call", i)
+			}
+			pendingCalls[toolKey]--
 		}
 		if event.RetryOf != nil {
 			if event.Event != EventToolCall {
@@ -490,7 +534,7 @@ func validEventKind(value EventKind) bool {
 
 func validOperation(value Operation) bool {
 	switch value {
-	case OperationRecall, OperationSearch, OperationStore, OperationTaskCreate,
+	case OperationRecall, OperationSearch, OperationStore, OperationTaskList, OperationTaskCreate,
 		OperationTaskUpdate, OperationTaskComplete, OperationTaskDelete,
 		OperationLifecycle, OperationFallback:
 		return true
@@ -515,7 +559,7 @@ func validEventCode(value EventCode) bool {
 		CodeTaskCreated, CodeWriteConfirmed, CodeWriteDuplicate, CodeWriteUnconfirmed,
 		CodeFactFound, CodeNoRelevantFact, CodeDocumentEvidence, CodeDocumentRouted, CodePreferenceInvented,
 		CodeCurrentFactUsed, CodeHistoricalFactUsed, CodeLifecycleUncertain,
-		CodeSimilarityContradiction, CodeExplicitLifecycleChange, CodeUnverifiedFact,
+		CodeSimilarityContradiction, CodeExplicitLifecycleChange, CodeFactVerified, CodeUnverifiedFact,
 		CodeCurrentInstructionUsed, CodeSecretRejected, CodeClarificationRequested,
 		CodeOrdinaryResponse, CodeTelemetryAllowed, CodeTelemetryDisabled,
 		CodeSensitiveDataCaptured:

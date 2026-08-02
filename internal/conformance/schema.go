@@ -1,7 +1,9 @@
 package conformance
 
+// CurrentSchemaVersion is the supported normalized suite, trace, and report schema.
 const CurrentSchemaVersion = 1
 
+// ClientFamily identifies a supported client trace producer.
 type ClientFamily string
 
 const (
@@ -12,6 +14,7 @@ const (
 	ClientSynthetic  ClientFamily = "synthetic"
 )
 
+// Capability identifies an optional client capability observed by a scenario.
 type Capability string
 
 const (
@@ -21,6 +24,7 @@ const (
 	CapabilityOrdinaryContext Capability = "ordinary_context"
 )
 
+// CapabilityState describes whether a capability can be used in a scenario.
 type CapabilityState string
 
 const (
@@ -30,6 +34,7 @@ const (
 	CapabilityTimeout     CapabilityState = "timeout"
 )
 
+// Observation identifies a privacy-safe category present in a trace.
 type Observation string
 
 const (
@@ -40,6 +45,7 @@ const (
 	ObservationArtifacts         Observation = "artifacts"
 )
 
+// EventKind identifies a normalized observable event.
 type EventKind string
 
 const (
@@ -52,12 +58,14 @@ const (
 	EventArtifact   EventKind = "artifact"
 )
 
+// Operation identifies a normalized tool operation.
 type Operation string
 
 const (
 	OperationRecall       Operation = "recall"
 	OperationSearch       Operation = "search"
 	OperationStore        Operation = "store"
+	OperationTaskList     Operation = "task_list"
 	OperationTaskCreate   Operation = "task_create"
 	OperationTaskUpdate   Operation = "task_update"
 	OperationTaskComplete Operation = "task_complete"
@@ -66,6 +74,7 @@ const (
 	OperationFallback     Operation = "fallback"
 )
 
+// Outcome identifies a normalized capability or tool result.
 type Outcome string
 
 const (
@@ -79,6 +88,7 @@ const (
 	OutcomeError       Outcome = "error"
 )
 
+// EventCode identifies a privacy-safe user-visible or artifact event.
 type EventCode string
 
 const (
@@ -99,6 +109,7 @@ const (
 	CodeLifecycleUncertain      EventCode = "lifecycle_uncertain"
 	CodeSimilarityContradiction EventCode = "similarity_contradiction"
 	CodeExplicitLifecycleChange EventCode = "explicit_lifecycle_change"
+	CodeFactVerified            EventCode = "fact_verified"
 	CodeUnverifiedFact          EventCode = "unverified_fact"
 	CodeCurrentInstructionUsed  EventCode = "current_instruction_used"
 	CodeSecretRejected          EventCode = "secret_rejected"
@@ -109,6 +120,7 @@ const (
 	CodeSensitiveDataCaptured   EventCode = "sensitive_data_captured"
 )
 
+// EventPattern selects normalized events for an assertion.
 type EventPattern struct {
 	Event      EventKind  `json:"event"`
 	Capability Capability `json:"capability,omitempty"`
@@ -117,25 +129,36 @@ type EventPattern struct {
 	Code       EventCode  `json:"code,omitempty"`
 }
 
+// CountAssertion constrains the number of matching events.
 type CountAssertion struct {
 	Pattern EventPattern `json:"pattern"`
 	Min     *int         `json:"min,omitempty"`
 	Max     *int         `json:"max,omitempty"`
 }
 
+// OrderAssertion requires one matching event to precede another.
 type OrderAssertion struct {
 	Before EventPattern `json:"before"`
 	After  EventPattern `json:"after"`
 }
 
-type Assertions struct {
-	Must       []EventPattern   `json:"must"`
-	MustNot    []EventPattern   `json:"must_not"`
-	Counts     []CountAssertion `json:"counts,omitempty"`
-	Ordered    []OrderAssertion `json:"ordered,omitempty"`
-	MaxRetries *int             `json:"max_retries,omitempty"`
+// AssertionAlternative describes one conforming branch of an any_of assertion.
+type AssertionAlternative struct {
+	Must    []EventPattern   `json:"must"`
+	Ordered []OrderAssertion `json:"ordered,omitempty"`
 }
 
+// Assertions contains the behavioral requirements for a scenario.
+type Assertions struct {
+	Must       []EventPattern         `json:"must"`
+	MustNot    []EventPattern         `json:"must_not"`
+	AnyOf      []AssertionAlternative `json:"any_of,omitempty"`
+	Counts     []CountAssertion       `json:"counts,omitempty"`
+	Ordered    []OrderAssertion       `json:"ordered,omitempty"`
+	MaxRetries *int                   `json:"max_retries,omitempty"`
+}
+
+// Scenario defines one synthetic conformance case.
 type Scenario struct {
 	ID                   string                         `json:"id"`
 	IntentClass          string                         `json:"intent_class"`
@@ -145,6 +168,7 @@ type Scenario struct {
 	Assertions           Assertions                     `json:"assertions"`
 }
 
+// Suite is a versioned collection of conformance scenarios.
 type Suite struct {
 	SchemaVersion   int        `json:"schema_version"`
 	ContractVersion string     `json:"contract_version"`
@@ -152,6 +176,7 @@ type Suite struct {
 	Scenarios       []Scenario `json:"scenarios"`
 }
 
+// Event is one normalized, privacy-safe observation in a trace.
 type Event struct {
 	Sequence   int        `json:"sequence"`
 	Event      EventKind  `json:"event"`
@@ -162,6 +187,7 @@ type Event struct {
 	RetryOf    *int       `json:"retry_of,omitempty"`
 }
 
+// Trace contains the observations for one client and scenario.
 type Trace struct {
 	SchemaVersion   int           `json:"schema_version"`
 	ContractVersion string        `json:"contract_version"`
@@ -171,12 +197,14 @@ type Trace struct {
 	Events          []Event       `json:"events"`
 }
 
+// TraceBundle groups normalized traces under one contract version.
 type TraceBundle struct {
 	SchemaVersion   int     `json:"schema_version"`
 	ContractVersion string  `json:"contract_version"`
 	Traces          []Trace `json:"traces"`
 }
 
+// ContractCatalog contains the stable scenario IDs published by the contract.
 type ContractCatalog struct {
 	Version     string
 	ScenarioIDs []string

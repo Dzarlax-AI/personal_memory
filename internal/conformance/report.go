@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// Aggregate counts results by status.
 type Aggregate struct {
 	Pass         int `json:"pass"`
 	Fail         int `json:"fail"`
@@ -15,6 +16,7 @@ type Aggregate struct {
 	Error        int `json:"error"`
 }
 
+// ScenarioResult is the report row for one client-scenario pair.
 type ScenarioResult struct {
 	ScenarioID   string       `json:"scenario_id"`
 	ClientFamily ClientFamily `json:"client_family"`
@@ -22,6 +24,7 @@ type ScenarioResult struct {
 	Reasons      []ReasonCode `json:"reasons"`
 }
 
+// Report is the deterministic, privacy-safe conformance output.
 type Report struct {
 	SchemaVersion   int              `json:"schema_version"`
 	ContractVersion string           `json:"contract_version"`
@@ -32,6 +35,7 @@ type Report struct {
 	Results         []ScenarioResult `json:"results"`
 }
 
+// RenderJSON serializes a normalized report as deterministic JSON.
 func RenderJSON(report Report) ([]byte, error) {
 	report = normalizeReport(report)
 	data, err := json.MarshalIndent(report, "", "  ")
@@ -41,6 +45,7 @@ func RenderJSON(report Report) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
+// RenderMarkdown renders a normalized report as a compliance matrix.
 func RenderMarkdown(report Report) string {
 	report = normalizeReport(report)
 	var out strings.Builder
@@ -67,6 +72,7 @@ func RenderMarkdown(report Report) string {
 	return out.String()
 }
 
+// DecodeReport strictly decodes and verifies a report and its aggregate.
 func DecodeReport(data []byte) (Report, error) {
 	var report Report
 	if err := decodeStrict(bytes.NewReader(data), &report); err != nil {
@@ -81,8 +87,8 @@ func DecodeReport(data []byte) (Report, error) {
 	if report.Source != "fixture" && report.Source != "live" {
 		return Report{}, fmt.Errorf("report source is invalid")
 	}
-	if report.Results == nil {
-		return Report{}, fmt.Errorf("report results must be an array")
+	if len(report.Results) == 0 {
+		return Report{}, fmt.Errorf("report results must be a non-empty array")
 	}
 	expected := Aggregate{}
 	seen := map[string]struct{}{}
@@ -135,6 +141,7 @@ func normalizeReport(report Report) Report {
 		sort.Slice(report.Results[i].Reasons, func(a, b int) bool {
 			return report.Results[i].Reasons[a] < report.Results[i].Reasons[b]
 		})
+		report.Results[i].Reasons = compactReasons(report.Results[i].Reasons)
 	}
 	sort.Slice(report.Results, func(i, j int) bool {
 		if report.Results[i].ClientFamily != report.Results[j].ClientFamily {

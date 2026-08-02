@@ -2,9 +2,11 @@ package conformance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -24,9 +26,13 @@ func TestClientProfilesCoverSupportedLiveFamilies(t *testing.T) {
 }
 
 func TestCommandAdapterUsesStrictSafeProtocol(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	adapter, err := NewCommandAdapter(CommandAdapterOptions{
 		ClientFamily: ClientCodex,
-		Executable:   os.Args[0],
+		Executable:   executable,
 		Args:         []string{"-test.run=TestConformanceAdapterHelperProcess", "--"},
 		Environment:  []string{"GO_WANT_CONFORMANCE_HELPER=success"},
 	})
@@ -70,11 +76,15 @@ func TestCommandAdapterFailsClosedWithoutLeakingOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			adapter, err := NewCommandAdapter(CommandAdapterOptions{
 				ClientFamily: ClientCodex,
-				Executable:   os.Args[0],
+				Executable:   executable,
 				Args:         []string{"-test.run=TestConformanceAdapterHelperProcess", "--"},
 				Environment:  []string{"GO_WANT_CONFORMANCE_HELPER=" + tt.mode},
 				OutputLimit:  tt.limit,
@@ -88,12 +98,25 @@ func TestCommandAdapterFailsClosedWithoutLeakingOutput(t *testing.T) {
 			if err == nil {
 				t.Fatal("Trace() succeeded, want failure")
 			}
+			if tt.name == "timeout" && !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("Trace() error = %v, want deadline classification", err)
+			}
+			var exitErr *exec.ExitError
+			if tt.name == "non-zero" && !errors.As(err, &exitErr) {
+				t.Fatalf("Trace() error = %v, want exit classification", err)
+			}
 			for _, forbidden := range []string{"private prompt", "secret stderr", "raw response"} {
 				if strings.Contains(err.Error(), forbidden) {
 					t.Fatalf("error leaks adapter content: %v", err)
 				}
 			}
 		})
+	}
+}
+
+func TestNewFixtureAdapterRejectsNilBundle(t *testing.T) {
+	if _, err := NewFixtureAdapter(nil, ClientCodex); err == nil {
+		t.Fatal("NewFixtureAdapter() accepted nil bundle")
 	}
 }
 

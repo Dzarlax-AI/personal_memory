@@ -134,7 +134,9 @@
       "events": [
         {"sequence": 1, "event": "tool_call", "capability": "todoist", "operation": "task_create"},
         {"sequence": 2, "event": "tool_result", "capability": "todoist", "operation": "task_create", "outcome": "timeout"},
-        {"sequence": 3, "event": "disclosure", "code": "write_unconfirmed"}
+        {"sequence": 3, "event": "tool_call", "capability": "todoist", "operation": "task_list"},
+        {"sequence": 4, "event": "tool_result", "capability": "todoist", "operation": "task_list", "outcome": "empty"},
+        {"sequence": 5, "event": "disclosure", "code": "write_unconfirmed"}
       ]
     },
     {
@@ -251,8 +253,12 @@
     },
     {
       "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "TELEMETRY-002", "client_family": "synthetic",
-      "observed": ["artifacts"],
-      "events": [{"sequence": 1, "event": "artifact", "code": "telemetry_allowed"}]
+      "observed": ["tool_events", "artifacts"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "recall"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "recall", "outcome": "error"},
+        {"sequence": 3, "event": "artifact", "code": "telemetry_allowed"}
+      ]
     },
     {
       "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "TELEMETRY-003", "client_family": "synthetic",

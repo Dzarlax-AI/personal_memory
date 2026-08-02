@@ -6,12 +6,16 @@ import (
 	"sort"
 )
 
+// Run evaluates a fixture trace bundle against a suite and contract catalog.
 func Run(suite *Suite, bundle *TraceBundle, catalog ContractCatalog, source string) (Report, error) {
 	if source != "fixture" && source != "live" {
 		return Report{}, fmt.Errorf("source must be fixture or live")
 	}
 	if err := validateSuite(suite); err != nil {
 		return Report{}, err
+	}
+	if bundle == nil {
+		return Report{}, fmt.Errorf("trace bundle must not be nil")
 	}
 	if bundle.SchemaVersion != CurrentSchemaVersion {
 		return Report{}, fmt.Errorf("trace bundle schema_version must be %d", CurrentSchemaVersion)
@@ -35,8 +39,13 @@ func Run(suite *Suite, bundle *TraceBundle, catalog ContractCatalog, source stri
 		if _, exists := scenarios[trace.ScenarioID]; !exists {
 			return Report{}, fmt.Errorf("trace references unknown scenario %q", trace.ScenarioID)
 		}
+		key := string(trace.ClientFamily) + "\x00" + trace.ScenarioID
+		if _, duplicate := traces[key]; duplicate {
+			return Report{}, fmt.Errorf("duplicate trace for client %q scenario %q",
+				trace.ClientFamily, trace.ScenarioID)
+		}
 		clients[trace.ClientFamily] = struct{}{}
-		traces[string(trace.ClientFamily)+"\x00"+trace.ScenarioID] = trace
+		traces[key] = trace
 	}
 	if len(clients) == 0 {
 		return Report{}, fmt.Errorf("trace bundle contains no client traces")
@@ -72,6 +81,7 @@ func Run(suite *Suite, bundle *TraceBundle, catalog ContractCatalog, source stri
 	return normalizeReport(report), nil
 }
 
+// RunAdapter evaluates every suite scenario through one live adapter.
 func RunAdapter(
 	ctx context.Context,
 	suite *Suite,
