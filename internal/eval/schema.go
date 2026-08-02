@@ -535,6 +535,7 @@ type Gates struct {
 	MinimumNDCGAt             map[string]float64 `json:"minimum_ndcg_at,omitempty"`
 
 	forbidLifecycleViolationsPresent bool
+	forceLifecycleViolationsRender   bool
 }
 
 func (gates *Gates) UnmarshalJSON(data []byte) error {
@@ -572,7 +573,7 @@ func (gates Gates) MarshalJSON() ([]byte, error) {
 		MinimumMRR:                gates.MinimumMRR,
 		MinimumNDCGAt:             gates.MinimumNDCGAt,
 	}
-	if gates.forbidLifecycleViolationsPresent || gates.ForbidLifecycleViolations {
+	if gates.forceLifecycleViolationsRender || gates.ForbidLifecycleViolations {
 		encoded.ForbidLifecycleViolations = &gates.ForbidLifecycleViolations
 	}
 	return json.Marshal(encoded)

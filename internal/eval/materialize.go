@@ -220,7 +220,7 @@ func RenderDatasetJSON(dataset *Dataset) ([]byte, error) {
 	rendered.Configuration.TopK = append([]int(nil), dataset.Configuration.TopK...)
 	rendered.Gates = dataset.Gates
 	if rendered.SchemaVersion == CurrentDatasetSchemaVersion {
-		rendered.Gates.forbidLifecycleViolationsPresent = true
+		rendered.Gates.forceLifecycleViolationsRender = true
 	}
 	if err := rendered.Validate(); err != nil {
 		return nil, err

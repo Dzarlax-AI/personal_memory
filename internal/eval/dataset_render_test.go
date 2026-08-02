@@ -21,12 +21,19 @@ func TestRenderDatasetJSONPreservesHistoricalV1V2Bytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	v2ExplicitFalse := decodeTestDocument(t, []byte(validV2Dataset()))
+	v2ExplicitFalse["gates"].(map[string]any)["forbid_lifecycle_violations"] = false
+	v2ExplicitFalseData, err := json.Marshal(v2ExplicitFalse)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range []struct {
 		name  string
 		input string
 	}{
 		{name: "v1", input: validDataset},
-		{name: "v2", input: validV2Dataset()},
+		{name: "v2-true", input: validV2Dataset()},
+		{name: "v2-explicit-false", input: string(v2ExplicitFalseData)},
 		{name: "v2-absent-lifecycle-gate", input: string(v2WithoutLifecycleGateData)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -34,11 +41,10 @@ func TestRenderDatasetJSONPreservesHistoricalV1V2Bytes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want, err := json.MarshalIndent(dataset, "", "  ")
+			want, err := renderBASECompatibleHistoricalDataset(dataset)
 			if err != nil {
 				t.Fatal(err)
 			}
-			want = append(want, '\n')
 			got, err := RenderDatasetJSON(dataset)
 			if err != nil {
 				t.Fatal(err)
@@ -48,6 +54,48 @@ func TestRenderDatasetJSONPreservesHistoricalV1V2Bytes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func renderBASECompatibleHistoricalDataset(dataset *Dataset) ([]byte, error) {
+	type baseGates struct {
+		ForbidInvariantViolations bool               `json:"forbid_invariant_violations"`
+		ForbidLifecycleViolations *bool              `json:"forbid_lifecycle_violations,omitempty"`
+		MinimumHitAt              map[string]float64 `json:"minimum_hit_at,omitempty"`
+		MinimumMRR                *float64           `json:"minimum_mrr,omitempty"`
+		MinimumNDCGAt             map[string]float64 `json:"minimum_ndcg_at,omitempty"`
+	}
+	gates := baseGates{
+		ForbidInvariantViolations: dataset.Gates.ForbidInvariantViolations,
+		MinimumHitAt:              dataset.Gates.MinimumHitAt,
+		MinimumMRR:                dataset.Gates.MinimumMRR,
+		MinimumNDCGAt:             dataset.Gates.MinimumNDCGAt,
+	}
+	if dataset.Gates.ForbidLifecycleViolations {
+		gates.ForbidLifecycleViolations = &dataset.Gates.ForbidLifecycleViolations
+	}
+	wire := struct {
+		SchemaVersion       int                  `json:"schema_version"`
+		DatasetVersion      string               `json:"dataset_version"`
+		Embedding           EmbeddingIdentity    `json:"embedding"`
+		Configuration       Configuration        `json:"configuration"`
+		Facts               []FixturePoint       `json:"facts"`
+		Chunks              []FixturePoint       `json:"chunks"`
+		Folders             []FixturePoint       `json:"folders"`
+		Queries             []Query              `json:"queries"`
+		Gates               baseGates            `json:"gates"`
+		TransitionScenarios []TransitionScenario `json:"transition_scenarios,omitempty"`
+	}{
+		SchemaVersion: dataset.SchemaVersion, DatasetVersion: dataset.DatasetVersion,
+		Embedding: dataset.Embedding, Configuration: dataset.Configuration,
+		Facts: dataset.Facts, Chunks: dataset.Chunks, Folders: dataset.Folders,
+		Queries: dataset.Queries, Gates: gates,
+		TransitionScenarios: dataset.TransitionScenarios,
+	}
+	data, err := json.MarshalIndent(wire, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
 }
 
 func TestGatesMarshalPreservesProgrammaticV2LifecycleTrue(t *testing.T) {
@@ -83,6 +131,9 @@ func TestRenderDatasetJSONAlwaysEmitsStrictV3LifecycleGate(t *testing.T) {
 			data, err := RenderDatasetJSON(dataset)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if dataset.Gates.forceLifecycleViolationsRender {
+				t.Fatal("RenderDatasetJSON mutated source gate rendering metadata")
 			}
 			decoded, err := Load(bytes.NewReader(data))
 			if err != nil {
