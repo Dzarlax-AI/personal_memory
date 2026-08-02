@@ -16,13 +16,16 @@ import (
 )
 
 type fixtureQdrant struct {
-	mu           sync.Mutex
-	exists       map[string]bool
-	createCount  int
-	failCreateAt int
-	responseLoss bool
-	failSeed     bool
-	deleted      []string
+	mu                  sync.Mutex
+	exists              map[string]bool
+	createCount         int
+	failCreateAt        int
+	responseLoss        bool
+	failSeed            bool
+	deleted             []string
+	searchResult        string
+	failInfoAfterCreate int
+	deleteAttempts      int
 }
 
 func (fake *fixtureQdrant) handler(w http.ResponseWriter, r *http.Request) {
@@ -33,6 +36,11 @@ func (fake *fixtureQdrant) handler(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 1 {
 		switch r.Method {
 		case http.MethodGet:
+			if fake.createCount > 0 && fake.failInfoAfterCreate > 0 {
+				fake.failInfoAfterCreate--
+				http.Error(w, "inspection unavailable", http.StatusInternalServerError)
+				return
+			}
 			if !fake.exists[name] {
 				http.NotFound(w, r)
 				return
@@ -57,6 +65,11 @@ func (fake *fixtureQdrant) handler(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(`{"status":"ok","result":{"status":"completed"}}`))
 			return
 		case http.MethodDelete:
+			fake.deleteAttempts++
+			if !fake.exists[name] {
+				http.NotFound(w, r)
+				return
+			}
 			delete(fake.exists, name)
 			fake.deleted = append(fake.deleted, name)
 			_, _ = w.Write([]byte(`{"status":"ok","result":{"status":"completed"}}`))
@@ -73,7 +86,11 @@ func (fake *fixtureQdrant) handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if r.Method == http.MethodPost && len(parts) == 3 && parts[2] == "search" {
-			_, _ = w.Write([]byte(`{"result":[]}`))
+			result := fake.searchResult
+			if result == "" {
+				result = `[]`
+			}
+			fmt.Fprintf(w, `{"result":%s}`, result)
 			return
 		}
 	}
@@ -256,6 +273,19 @@ func TestExperimentOverridesRejectInvalidCombination(t *testing.T) {
 	}
 }
 
+func TestExperimentOverridesRejectFixtureInputProfileRelabel(t *testing.T) {
+	dataset, err := Load(strings.NewReader(validV3Dataset()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := LegacyRawV1
+	if _, err := WithExperimentOverrides(dataset, ExperimentOverrides{
+		InputProfile: &profile,
+	}, "fixture"); err == nil || !strings.Contains(err.Error(), "cannot relabel") {
+		t.Fatalf("fixture profile override error = %v", err)
+	}
+}
+
 func TestDurationSummaryDeterministic(t *testing.T) {
 	got := summarizeDurations([]int64{40, 10, 20, 30})
 	want := DurationSummary{Count: 4, Min: 10, P50: 20, P95: 40, Max: 40}
@@ -420,23 +450,27 @@ func TestV3DiagnosticsStrictDecodeAndComparisonIsInformational(t *testing.T) {
 
 func TestFixtureCleanupCoversSuccessFailureAndAmbiguousCreate(t *testing.T) {
 	for _, tt := range []struct {
-		name            string
-		failCreateAt    int
-		responseLoss    bool
-		failSeed        bool
-		wantError       bool
-		wantDeleteCount int
+		name                string
+		failCreateAt        int
+		responseLoss        bool
+		failSeed            bool
+		wantError           bool
+		wantDeleteCount     int
+		failInfoAfterCreate int
+		wantDeleteAttempts  int
 	}{
-		{"success", 0, false, false, false, 3},
-		{"seed failure", 0, false, true, true, 3},
-		{"first create response loss", 1, true, false, true, 1},
-		{"second create response loss", 2, true, false, true, 2},
-		{"genuine create failure", 1, false, false, true, 0},
+		{"success", 0, false, false, false, 3, 0, 3},
+		{"seed failure", 0, false, true, true, 3, 0, 3},
+		{"first create response loss", 1, true, false, true, 1, 0, 1},
+		{"second create response loss", 2, true, false, true, 2, 0, 2},
+		{"response loss inspection failure", 1, true, false, true, 1, 2, 1},
+		{"genuine no-create 404 cleanup", 1, false, false, true, 0, 2, 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			fake := &fixtureQdrant{
 				exists: make(map[string]bool), failCreateAt: tt.failCreateAt,
 				responseLoss: tt.responseLoss, failSeed: tt.failSeed,
+				failInfoAfterCreate: tt.failInfoAfterCreate,
 			}
 			server := httptest.NewServer(http.HandlerFunc(fake.handler))
 			defer server.Close()
@@ -452,6 +486,9 @@ func TestFixtureCleanupCoversSuccessFailureAndAmbiguousCreate(t *testing.T) {
 			}
 			if len(fake.deleted) != tt.wantDeleteCount {
 				t.Fatalf("deleted = %v, want %d", fake.deleted, tt.wantDeleteCount)
+			}
+			if fake.deleteAttempts != tt.wantDeleteAttempts {
+				t.Fatalf("delete attempts = %d, want %d", fake.deleteAttempts, tt.wantDeleteAttempts)
 			}
 			if len(fake.exists) != 0 {
 				t.Fatalf("temporary collections leaked: %v", fake.exists)
@@ -557,5 +594,111 @@ func TestTEIFixtureMissingCorpusTextStopsBeforeTemporaryCreation(t *testing.T) {
 	}
 	if fake.createCount != 0 || len(fake.deleted) != 0 || len(fake.exists) != 0 {
 		t.Fatalf("external temporary state changed: %#v", fake)
+	}
+}
+
+func TestFixtureSourcesPropagateDocumentsRootForPathLift(t *testing.T) {
+	for _, source := range []string{"fixture", "tei-fixture"} {
+		t.Run(source, func(t *testing.T) {
+			otherID := "11111111-1111-4111-8111-111111111111"
+			fake := &fixtureQdrant{
+				exists: make(map[string]bool),
+				searchResult: fmt.Sprintf(`[
+					{"id":"%s","score":0.99,"payload":{"text":"general","file_path":"/private/deploy/PM-1427.md"}},
+					{"id":42,"score":0.4,"payload":{"text":"general","file_path":"/docs/project/PM-1427.md"}}
+				]`, otherID),
+			}
+			server := httptest.NewServer(http.HandlerFunc(fake.handler))
+			defer server.Close()
+			dataset, err := Load(strings.NewReader(validV3Dataset()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			dataset.Chunks = cloneFixturePoints(dataset.Facts)
+			dataset.Chunks[0].Payload = map[string]any{
+				"text": "general", "file_path": "/docs/project/PM-1427.md",
+			}
+			dataset.Chunks[1].Payload = map[string]any{
+				"text": "general", "file_path": "/private/deploy/PM-1427.md",
+			}
+			dataset.Queries[0].Target = "documents"
+			dataset.Queries[0].Mode = "flat"
+			dataset.Queries[0].Text = "PM-1427"
+			dataset.Queries[0].ForbiddenIDs = nil
+			dataset.Queries[0].LifecycleExpectations = nil
+			dataset.Configuration.RetrievalStrategy = RetrievalHybridRRF
+			dataset.Configuration.DenseCandidateLimit = 20
+			dataset.Configuration.RRFConstant = 60
+			options := RunOptions{
+				Source: source, QdrantURL: server.URL, DocumentsRoot: "/docs",
+			}
+			if source == "tei-fixture" {
+				options.Embedder = &recordingPurposeEmbedder{}
+			}
+			report, err := Run(context.Background(), dataset, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := report.Queries[0].Results; len(got) < 1 || got[0].ID != "42" {
+				t.Fatalf("path-lift results = %+v", got)
+			}
+		})
+	}
+}
+
+func TestV3VectorOnlyFixtureAndLivePreserveDenseOutput(t *testing.T) {
+	otherID := "11111111-1111-4111-8111-111111111111"
+	searchResult := fmt.Sprintf(`[
+		{"id":"%s","score":0.99,"payload":{"text":"general","lifecycle_state":"current","canonical":false,"supersedes":[],"superseded_by":[]}},
+		{"id":42,"score":0.4,"payload":{"text":"PM-1427","lifecycle_state":"current","canonical":false,"supersedes":[],"superseded_by":[]}}
+	]`, otherID)
+	fixtureFake := &fixtureQdrant{
+		exists: make(map[string]bool), searchResult: searchResult,
+	}
+	fixtureServer := httptest.NewServer(http.HandlerFunc(fixtureFake.handler))
+	defer fixtureServer.Close()
+	fixtureDataset, err := Load(strings.NewReader(validV3Dataset()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureDataset.Queries[0].Text = "PM-1427"
+	fixtureReport, err := Run(context.Background(), fixtureDataset, RunOptions{
+		Source: "fixture", QdrantURL: fixtureServer.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	liveServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/collections/memory" {
+			writeLiveIdentityCollection(w, 2)
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/search" {
+			fmt.Fprintf(w, `{"result":%s}`, searchResult)
+			return
+		}
+		http.Error(w, "unexpected request", http.StatusInternalServerError)
+	}))
+	defer liveServer.Close()
+	liveDataset, err := Load(strings.NewReader(validV3Dataset()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveDataset.Embedding.Provider = "tei"
+	liveDataset.Facts = nil
+	liveDataset.Queries[0].Text = "PM-1427"
+	liveReport, err := Run(context.Background(), liveDataset, RunOptions{
+		Source: "live", QdrantURL: liveServer.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, report := range []Report{fixtureReport, liveReport} {
+		got := report.Queries[0].Results
+		if len(got) != 2 || got[0].ID != otherID || got[0].Score != .99 ||
+			got[1].ID != "42" || got[1].Score != .4 {
+			t.Fatalf("%s vector-only results = %+v", report.Mode, got)
+		}
 	}
 }

@@ -277,7 +277,29 @@ func (c *Client) DeleteCollection(ctx context.Context, requiredPrefix string) er
 	query := parsed.Query()
 	query.Set("timeout", "15")
 	parsed.RawQuery = query.Encode()
-	return c.mutate(ctx, http.MethodDelete, parsed.String(), nil, false)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, parsed.String(), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("DELETE %s: %w", parsed.String(), err)
+	}
+	defer resp.Body.Close()
+	body, err := readLimitedBody(resp.Body, maxResponseBodyBytes)
+	if err != nil {
+		return fmt.Errorf("read DELETE %s response: %w", parsed.String(), err)
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("DELETE %s failed (status %d): %s", parsed.String(), resp.StatusCode, string(body))
+	}
+	if err := validateMutationResponse(body, false); err != nil {
+		return fmt.Errorf("DELETE %s: %w", parsed.String(), err)
+	}
+	return nil
 }
 
 // UpdateCollectionMetadata merges collection-level metadata. Qdrant treats an

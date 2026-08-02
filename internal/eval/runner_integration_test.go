@@ -591,6 +591,68 @@ func TestLiveV3IdentityMismatchOrMalformedStopsBeforeSearchAndWrites(t *testing.
 	}
 }
 
+func TestLiveV3HybridLifecycleAuthorityUsesPoolBeforeTopK(t *testing.T) {
+	for _, intent := range []QueryIntent{
+		QueryIntentCurrent, QueryIntentHistory, QueryIntentAsOf, QueryIntentUncertainty,
+	} {
+		t.Run(string(intent), func(t *testing.T) {
+			searches := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.Path == "/collections/memory" {
+					writeLiveIdentityCollection(w, 4)
+					return
+				}
+				if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/search" {
+					searches++
+					state := "historical"
+					if intent == QueryIntentCurrent {
+						state = "current"
+					}
+					fmt.Fprintf(w, `{"result":[
+						{"id":43,"score":0.99,"payload":{"text":"PM-1427 alpha","lifecycle_state":"%s","canonical":false,"supersedes":[],"superseded_by":[]}},
+						{"id":44,"score":0.98,"payload":{"text":"PM-1427 beta","lifecycle_state":"%s","canonical":false,"supersedes":[],"superseded_by":[]}},
+						{"id":45,"score":0.97,"payload":{"text":"PM-1427 gamma","lifecycle_state":"%s","canonical":false,"supersedes":[],"superseded_by":[]}},
+						{"id":42,"score":0.1,"payload":{"text":"unrelated canonical","lifecycle_state":"current","canonical":true,"supersedes":[],"superseded_by":[]}}
+					]}`, state, state, state)
+					return
+				}
+				http.Error(w, "unexpected request", http.StatusInternalServerError)
+			}))
+			defer server.Close()
+			dataset, err := Load(strings.NewReader(validV3Dataset()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			dataset.Embedding.Provider = "tei"
+			dataset.Facts = nil
+			dataset.Queries[0].Intent = intent
+			dataset.Queries[0].AsOf = ""
+			if intent == QueryIntentAsOf {
+				dataset.Queries[0].AsOf = "2026-01-01"
+			}
+			dataset.Queries[0].Text = "PM-1427"
+			dataset.Queries[0].LifecycleExpectations = nil
+			dataset.Queries[0].ForbiddenIDs = nil
+			dataset.Configuration.RetrievalStrategy = RetrievalHybridRRF
+			dataset.Configuration.DenseCandidateLimit = 20
+			dataset.Configuration.RRFConstant = 60
+			report, err := Run(context.Background(), dataset, RunOptions{
+				Source: "live", QdrantURL: server.URL,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if searches != 1 {
+				t.Fatalf("searches = %d", searches)
+			}
+			results := report.Queries[0].Results
+			if len(results) != 3 || results[0].ID != "42" {
+				t.Fatalf("authority results = %+v", results)
+			}
+		})
+	}
+}
+
 func TestLiveV2LifecycleEvidenceUsesExactReadWithoutChangingRanking(t *testing.T) {
 	var requestBody map[string]any
 	var requests []string

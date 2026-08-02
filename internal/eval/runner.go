@@ -54,7 +54,7 @@ func Run(ctx context.Context, dataset *Dataset, options RunOptions) (Report, err
 	}
 	switch options.Source {
 	case "fixture":
-		return runFixture(ctx, dataset, options.QdrantURL)
+		return runFixture(ctx, dataset, options.QdrantURL, options.DocumentsRoot)
 	case "live":
 		return runLive(ctx, dataset, options)
 	case "tei-fixture":
@@ -70,15 +70,15 @@ type collections struct {
 	folders *qdrant.Client
 }
 
-func runFixture(ctx context.Context, dataset *Dataset, qdrantURL string) (report Report, err error) {
-	return runFixtureTimed(ctx, dataset, qdrantURL, "fixture", nil)
+func runFixture(ctx context.Context, dataset *Dataset, qdrantURL, documentsRoot string) (report Report, err error) {
+	return runFixtureTimed(ctx, dataset, qdrantURL, "fixture", nil, documentsRoot)
 }
 
-func runFixtureTimed(ctx context.Context, dataset *Dataset, qdrantURL, mode string, timings *timingCollector) (report Report, err error) {
-	return runFixtureTimedWithEmbedder(ctx, dataset, qdrantURL, mode, timings, nil)
+func runFixtureTimed(ctx context.Context, dataset *Dataset, qdrantURL, mode string, timings *timingCollector, documentsRoot string) (report Report, err error) {
+	return runFixtureTimedWithEmbedder(ctx, dataset, qdrantURL, mode, timings, documentsRoot, nil)
 }
 
-func runFixtureTimedWithEmbedder(ctx context.Context, dataset *Dataset, qdrantURL, mode string, timings *timingCollector, queryEmbedder PurposeEmbedder) (report Report, err error) {
+func runFixtureTimedWithEmbedder(ctx context.Context, dataset *Dataset, qdrantURL, mode string, timings *timingCollector, documentsRoot string, queryEmbedder PurposeEmbedder) (report Report, err error) {
 	suffix, err := randomSuffix()
 	if err != nil {
 		return Report{}, err
@@ -140,6 +140,7 @@ func runFixtureTimedWithEmbedder(ctx context.Context, dataset *Dataset, qdrantUR
 			postCreateInfo, inspectErr := client.CollectionInfo(resolveCtx)
 			cancel()
 			if inspectErr != nil {
+				created = append(created, client)
 				return Report{}, errors.Join(
 					fmt.Errorf("create temporary collection %s: %w", client.CollectionName(), createErr),
 					fmt.Errorf("resolve ambiguous creation of %s: %w", client.CollectionName(), inspectErr),
@@ -161,13 +162,15 @@ func runFixtureTimedWithEmbedder(ctx context.Context, dataset *Dataset, qdrantUR
 	if err := upsertFixturePoints(ctx, clients.folders, dataset.Folders); err != nil {
 		return Report{}, fmt.Errorf("seed folders: %w", err)
 	}
-	return executeQueriesTimed(ctx, dataset, clients, mode, timings, "", queryEmbedder)
+	return executeQueriesTimed(ctx, dataset, clients, mode, timings, documentsRoot, queryEmbedder)
 }
 
 func cleanupTemporaryCollection(ctx context.Context, client *qdrant.Client) error {
 	info, err := client.CollectionInfo(ctx)
 	if err != nil {
-		return fmt.Errorf("inspect before cleanup: %w", err)
+		// Creation response loss can make the existence check unavailable.
+		// The eval_ prefix guard plus idempotent delete keeps cleanup safe.
+		return client.DeleteCollection(ctx, "eval_")
 	}
 	if !info.Exists {
 		return nil
@@ -266,7 +269,7 @@ func runTEIFixture(ctx context.Context, dataset *Dataset, options RunOptions) (R
 	for i := range copyDataset.Queries {
 		copyDataset.Queries[i].Vector = nil
 	}
-	report, err := runFixtureTimedWithEmbedder(ctx, &copyDataset, options.QdrantURL, "tei-fixture", timings, options.Embedder)
+	report, err := runFixtureTimedWithEmbedder(ctx, &copyDataset, options.QdrantURL, "tei-fixture", timings, options.DocumentsRoot, options.Embedder)
 	if err == nil {
 		report.Diagnostics.Corpus = &CorpusDiagnostics{EmbeddingDurationUS: corpusUS, EmbeddingCount: count}
 	}
@@ -364,7 +367,11 @@ func executeQueriesTimed(ctx context.Context, dataset *Dataset, clients collecti
 			}
 			points, err = clients.facts.Search(ctx, query.Vector, candidateLimit, filter, nil)
 			if err == nil {
-				points, err = rerankPoints(query.Text, points, maxK, dataset.Configuration, "facts", documentsRoot)
+				rerankLimit := maxK
+				if dataset.Configuration.RetrievalStrategy == RetrievalHybridRRF {
+					rerankLimit = min(len(points), retrieval.MaxResults)
+				}
+				points, err = rerankPoints(query.Text, points, rerankLimit, dataset.Configuration, "facts", documentsRoot)
 			}
 		case query.Mode == "flat":
 			candidateLimit := searchLimit

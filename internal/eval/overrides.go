@@ -27,6 +27,9 @@ func WithExperimentOverrides(source *Dataset, overrides ExperimentOverrides, run
 		cloned.Configuration.Name = *overrides.ConfigurationName
 	}
 	if overrides.InputProfile != nil {
+		if runSource == "fixture" {
+			return nil, fmt.Errorf("input profile override cannot relabel precomputed fixture vectors")
+		}
 		cloned.Embedding.InputProfile = *overrides.InputProfile
 		cloned.Embedding.inputProfilePresent = true
 	}

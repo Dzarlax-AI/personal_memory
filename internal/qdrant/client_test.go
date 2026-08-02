@@ -262,6 +262,18 @@ func TestDeleteCollection(t *testing.T) {
 	}
 }
 
+func TestDeleteCollectionIsIdempotentOnNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	if err := NewClient(server.URL, "eval_missing").DeleteCollection(
+		context.Background(), "eval_",
+	); err != nil {
+		t.Fatalf("DeleteCollection() 404 error = %v", err)
+	}
+}
+
 func TestUpsertWithPointIDPreservesKind(t *testing.T) {
 	var ids []any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
