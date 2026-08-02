@@ -185,8 +185,10 @@ func RenderMarkdown(report Report) string {
 					reasons[i] = string(reason)
 				}
 				fmt.Fprintf(&out, "| %s | %s | %s | %s | %s | %t | %t |\n",
-					escapeMarkdown(query.ID), candidate.ID, candidate.State,
-					candidate.Decision, strings.Join(reasons, ", "),
+					escapeMarkdown(query.ID), escapeMarkdown(candidate.ID),
+					escapeMarkdown(string(candidate.State)),
+					escapeMarkdown(string(candidate.Decision)),
+					escapeMarkdown(strings.Join(reasons, ", ")),
 					candidate.Valid, candidate.Expired)
 			}
 		}

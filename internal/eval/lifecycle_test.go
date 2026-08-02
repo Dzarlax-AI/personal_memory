@@ -178,6 +178,21 @@ func TestLifecycleExpectationScoringUsesExactReasonCodesAndSafeIDs(t *testing.T)
 	}
 }
 
+func TestInvalidAsOfKeepsCurrentReferenceTime(t *testing.T) {
+	now := time.Date(2026, time.August, 2, 12, 0, 0, 0, time.UTC)
+	query := Query{Intent: QueryIntentAsOf, AsOf: "not-a-date"}
+	got := presentFactCandidates(query, []qdrant.Point{
+		lifecyclePoint("expired", 1, map[string]any{
+			"lifecycle_state": "current", "valid_until": "2026-08-01",
+		}),
+	}, now)
+	candidate := candidateByID(t, got.report, "expired")
+	if !candidate.Expired || candidate.Decision != PresentationSuppress ||
+		!equalReasonCodes(candidate.ReasonCodes, []LifecycleReasonCode{ReasonExpired}) {
+		t.Fatalf("candidate = %#v, want expiry evaluated against current reference time", candidate)
+	}
+}
+
 func TestLifecycleExpectationReasonCodesArePresenceSensitive(t *testing.T) {
 	candidate := LifecycleCandidateReport{
 		ID: "42", State: lifecycle.Current, Decision: PresentationInclude,

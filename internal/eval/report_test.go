@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/Dzarlax-AI/personal-memory/internal/memory/lifecycle"
 )
 
 func TestRenderReportIsDeterministic(t *testing.T) {
@@ -37,6 +39,32 @@ func TestRenderReportIsDeterministic(t *testing.T) {
 	}
 	if bytes.Index(firstJSON, []byte(`"id": "a"`)) > bytes.Index(firstJSON, []byte(`"id": "z"`)) {
 		t.Fatal("queries are not sorted by ID")
+	}
+}
+
+func TestRenderMarkdownEscapesLifecycleCandidateFields(t *testing.T) {
+	report := Report{
+		SchemaVersion: CurrentReportSchemaVersion,
+		Lifecycle:     &LifecycleReport{Aggregate: LifecycleAggregateMetrics{}, Transitions: []TransitionReport{}},
+		Queries: []QueryReport{{
+			ID: "query|id", Target: "facts", Mode: "flat",
+			Lifecycle: &QueryLifecycleReport{
+				Intent: QueryIntentCurrent,
+				Candidates: []LifecycleCandidateReport{{
+					ID: "candidate|id", State: lifecycle.State("state|value"),
+					Decision:    PresentationDecision("decision|value"),
+					ReasonCodes: []LifecycleReasonCode{"reason|value"},
+				}},
+			},
+		}},
+	}
+	markdown := RenderMarkdown(report)
+	for _, want := range []string{
+		`query\|id`, `candidate\|id`, `state\|value`, `decision\|value`, `reason\|value`,
+	} {
+		if !strings.Contains(markdown, want) {
+			t.Fatalf("Markdown report does not contain escaped value %q:\n%s", want, markdown)
+		}
 	}
 }
 
@@ -82,7 +110,9 @@ func TestRenderAndDecodeV2ReportAreDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(first, second) || RenderMarkdown(report) != RenderMarkdown(report) {
+	firstMarkdown := RenderMarkdown(report)
+	secondMarkdown := RenderMarkdown(report)
+	if !bytes.Equal(first, second) || firstMarkdown != secondMarkdown {
 		t.Fatal("v2 rendering is not deterministic")
 	}
 	decoded, err := DecodeReport(first)

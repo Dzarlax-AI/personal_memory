@@ -79,6 +79,21 @@ func TestPublicV2FixtureRunnerIntegration(t *testing.T) {
 	}
 }
 
+func TestCanonicalPreferenceViolationsProduceGateFailure(t *testing.T) {
+	if got := canonicalPreferenceFailureMessages("canonical-query", 0); got != nil {
+		t.Fatalf("zero violations produced failures: %v", got)
+	}
+	got := canonicalPreferenceFailureMessages("canonical-query", 2)
+	if len(got) != 1 || got[0] != "query canonical-query invariant canonical_preference" {
+		t.Fatalf("canonical failures = %v", got)
+	}
+	failures := EvaluateGates(AggregateMetrics{}, Gates{})
+	failures = append(failures, got...)
+	if len(failures) == 0 {
+		t.Fatal("canonical preference violation did not fail lifecycle gate")
+	}
+}
+
 func TestPublicV2DatasetLoads(t *testing.T) {
 	file, err := os.Open(filepath.Join("..", "..", "evaldata", "public", "v2", "dataset.json"))
 	if err != nil {
@@ -259,7 +274,9 @@ func TestLiveRunnerUsesOnlySearchRequests(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.Method+" "+r.URL.Path)
 		if r.Method != http.MethodPost || r.URL.Path != "/collections/memory/points/search" {
-			t.Fatalf("live runner made non-search request: %s %s", r.Method, r.URL.Path)
+			t.Errorf("live runner made non-search request: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+			return
 		}
 		_, _ = w.Write([]byte(`{"result":[{"id":42,"score":1,"payload":{"text":"numeric"}}]}`))
 	}))
@@ -286,7 +303,9 @@ func TestLiveV2LifecycleEvidenceUsesExactReadWithoutChangingRanking(t *testing.T
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/search":
 			if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
-				t.Fatal(err)
+				t.Errorf("decode lifecycle ranking request: %v", err)
+				http.Error(w, "invalid request", http.StatusBadRequest)
+				return
 			}
 			if _, filtered := requestBody["filter"]; !filtered {
 				results := make([]map[string]any, 101)
@@ -310,7 +329,9 @@ func TestLiveV2LifecycleEvidenceUsesExactReadWithoutChangingRanking(t *testing.T
 				"payload":{"text":"expected obsolete","lifecycle_state":"historical"}
 			}}`))
 		default:
-			t.Fatalf("unexpected lifecycle request: %s %s", r.Method, r.URL.Path)
+			t.Errorf("unexpected lifecycle request: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+			return
 		}
 	}))
 	defer server.Close()
@@ -368,7 +389,9 @@ func TestLiveFactRankingRespectsLifecycleIntentAndEvidenceBoundary(t *testing.T)
 		case r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/search":
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatal(err)
+				t.Errorf("decode lifecycle intent request: %v", err)
+				http.Error(w, "invalid request", http.StatusBadRequest)
+				return
 			}
 			if _, current := body["filter"]; current {
 				_, _ = w.Write([]byte(`{"result":[
@@ -387,7 +410,9 @@ func TestLiveFactRankingRespectsLifecycleIntentAndEvidenceBoundary(t *testing.T)
 				"payload":{"text":"outside ranking","lifecycle_state":"historical"}
 			}}`))
 		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+			return
 		}
 	}))
 	defer server.Close()
@@ -454,7 +479,9 @@ func TestLiveV2CurrentIncludeExpectationKeepsCurrentFilter(t *testing.T) {
 	var requestBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
-			t.Fatal(err)
+			t.Errorf("decode current-filter request: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
 		}
 		_, _ = w.Write([]byte(`{"result":[
 			{"id":42,"score":0.7,"payload":{"text":"current","lifecycle_state":"current","canonical":true}}
@@ -488,7 +515,9 @@ func TestLiveV2CurrentDemoteExpectationKeepsCurrentFilter(t *testing.T) {
 	var requestBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
-			t.Fatal(err)
+			t.Errorf("decode canonical-demotion request: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
 		}
 		_, _ = w.Write([]byte(`{"result":[
 			{"id":42,"score":0.9,"payload":{"text":"ordinary","lifecycle_state":"current","canonical":false}},

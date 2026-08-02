@@ -236,7 +236,9 @@ type presentedFacts struct {
 func presentFactCandidates(query Query, points []qdrant.Point, now time.Time) presentedFacts {
 	reference := now.UTC()
 	if query.EffectiveIntent() == QueryIntentAsOf {
-		reference, _ = time.Parse("2006-01-02", query.AsOf)
+		if parsed, err := time.Parse("2006-01-02", query.AsOf); err == nil {
+			reference = parsed
+		}
 	}
 
 	type parsedCandidate struct {

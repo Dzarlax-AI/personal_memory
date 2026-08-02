@@ -228,6 +228,9 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 			lifecycleReport.Aggregate.CanonicalPreferenceChecks += presentation.canonical.CanonicalPreferenceChecks
 			lifecycleReport.Aggregate.CanonicalPreferenceViolations += presentation.canonical.CanonicalPreferenceViolations
 			lifecycleFailures = append(lifecycleFailures, lifecycleViolationMessages(presentation.report.Violations)...)
+			lifecycleFailures = append(lifecycleFailures, canonicalPreferenceFailureMessages(
+				query.ID, presentation.canonical.CanonicalPreferenceViolations,
+			)...)
 		} else if query.Target == "facts" {
 			items = normalizeFactResults(points, now)
 		} else {
@@ -322,6 +325,13 @@ func lifecycleViolationMessages(violations []LifecycleViolation) []string {
 		messages[i] = violation.message()
 	}
 	return messages
+}
+
+func canonicalPreferenceFailureMessages(queryID string, violations int) []string {
+	if violations == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("query %s invariant %s", queryID, ReasonCanonicalPreference)}
 }
 
 func currentLifecycleFilter() map[string]any {

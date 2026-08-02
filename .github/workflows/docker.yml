@@ -109,7 +109,14 @@ jobs:
             echo
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if ! jq -e 'type == "object"' eval-results/public.json >/dev/null 2>&1; then
+          if ! jq -e '
+            type == "object" and
+            .schema_version == 2 and
+            (.gates_passed | type == "boolean") and
+            (.lifecycle | type == "object") and
+            (.lifecycle.aggregate | type == "object") and
+            (.lifecycle.transitions | type == "array")
+          ' eval-results/public.json >/dev/null 2>&1; then
             {
               echo "The lifecycle report is missing or invalid. See the evaluation step and uploaded artifacts."
               echo
