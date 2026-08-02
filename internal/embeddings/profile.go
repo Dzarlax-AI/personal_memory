@@ -1,6 +1,7 @@
 package embeddings
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -15,6 +16,10 @@ const (
 	LegacyRawV1      InputProfile = "legacy-raw-v1"
 	MultilingualE5V1 InputProfile = "multilingual-e5-v1"
 )
+
+// ErrReservedInputPrefix means a profile-owned prefix was found at the start
+// of raw input, making it ambiguous whether the profile was already applied.
+var ErrReservedInputPrefix = errors.New("reserved embedding input prefix")
 
 // Purpose identifies how an embedding input will be used. It is deliberately
 // typed so retrieval and passage call sites cannot rely on ad-hoc strings.
@@ -70,6 +75,9 @@ func TransformInput(rawText string, purpose Purpose, profile InputProfile, model
 	case LegacyRawV1:
 		return rawText, nil
 	case MultilingualE5V1:
+		if strings.HasPrefix(rawText, "query: ") || strings.HasPrefix(rawText, "passage: ") {
+			return "", fmt.Errorf("%w for profile %q", ErrReservedInputPrefix, profile)
+		}
 		if purpose == RetrievalQuery {
 			return "query: " + rawText, nil
 		}

@@ -126,6 +126,22 @@ func TestEmbedWithPurposeAppliesInputProfile(t *testing.T) {
 			want:    "find this",
 		},
 		{
+			name:    "legacy accepts query prefix literally",
+			modelID: "any/model",
+			profile: LegacyRawV1,
+			purpose: RetrievalQuery,
+			rawText: "query: literal",
+			want:    "query: literal",
+		},
+		{
+			name:    "legacy accepts passage prefix literally",
+			modelID: "any/model",
+			profile: LegacyRawV1,
+			purpose: FactPassage,
+			rawText: "passage: literal",
+			want:    "passage: literal",
+		},
+		{
 			name:    "e5 retrieval query",
 			modelID: multilingualE5SmallModelID,
 			profile: MultilingualE5V1,
@@ -156,14 +172,6 @@ func TestEmbedWithPurposeAppliesInputProfile(t *testing.T) {
 			purpose: FolderPassage,
 			rawText: "folder summary",
 			want:    "passage: folder summary",
-		},
-		{
-			name:    "prefix-looking user text remains literal",
-			modelID: multilingualE5SmallModelID,
-			profile: MultilingualE5V1,
-			purpose: RetrievalQuery,
-			rawText: "query: entered by the user",
-			want:    "query: query: entered by the user",
 		},
 	}
 
@@ -218,7 +226,7 @@ func TestEmbedBatchWithPurposeTransformsEveryRawInput(t *testing.T) {
 
 	got, err := NewClient(server.URL).EmbedBatchWithPurpose(
 		context.Background(),
-		[]string{"first", "passage: literal"},
+		[]string{"first", "second"},
 		ChunkPassage,
 		MultilingualE5V1,
 		multilingualE5SmallModelID,
@@ -229,9 +237,89 @@ func TestEmbedBatchWithPurposeTransformsEveryRawInput(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("vectors = %#v", got)
 	}
-	wantInputs := []string{"passage: first", "passage: passage: literal"}
+	wantInputs := []string{"passage: first", "passage: second"}
 	if !reflect.DeepEqual(gotInputs, wantInputs) {
 		t.Fatalf("inputs = %#v, want %#v", gotInputs, wantInputs)
+	}
+}
+
+func TestEmbedWithPurposeRejectsReservedE5PrefixesBeforeRequest(t *testing.T) {
+	tests := []struct {
+		name    string
+		purpose Purpose
+		rawText string
+	}{
+		{name: "same query prefix", purpose: RetrievalQuery, rawText: "query: secret-query"},
+		{name: "cross passage prefix for query", purpose: RetrievalQuery, rawText: "passage: secret-passage"},
+		{name: "cross query prefix for passage", purpose: FactPassage, rawText: "query: secret-query"},
+		{name: "same passage prefix", purpose: ChunkPassage, rawText: "passage: secret-passage"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests++
+				http.Error(w, "unexpected request", http.StatusInternalServerError)
+			}))
+			defer server.Close()
+
+			_, err := NewClient(server.URL).EmbedWithPurpose(
+				context.Background(),
+				tt.rawText,
+				tt.purpose,
+				MultilingualE5V1,
+				multilingualE5SmallModelID,
+			)
+			if err == nil || !strings.Contains(err.Error(), "reserved embedding input prefix") {
+				t.Fatalf("error = %v, want reserved-prefix error", err)
+			}
+			if strings.Contains(err.Error(), "secret-") {
+				t.Fatalf("error leaked input content: %v", err)
+			}
+			if requests != 0 {
+				t.Fatalf("TEI requests = %d, want 0", requests)
+			}
+		})
+	}
+}
+
+func TestEmbedBatchWithPurposeRejectsReservedE5PrefixesBeforeRequest(t *testing.T) {
+	tests := []struct {
+		name    string
+		purpose Purpose
+		rawText string
+	}{
+		{name: "same purpose prefix", purpose: FolderPassage, rawText: "passage: secret-passage"},
+		{name: "cross purpose prefix", purpose: FolderPassage, rawText: "query: secret-query"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests++
+				http.Error(w, "unexpected request", http.StatusInternalServerError)
+			}))
+			defer server.Close()
+
+			_, err := NewClient(server.URL).EmbedBatchWithPurpose(
+				context.Background(),
+				[]string{"valid first input", tt.rawText},
+				tt.purpose,
+				MultilingualE5V1,
+				multilingualE5SmallModelID,
+			)
+			if err == nil || !strings.Contains(err.Error(), "embedding input at index 1") || !strings.Contains(err.Error(), "reserved embedding input prefix") {
+				t.Fatalf("error = %v, want safe indexed reserved-prefix error", err)
+			}
+			if strings.Contains(err.Error(), "secret-") {
+				t.Fatalf("error leaked input content: %v", err)
+			}
+			if requests != 0 {
+				t.Fatalf("TEI requests = %d, want 0", requests)
+			}
+		})
 	}
 }
 

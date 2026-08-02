@@ -159,7 +159,7 @@ func (c *Client) EmbedBatchWithPurpose(ctx context.Context, rawTexts []string, p
 	for i, rawText := range rawTexts {
 		input, err := TransformInput(rawText, purpose, profile, modelID)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("embedding input at index %d: %w", i, err)
 		}
 		transformed[i] = input
 	}
