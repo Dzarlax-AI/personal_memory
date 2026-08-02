@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,7 +19,17 @@ const maxDatasetBytes int64 = 32 << 20
 // Load decodes and source-neutrally validates a bounded dataset document.
 func Load(reader io.Reader) (*Dataset, error) {
 	limited := &io.LimitedReader{R: reader, N: maxDatasetBytes + 1}
-	decoder := json.NewDecoder(limited)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("read fixture: %w", err)
+	}
+	if int64(len(data)) > maxDatasetBytes {
+		return nil, fmt.Errorf("fixture exceeds %d bytes", maxDatasetBytes)
+	}
+	if err := validateV3DatasetRaw(data); err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var dataset Dataset
 	if err := decoder.Decode(&dataset); err != nil {
@@ -30,9 +41,6 @@ func Load(reader io.Reader) (*Dataset, error) {
 			return nil, fmt.Errorf("fixture contains trailing JSON")
 		}
 		return nil, fmt.Errorf("decode trailing JSON: %w", err)
-	}
-	if limited.N <= 0 {
-		return nil, fmt.Errorf("fixture exceeds %d bytes", maxDatasetBytes)
 	}
 	if err := dataset.Validate(); err != nil {
 		return nil, err

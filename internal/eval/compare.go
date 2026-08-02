@@ -34,6 +34,8 @@ type Comparison struct {
 	CandidateEmbedding     *EmbeddingIdentity   `json:"candidate_embedding,omitempty"`
 	BaselineConfiguration  *Configuration       `json:"baseline_configuration,omitempty"`
 	CandidateConfiguration *Configuration       `json:"candidate_configuration,omitempty"`
+	BaselineMode           string               `json:"baseline_mode,omitempty"`
+	CandidateMode          string               `json:"candidate_mode,omitempty"`
 	Aggregate              MetricDelta          `json:"aggregate"`
 	Cohorts                []CohortComparison   `json:"cohorts,omitempty"`
 	Queries                []QueryDelta         `json:"queries"`
@@ -66,6 +68,9 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 		return Comparison{}, fmt.Errorf("baseline and candidate identities are incompatible")
 	}
 	if baseline.SchemaVersion == CurrentReportSchemaVersion {
+		if baseline.Mode != candidate.Mode {
+			return Comparison{}, fmt.Errorf("baseline and candidate modes are incompatible")
+		}
 		if !baseEmbeddingIdentityEqual(baseline.Embedding, candidate.Embedding) ||
 			!baseConfigurationEqual(baseline.Configuration, candidate.Configuration) {
 			return Comparison{}, fmt.Errorf("baseline and candidate identities are incompatible")
@@ -102,12 +107,6 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 			return Comparison{}, fmt.Errorf("baseline and candidate top_k differ")
 		}
 	}
-	comparison := Comparison{
-		SchemaVersion:  baseline.SchemaVersion,
-		DatasetVersion: baseline.DatasetVersion,
-		Aggregate:      deltaMetrics(baseline.Aggregate, candidate.Aggregate, baseline.TopK),
-		GatesPassed:    !enforceGates || candidate.GatesPassed,
-	}
 	if baseline.SchemaVersion == CurrentReportSchemaVersion {
 		if err := validateV3Report(baseline); err != nil {
 			return Comparison{}, fmt.Errorf("baseline v3 report is invalid: %w", err)
@@ -115,6 +114,16 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 		if err := validateV3Report(candidate); err != nil {
 			return Comparison{}, fmt.Errorf("candidate v3 report is invalid: %w", err)
 		}
+		baseline = recomputeV3Ranking(baseline)
+		candidate = recomputeV3Ranking(candidate)
+	}
+	comparison := Comparison{
+		SchemaVersion:  baseline.SchemaVersion,
+		DatasetVersion: baseline.DatasetVersion,
+		Aggregate:      deltaMetrics(baseline.Aggregate, candidate.Aggregate, baseline.TopK),
+		GatesPassed:    !enforceGates || candidate.GatesPassed,
+	}
+	if baseline.SchemaVersion == CurrentReportSchemaVersion {
 		baselineEmbedding := baseline.Embedding
 		candidateEmbedding := candidate.Embedding
 		baselineConfiguration := cloneConfiguration(baseline.Configuration)
@@ -123,6 +132,8 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 		comparison.CandidateEmbedding = &candidateEmbedding
 		comparison.BaselineConfiguration = &baselineConfiguration
 		comparison.CandidateConfiguration = &candidateConfiguration
+		comparison.BaselineMode = baseline.Mode
+		comparison.CandidateMode = candidate.Mode
 		comparison.Cohorts = compareCohorts(baseline, candidate)
 	}
 	if baseline.SchemaVersion >= LifecycleSchemaVersion {
@@ -169,6 +180,16 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 	}
 	sort.Slice(comparison.Queries, func(i, j int) bool { return comparison.Queries[i].ID < comparison.Queries[j].ID })
 	return comparison, nil
+}
+
+func recomputeV3Ranking(report Report) Report {
+	queryMetrics := make([]QueryMetrics, len(report.Queries))
+	for i := range report.Queries {
+		queryMetrics[i] = report.Queries[i].Metrics
+	}
+	report.Aggregate = Aggregate(queryMetrics, report.TopK)
+	report.Cohorts = AggregateCohorts(report.Queries, report.TopK)
+	return report
 }
 
 func validateMatchedQueryContracts(baseline, candidate Report) error {

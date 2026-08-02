@@ -18,6 +18,8 @@ func validV3Dataset() string {
 	configuration["retrieval_strategy"] = string(RetrievalVectorOnly)
 	configuration["dense_candidate_limit"] = float64(0)
 	configuration["rrf_constant"] = float64(0)
+	gates := document["gates"].(map[string]any)
+	gates["forbid_lifecycle_violations"] = false
 	query := document["queries"].([]any)[0].(map[string]any)
 	query["cohorts"] = []any{
 		string(CohortExactName),

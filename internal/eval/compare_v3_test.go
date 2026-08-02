@@ -28,12 +28,14 @@ func validV3ComparisonReport() Report {
 			{
 				ID: "exact", Target: "facts", Mode: "flat",
 				Cohorts:   []QueryCohort{CohortExactName},
+				Results:   []RetrievedItem{},
 				Metrics:   QueryMetrics{MRR: 0.5, HitAt: map[int]float64{1: 0}, NDCGAt: map[int]float64{1: 0}},
 				Lifecycle: &QueryLifecycleReport{Intent: QueryIntentCurrent},
 			},
 			{
 				ID: "path", Target: "documents", Mode: "flat",
 				Cohorts: []QueryCohort{CohortIdentifierPath},
+				Results: []RetrievedItem{},
 				Metrics: QueryMetrics{MRR: 0.5, HitAt: map[int]float64{1: 0}, NDCGAt: map[int]float64{1: 0}},
 			},
 		},
@@ -65,6 +67,52 @@ func TestCompareV3AllowsVisibleExperimentDimensionsAndSnapshotsThem(t *testing.T
 	if comparison.BaselineEmbedding.InputProfile != LegacyRawV1 ||
 		comparison.CandidateConfiguration.RetrievalStrategy != RetrievalHybridRRF {
 		t.Fatalf("comparison snapshots = %#v", comparison)
+	}
+}
+
+func TestCompareV3RecomputesClaimedMetricsBeforeDeltaAndGates(t *testing.T) {
+	baseline := validV3ComparisonReport()
+	candidate := validV3ComparisonReport()
+	baseline.Aggregate.MRR -= ComparisonEpsilon
+	candidate.Aggregate.MRR += ComparisonEpsilon
+	for i := range baseline.Cohorts {
+		baseline.Cohorts[i].MRR -= ComparisonEpsilon
+		candidate.Cohorts[i].MRR += ComparisonEpsilon
+	}
+
+	comparison, err := Compare(baseline, candidate, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if comparison.Aggregate.MRR != 0 {
+		t.Fatalf("aggregate delta = %.20f, want recomputed zero", comparison.Aggregate.MRR)
+	}
+	for _, cohort := range comparison.Cohorts {
+		if cohort.Metrics.MRR != 0 {
+			t.Fatalf("cohort %s delta = %.20f, want recomputed zero", cohort.Cohort, cohort.Metrics.MRR)
+		}
+	}
+	if comparison.GatesPassed ||
+		!containsString(comparison.GateFailures, "protected cohorts require a ranking improvement") {
+		t.Fatalf("comparison gates = %#v", comparison)
+	}
+}
+
+func TestCompareV3RejectsModeDriftAndSnapshotsModes(t *testing.T) {
+	baseline := validV3ComparisonReport()
+	candidate := validV3ComparisonReport()
+	candidate.Mode = "live"
+	if _, err := Compare(baseline, candidate, false); err == nil ||
+		!strings.Contains(err.Error(), "mode") {
+		t.Fatalf("Compare() error = %v, want mode mismatch", err)
+	}
+
+	comparison, err := Compare(baseline, baseline, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if comparison.BaselineMode != "fixture" || comparison.CandidateMode != "fixture" {
+		t.Fatalf("mode snapshots = %q/%q", comparison.BaselineMode, comparison.CandidateMode)
 	}
 }
 

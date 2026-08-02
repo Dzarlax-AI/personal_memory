@@ -14,7 +14,11 @@ import (
 func normalizeReport(report Report) Report {
 	report.TopK = append([]int(nil), report.TopK...)
 	sort.Ints(report.TopK)
-	report.Queries = append([]QueryReport(nil), report.Queries...)
+	if report.SchemaVersion == CurrentReportSchemaVersion && report.Queries != nil {
+		report.Queries = append([]QueryReport{}, report.Queries...)
+	} else {
+		report.Queries = append([]QueryReport(nil), report.Queries...)
+	}
 	for i := range report.Queries {
 		report.Queries[i].Cohorts = append([]QueryCohort(nil), report.Queries[i].Cohorts...)
 		sort.Slice(report.Queries[i].Cohorts, func(a, b int) bool {
@@ -22,7 +26,11 @@ func normalizeReport(report Report) Report {
 		})
 		report.Queries[i].Lifecycle = cloneQueryLifecycleReport(report.Queries[i].Lifecycle)
 	}
-	report.Cohorts = append([]CohortAggregateMetrics(nil), report.Cohorts...)
+	if report.SchemaVersion == CurrentReportSchemaVersion && report.Cohorts != nil {
+		report.Cohorts = append([]CohortAggregateMetrics{}, report.Cohorts...)
+	} else {
+		report.Cohorts = append([]CohortAggregateMetrics(nil), report.Cohorts...)
+	}
 	for i := range report.Cohorts {
 		report.Cohorts[i].HitAt = cloneMetricMap(report.Cohorts[i].HitAt)
 		report.Cohorts[i].NDCGAt = cloneMetricMap(report.Cohorts[i].NDCGAt)
@@ -36,7 +44,11 @@ func normalizeReport(report Report) Report {
 	report.GateFailures = append([]string(nil), report.GateFailures...)
 	sort.Strings(report.GateFailures)
 	for i := range report.Queries {
-		report.Queries[i].Results = append([]RetrievedItem(nil), report.Queries[i].Results...)
+		if report.SchemaVersion == CurrentReportSchemaVersion && report.Queries[i].Results != nil {
+			report.Queries[i].Results = append([]RetrievedItem{}, report.Queries[i].Results...)
+		} else {
+			report.Queries[i].Results = append([]RetrievedItem(nil), report.Queries[i].Results...)
+		}
 		if report.Queries[i].Lifecycle != nil {
 			lifecycleReport := report.Queries[i].Lifecycle
 			lifecycleReport.Candidates = append([]LifecycleCandidateReport{}, lifecycleReport.Candidates...)
@@ -241,6 +253,9 @@ func escapeMarkdown(value string) string {
 
 // DecodeReport strictly decodes one report JSON document.
 func DecodeReport(data []byte) (Report, error) {
+	if err := validateV3ReportRaw(data); err != nil {
+		return Report{}, err
+	}
 	var report Report
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()

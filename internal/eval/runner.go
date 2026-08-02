@@ -29,6 +29,22 @@ func Run(ctx context.Context, dataset *Dataset, options RunOptions) (Report, err
 	if err := dataset.ValidateForSource(options.Source); err != nil {
 		return Report{}, err
 	}
+	if dataset.SchemaVersion == CurrentDatasetSchemaVersion {
+		if dataset.Embedding.InputProfile != LegacyRawV1 {
+			return Report{}, fmt.Errorf(
+				"schema_version %d runner input profile %q is not supported; only %q is executable",
+				CurrentDatasetSchemaVersion, dataset.Embedding.InputProfile, LegacyRawV1,
+			)
+		}
+		if dataset.Configuration.RetrievalStrategy != RetrievalVectorOnly {
+			return Report{}, fmt.Errorf(
+				"schema_version %d runner retrieval strategy %q is not supported; only %q is executable",
+				CurrentDatasetSchemaVersion,
+				dataset.Configuration.RetrievalStrategy,
+				RetrievalVectorOnly,
+			)
+		}
+	}
 	if strings.TrimSpace(options.QdrantURL) == "" {
 		return Report{}, fmt.Errorf("qdrant URL is required")
 	}
@@ -206,7 +222,7 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 		if err != nil {
 			return Report{}, fmt.Errorf("execute query %q: %w", query.ID, err)
 		}
-		var items []RetrievedItem
+		items := []RetrievedItem{}
 		var queryLifecycle *QueryLifecycleReport
 		if query.Target == "facts" && dataset.SchemaVersion >= LifecycleSchemaVersion {
 			evidencePoints := points
@@ -235,6 +251,9 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 			items = normalizeFactResults(points, now)
 		} else {
 			items = normalizeResults(points)
+		}
+		if items == nil {
+			items = []RetrievedItem{}
 		}
 		if len(items) > maxK {
 			items = items[:maxK]
