@@ -69,6 +69,67 @@ func Ensure(ctx context.Context, embed *embeddings.Client, collections []*qdrant
 	return ensure(ctx, embed, targets, expected, adoptExisting)
 }
 
+// VerifyCollection performs the live-evaluation identity check without
+// creating a collection, adopting legacy vectors, or updating metadata.
+// Missing/empty collections are safe; a non-empty collection must have an
+// exact stored identity match.
+func VerifyCollection(ctx context.Context, collection *qdrant.Client, expected Record) error {
+	if collection == nil {
+		return fmt.Errorf("embedding identity collection is nil")
+	}
+	info, err := collection.CollectionInfo(ctx)
+	if err != nil {
+		return fmt.Errorf("inspect collection %q for embedding identity: %w", collection.CollectionName(), err)
+	}
+	if !info.Exists {
+		return nil
+	}
+	if info.VectorSize != expected.VectorSize {
+		return fmt.Errorf("embedding identity mismatch for collection %q: vector size is %d, expected %d",
+			collection.CollectionName(), info.VectorSize, expected.VectorSize)
+	}
+	if info.Points == 0 {
+		count, err := collection.ExactCount(ctx)
+		if err != nil {
+			return fmt.Errorf("count collection %q for embedding identity: %w", collection.CollectionName(), err)
+		}
+		if count == 0 {
+			return nil
+		}
+	}
+	raw, present := info.Metadata[MetadataKey]
+	if !present {
+		return fmt.Errorf("collection %q contains points but has no embedding identity", collection.CollectionName())
+	}
+	stored, err := decodeVerificationRecord(raw)
+	if err != nil {
+		return fmt.Errorf("collection %q has invalid embedding identity metadata: %w", collection.CollectionName(), err)
+	}
+	if !reflect.DeepEqual(stored, expected) {
+		return fmt.Errorf("embedding identity mismatch for collection %q: stored=%s expected=%s",
+			collection.CollectionName(), formatRecord(stored), formatRecord(expected))
+	}
+	return nil
+}
+
+func decodeVerificationRecord(raw any) (Record, error) {
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return Record{}, err
+	}
+	var record Record
+	if err := json.Unmarshal(encoded, &record); err != nil {
+		return Record{}, err
+	}
+	if record.SchemaVersion < 1 || strings.TrimSpace(record.Provider) == "" ||
+		strings.TrimSpace(record.ModelID) == "" || strings.TrimSpace(record.ModelRevision) == "" ||
+		strings.TrimSpace(record.ModelDType) == "" || strings.TrimSpace(record.Pooling) == "" ||
+		record.VectorSize < 1 || strings.TrimSpace(string(record.InputProfile)) == "" {
+		return Record{}, fmt.Errorf("incomplete embedding identity record")
+	}
+	return record, nil
+}
+
 type pendingAction struct {
 	collection collectionClient
 	create     bool

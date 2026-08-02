@@ -372,8 +372,8 @@ func validateReportQueryContracts(report Report) error {
 }
 
 func validateV3Report(report Report) error {
-	if report.Mode != "fixture" && report.Mode != "live" {
-		return fmt.Errorf("mode must be fixture or live")
+	if report.Mode != "fixture" && report.Mode != "live" && report.Mode != "tei-fixture" {
+		return fmt.Errorf("mode must be fixture, live, or tei-fixture")
 	}
 	if len(report.Queries) == 0 {
 		return fmt.Errorf("report requires at least one query")
@@ -408,6 +408,9 @@ func validateV3Report(report Report) error {
 	if err := validateCohortAggregates(report); err != nil {
 		return err
 	}
+	if err := validateDiagnostics(report.Diagnostics); err != nil {
+		return err
+	}
 	queryMetrics := make([]QueryMetrics, len(report.Queries))
 	for i := range report.Queries {
 		if err := validateV3QueryMetrics(report.Queries[i].ID, report.Queries[i].Metrics, report.TopK); err != nil {
@@ -421,6 +424,36 @@ func validateV3Report(report Report) error {
 		!metricMapClose(report.Aggregate.HitAt, expectedAggregate.HitAt, report.TopK) ||
 		!metricMapClose(report.Aggregate.NDCGAt, expectedAggregate.NDCGAt, report.TopK) {
 		return fmt.Errorf("aggregate metrics do not match query reports")
+	}
+	return nil
+}
+
+func validateDiagnostics(diagnostics *Diagnostics) error {
+	if diagnostics == nil {
+		return nil
+	}
+	validateSummary := func(name string, summary DurationSummary) error {
+		if summary.Count < 0 || summary.Min < 0 || summary.P50 < summary.Min ||
+			summary.P95 < summary.P50 || summary.Max < summary.P95 {
+			return fmt.Errorf("diagnostics %s must be nonnegative and ordered", name)
+		}
+		if summary.Count == 0 && (summary.Min != 0 || summary.P50 != 0 || summary.P95 != 0 || summary.Max != 0) {
+			return fmt.Errorf("diagnostics %s with zero count must have zero durations", name)
+		}
+		return nil
+	}
+	if err := validateSummary("query.total", diagnostics.Query.Total); err != nil {
+		return err
+	}
+	if err := validateSummary("query.embed", diagnostics.Query.Embed); err != nil {
+		return err
+	}
+	if err := validateSummary("query.search", diagnostics.Query.Search); err != nil {
+		return err
+	}
+	if diagnostics.Corpus != nil &&
+		(diagnostics.Corpus.EmbeddingDurationUS < 0 || diagnostics.Corpus.EmbeddingCount < 0) {
+		return fmt.Errorf("diagnostics corpus values must be nonnegative")
 	}
 	return nil
 }

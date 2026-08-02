@@ -216,6 +216,44 @@ func validateV3ReportRaw(data []byte) error {
 	if err := rejectRawNulls(root, "report", "gate_failures"); err != nil {
 		return err
 	}
+	if raw, exists := root["diagnostics"]; exists {
+		diagnostics, err := rawObject(raw, "report.diagnostics")
+		if err != nil {
+			return err
+		}
+		if err := requireRawFields(diagnostics, "report.diagnostics", "query"); err != nil {
+			return err
+		}
+		query, err := rawObjectField(diagnostics, "query", "report.diagnostics")
+		if err != nil {
+			return err
+		}
+		for _, field := range []string{"total", "embed", "search"} {
+			summary, err := rawObjectField(query, field, "report.diagnostics.query")
+			if err != nil {
+				return err
+			}
+			if err := requireRawFields(summary, "report.diagnostics.query."+field,
+				"count", "min_us", "p50_us", "p95_us", "max_us"); err != nil {
+				return err
+			}
+			for _, value := range summary {
+				if err := validateRawFiniteNumber(value, "report.diagnostics.query."+field); err != nil {
+					return err
+				}
+			}
+		}
+		if corpusRaw, exists := diagnostics["corpus"]; exists {
+			corpus, err := rawObject(corpusRaw, "report.diagnostics.corpus")
+			if err != nil {
+				return err
+			}
+			if err := requireRawFields(corpus, "report.diagnostics.corpus",
+				"embedding_duration_us", "embedding_count"); err != nil {
+				return err
+			}
+		}
+	}
 	embedding, err := rawObjectField(root, "embedding", "report")
 	if err != nil {
 		return err

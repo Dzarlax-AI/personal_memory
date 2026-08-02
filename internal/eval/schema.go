@@ -693,4 +693,31 @@ type Report struct {
 	Lifecycle      *LifecycleReport         `json:"lifecycle,omitempty"`
 	GatesPassed    bool                     `json:"gates_passed"`
 	GateFailures   []string                 `json:"gate_failures,omitempty"`
+	Diagnostics    *Diagnostics             `json:"diagnostics,omitempty"`
+}
+
+// DurationSummary is an informational, non-gating timing distribution.
+type DurationSummary struct {
+	Count int   `json:"count"`
+	Min   int64 `json:"min_us"`
+	P50   int64 `json:"p50_us"`
+	P95   int64 `json:"p95_us"`
+	Max   int64 `json:"max_us"`
+}
+
+type QueryDiagnostics struct {
+	Total  DurationSummary `json:"total"`
+	Embed  DurationSummary `json:"embed"`
+	Search DurationSummary `json:"search"`
+}
+
+type CorpusDiagnostics struct {
+	EmbeddingDurationUS int64 `json:"embedding_duration_us"`
+	EmbeddingCount      int   `json:"embedding_count"`
+}
+
+// Diagnostics are measurements only and never participate in evaluation gates.
+type Diagnostics struct {
+	Corpus *CorpusDiagnostics `json:"corpus,omitempty"`
+	Query  QueryDiagnostics   `json:"query"`
 }

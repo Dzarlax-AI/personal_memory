@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Dzarlax-AI/personal-memory/internal/retrieval"
 	"github.com/google/uuid"
 )
 
@@ -352,8 +353,14 @@ func validateRetrievalConfiguration(configuration Configuration, requireStrategy
 		if configuration.DenseCandidateLimit < maxK {
 			return fmt.Errorf("hybrid-rrf dense_candidate_limit must be at least max(top_k)")
 		}
+		if configuration.DenseCandidateLimit > retrieval.MaxCandidates {
+			return fmt.Errorf("hybrid-rrf dense_candidate_limit must be at most %d", retrieval.MaxCandidates)
+		}
 		if configuration.RRFConstant < 1 {
 			return fmt.Errorf("hybrid-rrf rrf_constant must be positive")
+		}
+		if configuration.RRFConstant > retrieval.MaxRRFConstant {
+			return fmt.Errorf("hybrid-rrf rrf_constant must be at most %d", retrieval.MaxRRFConstant)
 		}
 	default:
 		return fmt.Errorf("retrieval_strategy must be vector-only or hybrid-rrf")
@@ -409,9 +416,9 @@ func (d *Dataset) ValidateForSource(source string) error {
 	switch source {
 	case "live":
 		return nil
-	case "fixture":
+	case "fixture", "tei-fixture":
 	default:
-		return fmt.Errorf("source must be fixture or live")
+		return fmt.Errorf("source must be fixture, live, or tei-fixture")
 	}
 
 	sets := map[string]map[string]struct{}{
@@ -420,7 +427,7 @@ func (d *Dataset) ValidateForSource(source string) error {
 		"folders": pointIDSet(d.Folders),
 	}
 	for _, query := range d.Queries {
-		if len(query.Vector) == 0 {
+		if source == "fixture" && len(query.Vector) == 0 {
 			return fmt.Errorf("fixture query %q must include a precomputed vector", query.ID)
 		}
 		targetSet := sets["facts"]

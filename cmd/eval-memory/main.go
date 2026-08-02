@@ -46,10 +46,16 @@ func runCLI(args []string, stdout, stderr io.Writer) error {
 func runCommand(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	source := flags.String("source", "fixture", "fixture or live")
+	source := flags.String("source", "fixture", "fixture, live, or tei-fixture")
 	datasetPath := flags.String("dataset", "", "dataset JSON path")
 	qdrantURL := flags.String("qdrant-url", "http://127.0.0.1:6333", "Qdrant base URL")
-	embedURL := flags.String("embed-url", "", "optional TEI base URL for live queries without vectors")
+	embedURL := flags.String("embed-url", os.Getenv("EMBED_URL"), "TEI base URL for live/tei-fixture embedding")
+	embedModel := flags.String("embed-model", os.Getenv("EMBED_MODEL"), "TEI model ID (defaults to dataset identity)")
+	configurationName := flags.String("configuration-name", "", "override experiment configuration name")
+	inputProfile := flags.String("input-profile", "", "override experiment input profile")
+	retrievalStrategy := flags.String("retrieval-strategy", "", "override retrieval strategy")
+	denseCandidateLimit := flags.Int("dense-candidate-limit", -1, "override hybrid dense candidate limit")
+	rrfConstant := flags.Int("rrf-constant", -1, "override hybrid RRF constant")
 	jsonPath := flags.String("json", "", "JSON report output path")
 	markdownPath := flags.String("markdown", "", "Markdown report output path")
 	timeout := flags.Duration("timeout", defaultTimeout, "overall evaluation timeout")
@@ -77,12 +83,35 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
+	var overrides memoryeval.ExperimentOverrides
+	if *configurationName != "" {
+		overrides.ConfigurationName = configurationName
+	}
+	if *inputProfile != "" {
+		value := memoryeval.InputProfile(*inputProfile)
+		overrides.InputProfile = &value
+	}
+	if *retrievalStrategy != "" {
+		value := memoryeval.RetrievalStrategy(*retrievalStrategy)
+		overrides.RetrievalStrategy = &value
+	}
+	if *denseCandidateLimit >= 0 {
+		overrides.DenseCandidateLimit = denseCandidateLimit
+	}
+	if *rrfConstant >= 0 {
+		overrides.RRFConstant = rrfConstant
+	}
+	dataset, err = memoryeval.WithExperimentOverrides(dataset, overrides, *source)
+	if err != nil {
+		return fmt.Errorf("apply experiment overrides: %w", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 	options := memoryeval.RunOptions{Source: *source, QdrantURL: strings.TrimRight(*qdrantURL, "/")}
 	if *embedURL != "" {
-		if *source != "live" {
-			return fmt.Errorf("--embed-url is supported only with --source live")
+		if *source != "live" && *source != "tei-fixture" {
+			return fmt.Errorf("--embed-url is supported only with --source live or tei-fixture")
 		}
 		client := embeddings.NewClient(strings.TrimRight(*embedURL, "/"))
 		info, err := client.Info(ctx)
@@ -93,7 +122,13 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 			info.ModelDType != dataset.Embedding.DType || info.ModelType.Embedding.Pooling != dataset.Embedding.Pooling {
 			return fmt.Errorf("TEI identity does not match dataset embedding identity")
 		}
+		if *embedModel != "" && *embedModel != info.ModelID {
+			return fmt.Errorf("TEI model does not match --embed-model")
+		}
 		options.Embed = client.Embed
+		options.Embedder = client
+	} else if *source == "tei-fixture" {
+		return fmt.Errorf("--embed-url or EMBED_URL is required for --source tei-fixture")
 	}
 	report, err := memoryeval.Run(ctx, dataset, options)
 	if err != nil {

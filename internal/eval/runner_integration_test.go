@@ -297,6 +297,25 @@ func TestLiveRunnerUsesOnlySearchRequests(t *testing.T) {
 
 func TestLiveV3MinimumDatasetRunRenderDecodeRoundTrip(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/collections/memory" {
+			_, _ = w.Write([]byte(`{"result":{
+				"points_count":1,
+				"config":{
+					"params":{"vectors":{"size":2,"distance":"Cosine"}},
+					"metadata":{"personal_memory.embedding":{
+						"schema_version":1,
+						"provider":"synthetic",
+						"model_id":"synthetic-eval-v1",
+						"model_revision":"v1",
+						"model_dtype":"float32",
+						"pooling":"mean",
+						"vector_size":2,
+						"input_profile":"legacy-raw-v1"
+					}}
+				}
+			}}`))
+			return
+		}
 		if r.Method != http.MethodPost || r.URL.Path != "/collections/memory/points/search" {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 			http.Error(w, "unexpected request", http.StatusInternalServerError)

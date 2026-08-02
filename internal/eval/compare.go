@@ -36,6 +36,8 @@ type Comparison struct {
 	CandidateConfiguration *Configuration       `json:"candidate_configuration,omitempty"`
 	BaselineMode           string               `json:"baseline_mode,omitempty"`
 	CandidateMode          string               `json:"candidate_mode,omitempty"`
+	BaselineDiagnostics    *Diagnostics         `json:"baseline_diagnostics,omitempty"`
+	CandidateDiagnostics   *Diagnostics         `json:"candidate_diagnostics,omitempty"`
 	Aggregate              MetricDelta          `json:"aggregate"`
 	Cohorts                []CohortComparison   `json:"cohorts,omitempty"`
 	Queries                []QueryDelta         `json:"queries"`
@@ -134,6 +136,8 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 		comparison.CandidateConfiguration = &candidateConfiguration
 		comparison.BaselineMode = baseline.Mode
 		comparison.CandidateMode = candidate.Mode
+		comparison.BaselineDiagnostics = baseline.Diagnostics
+		comparison.CandidateDiagnostics = candidate.Diagnostics
 		comparison.Cohorts = compareCohorts(baseline, candidate)
 	}
 	if baseline.SchemaVersion >= LifecycleSchemaVersion {
