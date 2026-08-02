@@ -1,0 +1,5287 @@
+{
+  "schema_version": 3,
+  "dataset_version": "3.0.0",
+  "mode": "fixture",
+  "embedding": {
+    "provider": "tei",
+    "model_id": "intfloat/multilingual-e5-small",
+    "model_revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+    "dtype": "float32",
+    "pooling": "mean",
+    "vector_size": 384,
+    "input_profile": "legacy-raw-v1"
+  },
+  "configuration": {
+    "name": "public-v3-legacy-raw-vector-only",
+    "fact_collection": "memory",
+    "chunk_collection": "doc_chunks",
+    "folder_collection": "doc_folders",
+    "folder_top_k": 3,
+    "folder_threshold": 0.5,
+    "top_k": [
+      1,
+      3,
+      5,
+      20
+    ],
+    "retrieval_strategy": "vector-only",
+    "dense_candidate_limit": 0,
+    "rrf_constant": 0
+  },
+  "top_k": [
+    1,
+    3,
+    5,
+    20
+  ],
+  "aggregate": {
+    "hit_at": {
+      "1": 0.8095238095238095,
+      "20": 0.9523809523809523,
+      "3": 0.8571428571428571,
+      "5": 0.8571428571428571
+    },
+    "mrr": 0.8472222222222221,
+    "ndcg_at": {
+      "1": 0.8095238095238095,
+      "20": 0.8514466980258416,
+      "3": 0.8118917240965539,
+      "5": 0.8118917240965539
+    },
+    "invariant_violations": 0
+  },
+  "cohorts": [
+    {
+      "cohort": "exact-name",
+      "query_count": 2,
+      "hit_at": {
+        "1": 1,
+        "20": 1,
+        "3": 1,
+        "5": 1
+      },
+      "mrr": 1,
+      "ndcg_at": {
+        "1": 1,
+        "20": 1,
+        "3": 1,
+        "5": 1
+      },
+      "invariant_violations": 0
+    },
+    {
+      "cohort": "general-semantic",
+      "query_count": 8,
+      "hit_at": {
+        "1": 0.875,
+        "20": 0.875,
+        "3": 0.875,
+        "5": 0.875
+      },
+      "mrr": 0.875,
+      "ndcg_at": {
+        "1": 0.875,
+        "20": 0.875,
+        "3": 0.875,
+        "5": 0.875
+      },
+      "invariant_violations": 0
+    },
+    {
+      "cohort": "identifier-path",
+      "query_count": 3,
+      "hit_at": {
+        "1": 0.3333333333333333,
+        "20": 1,
+        "3": 0.6666666666666666,
+        "5": 0.6666666666666666
+      },
+      "mrr": 0.5416666666666666,
+      "ndcg_at": {
+        "1": 0.3333333333333333,
+        "20": 0.648798210119062,
+        "3": 0.5436432511904857,
+        "5": 0.5436432511904857
+      },
+      "invariant_violations": 0
+    },
+    {
+      "cohort": "lifecycle",
+      "query_count": 9,
+      "hit_at": {
+        "1": 0.8888888888888888,
+        "20": 1,
+        "3": 0.8888888888888888,
+        "5": 0.8888888888888888
+      },
+      "mrr": 0.9074074074074076,
+      "ndcg_at": {
+        "1": 0.8888888888888888,
+        "20": 0.8815540031317207,
+        "3": 0.8243107169395752,
+        "5": 0.8243107169395752
+      },
+      "invariant_violations": 0
+    },
+    {
+      "cohort": "multilingual",
+      "query_count": 2,
+      "hit_at": {
+        "1": 1,
+        "20": 1,
+        "3": 1,
+        "5": 1
+      },
+      "mrr": 1,
+      "ndcg_at": {
+        "1": 1,
+        "20": 1,
+        "3": 1,
+        "5": 1
+      },
+      "invariant_violations": 0
+    }
+  ],
+  "queries": [
+    {
+      "id": "document-flat",
+      "target": "documents",
+      "mode": "flat",
+      "cohorts": [
+        "general-semantic"
+      ],
+      "results": [
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+          "score": 0.9421525
+        },
+        {
+          "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5",
+          "score": 0.8002774
+        },
+        {
+          "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+          "score": 0.79710716
+        },
+        {
+          "id": "dddddddd-dddd-4ddd-8ddd-ddddddddddd4",
+          "score": 0.7850404
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa6",
+          "score": 0.7807008
+        },
+        {
+          "id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc3",
+          "score": 0.7578293
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10",
+          "score": 0.7499272
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa7",
+          "score": 0.74977666
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9",
+          "score": 0.73591065
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
+          "score": 0.73276937
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa8",
+          "score": 0.7256027
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        }
+      }
+    },
+    {
+      "id": "document-hierarchical",
+      "target": "documents",
+      "mode": "hierarchical",
+      "cohorts": [
+        "general-semantic"
+      ],
+      "results": [
+        {
+          "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+          "score": 0.9156444
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+          "score": 0.8135391
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10",
+          "score": 0.78887254
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
+          "score": 0.7476128
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        }
+      }
+    },
+    {
+      "id": "document-hierarchical-fallback",
+      "target": "documents",
+      "mode": "hierarchical",
+      "cohorts": [
+        "general-semantic"
+      ],
+      "results": [
+        {
+          "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5",
+          "score": 0.87577754
+        },
+        {
+          "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+          "score": 0.87319356
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+          "score": 0.8494892
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        },
+        "mrr": 0,
+        "ndcg_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        }
+      }
+    },
+    {
+      "id": "document-missing-text",
+      "target": "documents",
+      "mode": "flat",
+      "cohorts": [
+        "general-semantic"
+      ],
+      "results": [
+        {
+          "id": "dddddddd-dddd-4ddd-8ddd-ddddddddddd4",
+          "score": 0.9165294
+        },
+        {
+          "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5",
+          "score": 0.88450444
+        },
+        {
+          "id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc3",
+          "score": 0.85224164
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+          "score": 0.8522381
+        },
+        {
+          "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+          "score": 0.83509505
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa6",
+          "score": 0.8102697
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10",
+          "score": 0.8052651
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa8",
+          "score": 0.78916514
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9",
+          "score": 0.787989
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
+          "score": 0.78764
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa7",
+          "score": 0.77210516
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        }
+      }
+    },
+    {
+      "id": "exact-name-document",
+      "target": "documents",
+      "mode": "hierarchical",
+      "cohorts": [
+        "exact-name",
+        "general-semantic"
+      ],
+      "results": [
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa6",
+          "score": 0.8135639
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa7",
+          "score": 0.8083827
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9",
+          "score": 0.78995943
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        }
+      }
+    },
+    {
+      "id": "exact-name-fact",
+      "target": "facts",
+      "mode": "flat",
+      "cohorts": [
+        "exact-name"
+      ],
+      "results": [
+        {
+          "id": "61000000-0000-4000-8000-000000000001",
+          "score": 0.91044235
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000002",
+          "score": 0.86113036
+        },
+        {
+          "id": "51000000-0000-4000-8000-000000000001",
+          "score": 0.78287226
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000001",
+          "score": 0.7734573
+        },
+        {
+          "id": "44444444-4444-4444-8444-444444444444",
+          "score": 0.76227605
+        },
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "score": 0.7617947
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000003",
+          "score": 0.76099867
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000004",
+          "score": 0.76000035
+        },
+        {
+          "id": "33333333-3333-4333-8333-333333333333",
+          "score": 0.7544268
+        },
+        {
+          "id": "54000000-0000-4000-8000-000000000001",
+          "score": 0.75210315
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000001",
+          "score": 0.74872905
+        },
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "score": 0.7481192
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000001",
+          "score": 0.741988
+        },
+        {
+          "id": "42",
+          "score": 0.74187285
+        },
+        {
+          "id": "52000000-0000-4000-8000-000000000003",
+          "score": 0.7324649
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000002",
+          "score": 0.7470397
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000002",
+          "score": 0.73509914
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        }
+      },
+      "lifecycle": {
+        "intent": "current",
+        "candidates": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "33333333-3333-4333-8333-333333333333",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "42",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "44444444-4444-4444-8444-444444444444",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "54000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000004",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          }
+        ],
+        "checks": 0,
+        "violations": []
+      }
+    },
+    {
+      "id": "fact-ambiguous-en",
+      "target": "facts",
+      "mode": "flat",
+      "cohorts": [
+        "general-semantic"
+      ],
+      "results": [
+        {
+          "id": "33333333-3333-4333-8333-333333333333",
+          "score": 0.91980755
+        },
+        {
+          "id": "44444444-4444-4444-8444-444444444444",
+          "score": 0.91845477
+        },
+        {
+          "id": "54000000-0000-4000-8000-000000000001",
+          "score": 0.8394916
+        },
+        {
+          "id": "51000000-0000-4000-8000-000000000001",
+          "score": 0.83306515
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000001",
+          "score": 0.82973164
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000003",
+          "score": 0.82869613
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000001",
+          "score": 0.8205306
+        },
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "score": 0.81891584
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000004",
+          "score": 0.81335926
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000001",
+          "score": 0.81308055
+        },
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "score": 0.7866551
+        },
+        {
+          "id": "52000000-0000-4000-8000-000000000003",
+          "score": 0.78551173
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000002",
+          "score": 0.7836249
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000001",
+          "score": 0.77888834
+        },
+        {
+          "id": "42",
+          "score": 0.7761463
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000002",
+          "score": 0.7933352
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000002",
+          "score": 0.78478074
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        }
+      },
+      "lifecycle": {
+        "intent": "current",
+        "candidates": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "33333333-3333-4333-8333-333333333333",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "42",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "44444444-4444-4444-8444-444444444444",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "54000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000004",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          }
+        ],
+        "checks": 0,
+        "violations": []
+      }
+    },
+    {
+      "id": "fact-legacy-numeric-en",
+      "target": "facts",
+      "mode": "flat",
+      "cohorts": [
+        "general-semantic",
+        "lifecycle"
+      ],
+      "results": [
+        {
+          "id": "42",
+          "score": 0.9291392
+        },
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "score": 0.83822423
+        },
+        {
+          "id": "33333333-3333-4333-8333-333333333333",
+          "score": 0.82186145
+        },
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "score": 0.8187839
+        },
+        {
+          "id": "44444444-4444-4444-8444-444444444444",
+          "score": 0.8151524
+        },
+        {
+          "id": "54000000-0000-4000-8000-000000000001",
+          "score": 0.81223
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000001",
+          "score": 0.8108765
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000001",
+          "score": 0.8090695
+        },
+        {
+          "id": "51000000-0000-4000-8000-000000000001",
+          "score": 0.8053167
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000003",
+          "score": 0.804528
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000002",
+          "score": 0.7985438
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000004",
+          "score": 0.7971574
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000001",
+          "score": 0.7964203
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000001",
+          "score": 0.7957023
+        },
+        {
+          "id": "52000000-0000-4000-8000-000000000003",
+          "score": 0.77630985
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000002",
+          "score": 0.81280744
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000002",
+          "score": 0.7954674
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        }
+      },
+      "lifecycle": {
+        "intent": "current",
+        "candidates": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "33333333-3333-4333-8333-333333333333",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "42",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "44444444-4444-4444-8444-444444444444",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "54000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000004",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          }
+        ],
+        "checks": 0,
+        "violations": []
+      }
+    },
+    {
+      "id": "fact-multilingual",
+      "target": "facts",
+      "mode": "flat",
+      "cohorts": [
+        "general-semantic",
+        "multilingual"
+      ],
+      "results": [
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "score": 0.92137456
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000001",
+          "score": 0.8413138
+        },
+        {
+          "id": "51000000-0000-4000-8000-000000000001",
+          "score": 0.83397746
+        },
+        {
+          "id": "54000000-0000-4000-8000-000000000001",
+          "score": 0.83281076
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000003",
+          "score": 0.8311719
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000001",
+          "score": 0.82491565
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000001",
+          "score": 0.81888866
+        },
+        {
+          "id": "33333333-3333-4333-8333-333333333333",
+          "score": 0.81718004
+        },
+        {
+          "id": "44444444-4444-4444-8444-444444444444",
+          "score": 0.8143195
+        },
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "score": 0.806462
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000004",
+          "score": 0.8024294
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000001",
+          "score": 0.79927486
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000002",
+          "score": 0.79367685
+        },
+        {
+          "id": "42",
+          "score": 0.78692615
+        },
+        {
+          "id": "52000000-0000-4000-8000-000000000003",
+          "score": 0.77980614
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000002",
+          "score": 0.8035568
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000002",
+          "score": 0.79117584
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        }
+      },
+      "lifecycle": {
+        "intent": "current",
+        "candidates": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "33333333-3333-4333-8333-333333333333",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "42",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "44444444-4444-4444-8444-444444444444",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "54000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000004",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          }
+        ],
+        "checks": 0,
+        "violations": []
+      }
+    },
+    {
+      "id": "fact-russian",
+      "target": "facts",
+      "mode": "flat",
+      "cohorts": [
+        "multilingual"
+      ],
+      "results": [
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "score": 0.9243363
+        },
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "score": 0.82838655
+        },
+        {
+          "id": "42",
+          "score": 0.82335997
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000001",
+          "score": 0.8119061
+        },
+        {
+          "id": "54000000-0000-4000-8000-000000000001",
+          "score": 0.796046
+        },
+        {
+          "id": "51000000-0000-4000-8000-000000000001",
+          "score": 0.786465
+        },
+        {
+          "id": "33333333-3333-4333-8333-333333333333",
+          "score": 0.7792367
+        },
+        {
+          "id": "52000000-0000-4000-8000-000000000003",
+          "score": 0.7787155
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000001",
+          "score": 0.7781227
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000001",
+          "score": 0.7744668
+        },
+        {
+          "id": "44444444-4444-4444-8444-444444444444",
+          "score": 0.77226007
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000004",
+          "score": 0.7611356
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000003",
+          "score": 0.7610418
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000002",
+          "score": 0.7504947
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000001",
+          "score": 0.744516
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000002",
+          "score": 0.78772223
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000002",
+          "score": 0.7670124
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        }
+      },
+      "lifecycle": {
+        "intent": "current",
+        "candidates": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "33333333-3333-4333-8333-333333333333",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "42",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "44444444-4444-4444-8444-444444444444",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "54000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000004",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          }
+        ],
+        "checks": 0,
+        "violations": []
+      }
+    },
+    {
+      "id": "identifier-adr-path-document",
+      "target": "documents",
+      "mode": "flat",
+      "cohorts": [
+        "identifier-path"
+      ],
+      "results": [
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
+          "score": 0.8643261
+        },
+        {
+          "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5",
+          "score": 0.8405277
+        },
+        {
+          "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+          "score": 0.81761265
+        },
+        {
+          "id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc3",
+          "score": 0.8141372
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+          "score": 0.81314874
+        },
+        {
+          "id": "dddddddd-dddd-4ddd-8ddd-ddddddddddd4",
+          "score": 0.80964386
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa6",
+          "score": 0.8005936
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10",
+          "score": 0.7931395
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9",
+          "score": 0.7868564
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa7",
+          "score": 0.78375196
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa8",
+          "score": 0.7778833
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 0,
+          "20": 1,
+          "3": 0,
+          "5": 0
+        },
+        "mrr": 0.125,
+        "ndcg_at": {
+          "1": 0,
+          "20": 0.3154648767857287,
+          "3": 0,
+          "5": 0
+        }
+      }
+    },
+    {
+      "id": "identifier-cluster-document",
+      "target": "documents",
+      "mode": "hierarchical",
+      "cohorts": [
+        "identifier-path"
+      ],
+      "results": [
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9",
+          "score": 0.8622658
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa8",
+          "score": 0.8490722
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10",
+          "score": 0.8178402
+        },
+        {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
+          "score": 0.790618
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 0,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 0.5,
+        "ndcg_at": {
+          "1": 0,
+          "20": 0.6309297535714574,
+          "3": 0.6309297535714574,
+          "5": 0.6309297535714574
+        }
+      }
+    },
+    {
+      "id": "identifier-uuid-fact",
+      "target": "facts",
+      "mode": "flat",
+      "cohorts": [
+        "identifier-path"
+      ],
+      "results": [
+        {
+          "id": "61000000-0000-4000-8000-000000000003",
+          "score": 0.88724154
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000004",
+          "score": 0.8249928
+        },
+        {
+          "id": "54000000-0000-4000-8000-000000000001",
+          "score": 0.7875601
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000001",
+          "score": 0.7853422
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000001",
+          "score": 0.78425467
+        },
+        {
+          "id": "52000000-0000-4000-8000-000000000003",
+          "score": 0.78191185
+        },
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "score": 0.77980685
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000001",
+          "score": 0.7767341
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000002",
+          "score": 0.77504873
+        },
+        {
+          "id": "44444444-4444-4444-8444-444444444444",
+          "score": 0.77320844
+        },
+        {
+          "id": "51000000-0000-4000-8000-000000000001",
+          "score": 0.7724931
+        },
+        {
+          "id": "33333333-3333-4333-8333-333333333333",
+          "score": 0.7711094
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000001",
+          "score": 0.7699167
+        },
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "score": 0.76080656
+        },
+        {
+          "id": "42",
+          "score": 0.75501776
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000002",
+          "score": 0.78258216
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000002",
+          "score": 0.770719
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        }
+      },
+      "lifecycle": {
+        "intent": "current",
+        "candidates": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "33333333-3333-4333-8333-333333333333",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "42",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "44444444-4444-4444-8444-444444444444",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "54000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000004",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          }
+        ],
+        "checks": 0,
+        "violations": []
+      }
+    },
+    {
+      "id": "lifecycle-as-of-expiry",
+      "target": "facts",
+      "mode": "flat",
+      "cohorts": [
+        "lifecycle"
+      ],
+      "results": [
+        {
+          "id": "52000000-0000-4000-8000-000000000002",
+          "score": 0.86128044
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000004",
+          "score": 0.8409204
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000003",
+          "score": 0.8346529
+        },
+        {
+          "id": "54000000-0000-4000-8000-000000000001",
+          "score": 0.82895124
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000001",
+          "score": 0.8225498
+        },
+        {
+          "id": "33333333-3333-4333-8333-333333333333",
+          "score": 0.82017833
+        },
+        {
+          "id": "52000000-0000-4000-8000-000000000003",
+          "score": 0.81870687
+        },
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "score": 0.81688344
+        },
+        {
+          "id": "44444444-4444-4444-8444-444444444444",
+          "score": 0.81368315
+        },
+        {
+          "id": "51000000-0000-4000-8000-000000000001",
+          "score": 0.80729854
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000001",
+          "score": 0.8001831
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000001",
+          "score": 0.7934712
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000001",
+          "score": 0.78537977
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000002",
+          "score": 0.7774349
+        },
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "score": 0.76958
+        },
+        {
+          "id": "42",
+          "score": 0.763498
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000002",
+          "score": 0.80342966
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000002",
+          "score": 0.78661984
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000002",
+          "score": 0.8092826
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000003",
+          "score": 0.80151606
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        }
+      },
+      "lifecycle": {
+        "intent": "as_of",
+        "as_of": "2025-03-14",
+        "candidates": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "33333333-3333-4333-8333-333333333333",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "42",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "44444444-4444-4444-8444-444444444444",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000002",
+            "state": "superseded",
+            "canonical": false,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "superseded_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000003",
+            "state": "historical",
+            "canonical": false,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "historical_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000002",
+            "state": "disputed",
+            "canonical": false,
+            "expired": false,
+            "decision": "uncertain",
+            "reason_codes": [
+              "disputed"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000003",
+            "state": "disputed",
+            "canonical": false,
+            "expired": false,
+            "decision": "uncertain",
+            "reason_codes": [
+              "disputed"
+            ],
+            "valid": true
+          },
+          {
+            "id": "54000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "54000000-0000-4000-8000-000000000002",
+            "state": "historical",
+            "canonical": false,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "historical_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000003",
+            "canonical": false,
+            "expired": false,
+            "decision": "suppress",
+            "reason_codes": [
+              "invalid_lifecycle"
+            ],
+            "valid": false
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000004",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "99999999-9999-4999-8999-999999999999",
+            "state": "superseded",
+            "canonical": false,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "superseded_context"
+            ],
+            "valid": true
+          }
+        ],
+        "checks": 2,
+        "violations": []
+      }
+    },
+    {
+      "id": "lifecycle-canonical-preference",
+      "target": "facts",
+      "mode": "flat",
+      "cohorts": [
+        "lifecycle"
+      ],
+      "results": [
+        {
+          "id": "55000000-0000-4000-8000-000000000001",
+          "score": 0.87523293
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000003",
+          "score": 0.8470778
+        },
+        {
+          "id": "54000000-0000-4000-8000-000000000001",
+          "score": 0.8402093
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000001",
+          "score": 0.83047473
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000004",
+          "score": 0.8288952
+        },
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "score": 0.8286054
+        },
+        {
+          "id": "33333333-3333-4333-8333-333333333333",
+          "score": 0.8219648
+        },
+        {
+          "id": "44444444-4444-4444-8444-444444444444",
+          "score": 0.81833655
+        },
+        {
+          "id": "51000000-0000-4000-8000-000000000001",
+          "score": 0.8174677
+        },
+        {
+          "id": "52000000-0000-4000-8000-000000000003",
+          "score": 0.80648816
+        },
+        {
+          "id": "42",
+          "score": 0.79783696
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000001",
+          "score": 0.79383343
+        },
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "score": 0.79056907
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000001",
+          "score": 0.7893801
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000002",
+          "score": 0.76939523
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000002",
+          "score": 0.8418513
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000002",
+          "score": 0.8083509
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        }
+      },
+      "lifecycle": {
+        "intent": "current",
+        "candidates": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "33333333-3333-4333-8333-333333333333",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "42",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "44444444-4444-4444-8444-444444444444",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "54000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000004",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          }
+        ],
+        "checks": 2,
+        "violations": []
+      }
+    },
+    {
+      "id": "lifecycle-current-superseded",
+      "target": "facts",
+      "mode": "flat",
+      "cohorts": [
+        "lifecycle"
+      ],
+      "results": [
+        {
+          "id": "51000000-0000-4000-8000-000000000001",
+          "score": 0.9319886
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000001",
+          "score": 0.870222
+        },
+        {
+          "id": "54000000-0000-4000-8000-000000000001",
+          "score": 0.86013746
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000003",
+          "score": 0.8358619
+        },
+        {
+          "id": "33333333-3333-4333-8333-333333333333",
+          "score": 0.82864606
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000002",
+          "score": 0.8246707
+        },
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "score": 0.82406527
+        },
+        {
+          "id": "44444444-4444-4444-8444-444444444444",
+          "score": 0.8218135
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000001",
+          "score": 0.81858706
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000001",
+          "score": 0.818393
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000004",
+          "score": 0.8140737
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000001",
+          "score": 0.81065
+        },
+        {
+          "id": "52000000-0000-4000-8000-000000000003",
+          "score": 0.7936157
+        },
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "score": 0.7787823
+        },
+        {
+          "id": "42",
+          "score": 0.7780757
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000002",
+          "score": 0.80180144
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000002",
+          "score": 0.7854193
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        }
+      },
+      "lifecycle": {
+        "intent": "current",
+        "candidates": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "33333333-3333-4333-8333-333333333333",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "42",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "44444444-4444-4444-8444-444444444444",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000002",
+            "state": "superseded",
+            "canonical": false,
+            "expired": false,
+            "decision": "suppress",
+            "reason_codes": [
+              "superseded"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "54000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000004",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          }
+        ],
+        "checks": 2,
+        "violations": []
+      }
+    },
+    {
+      "id": "lifecycle-expired-canonical",
+      "target": "facts",
+      "mode": "flat",
+      "cohorts": [
+        "lifecycle"
+      ],
+      "results": [
+        {
+          "id": "56000000-0000-4000-8000-000000000001",
+          "score": 0.8849164
+        },
+        {
+          "id": "54000000-0000-4000-8000-000000000001",
+          "score": 0.88231635
+        },
+        {
+          "id": "51000000-0000-4000-8000-000000000001",
+          "score": 0.85308284
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000003",
+          "score": 0.8474582
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000004",
+          "score": 0.8441257
+        },
+        {
+          "id": "52000000-0000-4000-8000-000000000003",
+          "score": 0.8387146
+        },
+        {
+          "id": "33333333-3333-4333-8333-333333333333",
+          "score": 0.82887936
+        },
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "score": 0.8280163
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000001",
+          "score": 0.8246414
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000001",
+          "score": 0.82450616
+        },
+        {
+          "id": "44444444-4444-4444-8444-444444444444",
+          "score": 0.8228236
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000001",
+          "score": 0.80063033
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000002",
+          "score": 0.7946533
+        },
+        {
+          "id": "42",
+          "score": 0.7786789
+        },
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "score": 0.7647859
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000002",
+          "score": 0.8055749
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000002",
+          "score": 0.7988114
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 0,
+          "20": 1,
+          "3": 0,
+          "5": 0
+        },
+        "mrr": 0.16666666666666666,
+        "ndcg_at": {
+          "1": 0,
+          "20": 0.3562071871080222,
+          "3": 0,
+          "5": 0
+        }
+      },
+      "lifecycle": {
+        "intent": "current",
+        "candidates": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "33333333-3333-4333-8333-333333333333",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "42",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "44444444-4444-4444-8444-444444444444",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "54000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000004",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          }
+        ],
+        "checks": 1,
+        "violations": []
+      }
+    },
+    {
+      "id": "lifecycle-history",
+      "target": "facts",
+      "mode": "flat",
+      "cohorts": [
+        "lifecycle"
+      ],
+      "results": [
+        {
+          "id": "51000000-0000-4000-8000-000000000001",
+          "score": 0.8870697
+        },
+        {
+          "id": "54000000-0000-4000-8000-000000000001",
+          "score": 0.8730626
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000001",
+          "score": 0.8590886
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000003",
+          "score": 0.8563813
+        },
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "score": 0.8531859
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000001",
+          "score": 0.85316837
+        },
+        {
+          "id": "44444444-4444-4444-8444-444444444444",
+          "score": 0.8531661
+        },
+        {
+          "id": "33333333-3333-4333-8333-333333333333",
+          "score": 0.85142493
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000001",
+          "score": 0.850246
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000002",
+          "score": 0.8490997
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000004",
+          "score": 0.8485986
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000001",
+          "score": 0.8397862
+        },
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "score": 0.8292773
+        },
+        {
+          "id": "52000000-0000-4000-8000-000000000003",
+          "score": 0.82194686
+        },
+        {
+          "id": "42",
+          "score": 0.8092698
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000002",
+          "score": 0.81488913
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000002",
+          "score": 0.81226885
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000002",
+          "score": 0.86970073
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000003",
+          "score": 0.8645175
+        },
+        {
+          "id": "51000000-0000-4000-8000-000000000003",
+          "score": 0.8950449
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 0.7694913670560996,
+          "3": 0.7452525342261977,
+          "5": 0.7452525342261977
+        }
+      },
+      "lifecycle": {
+        "intent": "history",
+        "candidates": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "33333333-3333-4333-8333-333333333333",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "42",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "44444444-4444-4444-8444-444444444444",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000002",
+            "state": "superseded",
+            "canonical": false,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "superseded_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000003",
+            "state": "historical",
+            "canonical": false,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "historical_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000002",
+            "state": "disputed",
+            "canonical": false,
+            "expired": false,
+            "decision": "uncertain",
+            "reason_codes": [
+              "disputed"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000003",
+            "state": "disputed",
+            "canonical": false,
+            "expired": false,
+            "decision": "uncertain",
+            "reason_codes": [
+              "disputed"
+            ],
+            "valid": true
+          },
+          {
+            "id": "54000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "54000000-0000-4000-8000-000000000002",
+            "state": "historical",
+            "canonical": false,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "historical_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000003",
+            "canonical": false,
+            "expired": false,
+            "decision": "suppress",
+            "reason_codes": [
+              "invalid_lifecycle"
+            ],
+            "valid": false
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000004",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "99999999-9999-4999-8999-999999999999",
+            "state": "superseded",
+            "canonical": false,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "superseded_context"
+            ],
+            "valid": true
+          }
+        ],
+        "checks": 3,
+        "violations": []
+      }
+    },
+    {
+      "id": "lifecycle-legacy-invalid",
+      "target": "facts",
+      "mode": "flat",
+      "cohorts": [
+        "lifecycle"
+      ],
+      "results": [
+        {
+          "id": "56000000-0000-4000-8000-000000000001",
+          "score": 0.8736024
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000001",
+          "score": 0.8586966
+        },
+        {
+          "id": "54000000-0000-4000-8000-000000000001",
+          "score": 0.8406124
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000003",
+          "score": 0.83328754
+        },
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "score": 0.83184886
+        },
+        {
+          "id": "52000000-0000-4000-8000-000000000003",
+          "score": 0.83047235
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000004",
+          "score": 0.82795286
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000001",
+          "score": 0.82206905
+        },
+        {
+          "id": "33333333-3333-4333-8333-333333333333",
+          "score": 0.8186489
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000001",
+          "score": 0.817911
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000002",
+          "score": 0.816404
+        },
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "score": 0.8155252
+        },
+        {
+          "id": "51000000-0000-4000-8000-000000000001",
+          "score": 0.8147503
+        },
+        {
+          "id": "44444444-4444-4444-8444-444444444444",
+          "score": 0.81165016
+        },
+        {
+          "id": "42",
+          "score": 0.7924131
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000002",
+          "score": 0.85676986
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000002",
+          "score": 0.81668925
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        }
+      },
+      "lifecycle": {
+        "intent": "current",
+        "candidates": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "33333333-3333-4333-8333-333333333333",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "42",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "44444444-4444-4444-8444-444444444444",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "54000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000003",
+            "canonical": false,
+            "expired": false,
+            "decision": "suppress",
+            "reason_codes": [
+              "invalid_lifecycle"
+            ],
+            "valid": false
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000004",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          }
+        ],
+        "checks": 2,
+        "violations": []
+      }
+    },
+    {
+      "id": "lifecycle-permanent-historical",
+      "target": "facts",
+      "mode": "flat",
+      "cohorts": [
+        "lifecycle"
+      ],
+      "results": [
+        {
+          "id": "54000000-0000-4000-8000-000000000001",
+          "score": 0.9375496
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000001",
+          "score": 0.8438834
+        },
+        {
+          "id": "51000000-0000-4000-8000-000000000001",
+          "score": 0.83431745
+        },
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "score": 0.8164625
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000003",
+          "score": 0.814294
+        },
+        {
+          "id": "33333333-3333-4333-8333-333333333333",
+          "score": 0.81389177
+        },
+        {
+          "id": "52000000-0000-4000-8000-000000000003",
+          "score": 0.8087811
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000001",
+          "score": 0.80741304
+        },
+        {
+          "id": "44444444-4444-4444-8444-444444444444",
+          "score": 0.8048663
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000004",
+          "score": 0.80469686
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000001",
+          "score": 0.7997849
+        },
+        {
+          "id": "42",
+          "score": 0.7695126
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000001",
+          "score": 0.76573485
+        },
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "score": 0.7650747
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000002",
+          "score": 0.7600932
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000002",
+          "score": 0.80028987
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000002",
+          "score": 0.7691138
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        }
+      },
+      "lifecycle": {
+        "intent": "current",
+        "candidates": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "33333333-3333-4333-8333-333333333333",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "42",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "44444444-4444-4444-8444-444444444444",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "54000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "54000000-0000-4000-8000-000000000002",
+            "state": "historical",
+            "canonical": false,
+            "expired": false,
+            "decision": "suppress",
+            "reason_codes": [
+              "historical"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "demote",
+            "reason_codes": [
+              "canonical_preference"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000004",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_truth"
+            ],
+            "valid": true
+          }
+        ],
+        "checks": 1,
+        "violations": []
+      }
+    },
+    {
+      "id": "lifecycle-uncertainty",
+      "target": "facts",
+      "mode": "flat",
+      "cohorts": [
+        "lifecycle"
+      ],
+      "results": [
+        {
+          "id": "53000000-0000-4000-8000-000000000001",
+          "score": 0.87525344
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000001",
+          "score": 0.81370354
+        },
+        {
+          "id": "54000000-0000-4000-8000-000000000001",
+          "score": 0.8134501
+        },
+        {
+          "id": "22222222-2222-4222-8222-222222222222",
+          "score": 0.8110843
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000001",
+          "score": 0.8091111
+        },
+        {
+          "id": "51000000-0000-4000-8000-000000000001",
+          "score": 0.80562305
+        },
+        {
+          "id": "52000000-0000-4000-8000-000000000003",
+          "score": 0.801795
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000003",
+          "score": 0.80151564
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000004",
+          "score": 0.7986659
+        },
+        {
+          "id": "33333333-3333-4333-8333-333333333333",
+          "score": 0.7972127
+        },
+        {
+          "id": "44444444-4444-4444-8444-444444444444",
+          "score": 0.7931052
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000002",
+          "score": 0.77520955
+        },
+        {
+          "id": "61000000-0000-4000-8000-000000000001",
+          "score": 0.7726526
+        },
+        {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "score": 0.7610909
+        },
+        {
+          "id": "42",
+          "score": 0.7575965
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000002",
+          "score": 0.80226004
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000002",
+          "score": 0.75688565
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000002",
+          "score": 0.8911565
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000003",
+          "score": 0.8833941
+        },
+        {
+          "id": "54000000-0000-4000-8000-000000000002",
+          "score": 0.8069179
+        }
+      ],
+      "metrics": {
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 0.8082874740213652,
+          "3": 0.6735439182299786,
+          "5": 0.6735439182299786
+        }
+      },
+      "lifecycle": {
+        "intent": "uncertainty",
+        "candidates": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "33333333-3333-4333-8333-333333333333",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "42",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "44444444-4444-4444-8444-444444444444",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000002",
+            "state": "superseded",
+            "canonical": false,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "superseded_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "51000000-0000-4000-8000-000000000003",
+            "state": "historical",
+            "canonical": false,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "historical_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": true,
+            "decision": "suppress",
+            "reason_codes": [
+              "expired"
+            ],
+            "valid": true
+          },
+          {
+            "id": "52000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000002",
+            "state": "disputed",
+            "canonical": false,
+            "expired": false,
+            "decision": "uncertain",
+            "reason_codes": [
+              "disputed"
+            ],
+            "valid": true
+          },
+          {
+            "id": "53000000-0000-4000-8000-000000000003",
+            "state": "disputed",
+            "canonical": false,
+            "expired": false,
+            "decision": "uncertain",
+            "reason_codes": [
+              "disputed"
+            ],
+            "valid": true
+          },
+          {
+            "id": "54000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "54000000-0000-4000-8000-000000000002",
+            "state": "historical",
+            "canonical": false,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "historical_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "55000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": false,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "56000000-0000-4000-8000-000000000003",
+            "canonical": false,
+            "expired": false,
+            "decision": "suppress",
+            "reason_codes": [
+              "invalid_lifecycle"
+            ],
+            "valid": false
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000001",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000002",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000003",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "61000000-0000-4000-8000-000000000004",
+            "state": "current",
+            "canonical": true,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "current_context"
+            ],
+            "valid": true
+          },
+          {
+            "id": "99999999-9999-4999-8999-999999999999",
+            "state": "superseded",
+            "canonical": false,
+            "expired": false,
+            "decision": "include",
+            "reason_codes": [
+              "superseded_context"
+            ],
+            "valid": true
+          }
+        ],
+        "checks": 2,
+        "violations": []
+      }
+    }
+  ],
+  "lifecycle": {
+    "aggregate": {
+      "checks": 35,
+      "violations": 0,
+      "canonical_preference_checks": 22,
+      "canonical_preference_violations": 0
+    },
+    "transitions": [
+      {
+        "id": "invalid-canonical-historical",
+        "valid": false,
+        "reason_code": "target_invalid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "invalid-current-with-successor",
+        "valid": false,
+        "reason_code": "target_invalid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "invalid-self-reference",
+        "valid": false,
+        "reason_code": "target_invalid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "invalid-superseded-without-successor",
+        "valid": false,
+        "reason_code": "target_invalid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-current-to-current",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-current-to-disputed",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-current-to-historical",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-current-to-superseded",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-disputed-to-current",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-disputed-to-disputed",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-disputed-to-historical",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-disputed-to-superseded",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-historical-to-current",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-historical-to-disputed",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-historical-to-historical",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-historical-to-superseded",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-superseded-to-current",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-superseded-to-disputed",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-superseded-to-historical",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      },
+      {
+        "id": "transition-superseded-to-superseded",
+        "valid": true,
+        "reason_code": "transition_valid",
+        "passed": true,
+        "violations": []
+      }
+    ]
+  },
+  "gates_passed": true
+}
