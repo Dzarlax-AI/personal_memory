@@ -1,0 +1,269 @@
+{
+  "schema_version": 1,
+  "contract_version": "1.0.0",
+  "traces": [
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "RECALL-001", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "recall"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "recall", "outcome": "success"},
+        {"sequence": 3, "event": "claim", "code": "fact_found"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "RECALL-002", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "recall"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "recall", "outcome": "success"},
+        {"sequence": 3, "event": "claim", "code": "fact_found"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "RECALL-003", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "documents", "operation": "search"},
+        {"sequence": 2, "event": "tool_result", "capability": "documents", "operation": "search", "outcome": "success"},
+        {"sequence": 3, "event": "claim", "code": "document_evidence"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "RECALL-004", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "recall"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "recall", "outcome": "success"},
+        {"sequence": 3, "event": "tool_call", "capability": "documents", "operation": "search"},
+        {"sequence": 4, "event": "tool_result", "capability": "documents", "operation": "search", "outcome": "success"},
+        {"sequence": 5, "event": "claim", "code": "fact_found"},
+        {"sequence": 6, "event": "claim", "code": "document_evidence"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "RECALL-005", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [{"sequence": 1, "event": "claim", "code": "ordinary_response"}]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "RECALL-006", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "recall"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "recall", "outcome": "empty"},
+        {"sequence": 3, "event": "claim", "code": "no_relevant_fact"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "STORE-001", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "store"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "store", "outcome": "success"},
+        {"sequence": 3, "event": "claim", "code": "write_confirmed"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "STORE-002", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [{"sequence": 1, "event": "claim", "code": "ordinary_response"}]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "STORE-003", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [{"sequence": 1, "event": "claim", "code": "document_routed"}]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "STORE-004", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims", "artifacts"],
+      "events": [{"sequence": 1, "event": "disclosure", "code": "secret_rejected"}]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "STORE-005", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "todoist", "operation": "task_create"},
+        {"sequence": 2, "event": "tool_result", "capability": "todoist", "operation": "task_create", "outcome": "success"},
+        {"sequence": 3, "event": "claim", "code": "task_created"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "STORE-006", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [{"sequence": 1, "event": "claim", "code": "clarification_requested"}]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "STORE-007", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "store"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "store", "outcome": "duplicate"},
+        {"sequence": 3, "event": "claim", "code": "write_duplicate"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "STORE-008", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims", "retry_relationships"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "store"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "store", "outcome": "timeout"},
+        {"sequence": 3, "event": "disclosure", "code": "write_unconfirmed"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "TASK-001", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "todoist", "operation": "task_create"},
+        {"sequence": 2, "event": "tool_result", "capability": "todoist", "operation": "task_create", "outcome": "success"},
+        {"sequence": 3, "event": "claim", "code": "task_created"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "TASK-002", "client_family": "synthetic",
+      "observed": ["capabilities", "tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "capability", "capability": "todoist", "outcome": "unavailable"},
+        {"sequence": 2, "event": "disclosure", "code": "task_not_created"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "TASK-003", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims", "retry_relationships"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "todoist", "operation": "task_create"},
+        {"sequence": 2, "event": "tool_result", "capability": "todoist", "operation": "task_create", "outcome": "timeout"},
+        {"sequence": 3, "event": "tool_call", "capability": "todoist", "operation": "task_list"},
+        {"sequence": 4, "event": "tool_result", "capability": "todoist", "operation": "task_list", "outcome": "empty"},
+        {"sequence": 5, "event": "disclosure", "code": "write_unconfirmed"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "OFFLINE-001", "client_family": "synthetic",
+      "observed": ["capabilities", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "capability", "capability": "memory", "outcome": "unavailable"},
+        {"sequence": 2, "event": "disclosure", "code": "memory_not_checked"},
+        {"sequence": 3, "event": "fallback", "capability": "ordinary_context", "operation": "fallback", "outcome": "success"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "OFFLINE-002", "client_family": "synthetic",
+      "observed": ["capabilities", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "capability", "capability": "documents", "outcome": "unavailable"},
+        {"sequence": 2, "event": "disclosure", "code": "documents_not_searched"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "OFFLINE-003", "client_family": "synthetic",
+      "observed": ["capabilities", "tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "recall"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "recall", "outcome": "success"},
+        {"sequence": 3, "event": "claim", "code": "fact_found"},
+        {"sequence": 4, "event": "capability", "capability": "todoist", "outcome": "unavailable"},
+        {"sequence": 5, "event": "disclosure", "code": "task_not_created"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "OFFLINE-004", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [{"sequence": 1, "event": "claim", "code": "ordinary_response"}]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "LIFECYCLE-001", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "recall"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "recall", "outcome": "success"},
+        {"sequence": 3, "event": "claim", "code": "current_fact_used"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "LIFECYCLE-002", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "recall"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "recall", "outcome": "success"},
+        {"sequence": 3, "event": "claim", "code": "historical_fact_used"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "LIFECYCLE-003", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "recall"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "recall", "outcome": "success"},
+        {"sequence": 3, "event": "claim", "code": "lifecycle_uncertain"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "LIFECYCLE-004", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "recall"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "recall", "outcome": "success"},
+        {"sequence": 3, "event": "claim", "code": "current_instruction_used"},
+        {"sequence": 4, "event": "disclosure", "code": "explicit_lifecycle_change"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "LIFECYCLE-005", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "recall"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "recall", "outcome": "success"},
+        {"sequence": 3, "event": "disclosure", "code": "unverified_fact"},
+        {"sequence": 4, "event": "claim", "code": "current_fact_used"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "FAILURE-001", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims", "retry_relationships"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "recall"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "recall", "outcome": "timeout"},
+        {"sequence": 3, "event": "disclosure", "code": "memory_not_checked"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "FAILURE-002", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims", "retry_relationships"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "recall"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "recall", "outcome": "error"},
+        {"sequence": 3, "event": "disclosure", "code": "memory_not_checked"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "FAILURE-003", "client_family": "synthetic",
+      "observed": ["tool_events", "user_visible_claims", "retry_relationships"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "lifecycle"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "lifecycle", "outcome": "ambiguous"},
+        {"sequence": 3, "event": "disclosure", "code": "write_unconfirmed"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "TELEMETRY-001", "client_family": "synthetic",
+      "observed": ["artifacts"],
+      "events": [{"sequence": 1, "event": "artifact", "code": "telemetry_allowed"}]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "TELEMETRY-002", "client_family": "synthetic",
+      "observed": ["tool_events", "artifacts"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "recall"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "recall", "outcome": "error"},
+        {"sequence": 3, "event": "artifact", "code": "telemetry_allowed"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "TELEMETRY-003", "client_family": "synthetic",
+      "observed": ["artifacts"],
+      "events": [{"sequence": 1, "event": "artifact", "code": "telemetry_disabled"}]
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-.PHONY: help dev-deps verify-assets build test vet eval-public tidy clean
+.PHONY: help dev-deps verify-assets build test vet eval-public conformance-public tidy clean
 
 DS_VERSION ?= v1.4.0
 DS_DIR := internal/viz/static/assets/vendor
@@ -13,6 +13,7 @@ help:
 	@echo "  make build     — build all five binaries (runs dev-deps first)"
 	@echo "  make test      — verify assets + vet + test + build all binaries"
 	@echo "  make eval-public — run the public retrieval dataset against Qdrant"
+	@echo "  make conformance-public — run the public model-memory conformance suite"
 	@echo "  make clean     — remove built binaries and the vendored browser bundles"
 
 dev-deps:
@@ -36,14 +37,14 @@ verify-assets:
 	fi
 
 build: dev-deps
-	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory
+	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory ./cmd/conformance-memory
 
 vet:
 	go vet ./...
 
 test: dev-deps vet
 	go test ./...
-	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory
+	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory ./cmd/conformance-memory
 
 QDRANT_TEST_URL ?= http://127.0.0.1:6333
 
@@ -60,8 +61,17 @@ eval-public:
 		--json eval-results/comparison.json \
 		--enforce-gates
 
+conformance-public:
+	go run ./cmd/conformance-memory run \
+		--source fixture \
+		--suite conformancedata/public/v1/scenarios.json \
+		--contract docs/model-usage-contract.md \
+		--traces conformancedata/public/v1/traces/passing.json \
+		--json conformance-results/public.json \
+		--markdown conformance-results/public.md
+
 tidy:
 	go mod tidy
 
 clean:
-	rm -rf $(DS_DIR) /tmp/personal-memory /tmp/personal-memory-indexer /tmp/personal-memory-migrate-ids
+	rm -rf $(DS_DIR) conformance-results /tmp/personal-memory /tmp/personal-memory-indexer /tmp/personal-memory-migrate-ids

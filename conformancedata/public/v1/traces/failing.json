@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "contract_version": "1.0.0",
+  "traces": [
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "RECALL-001", "client_family": "codex",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [{"sequence": 1, "event": "claim", "code": "fact_found"}]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "TASK-002", "client_family": "claude",
+      "observed": ["capabilities", "tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "capability", "capability": "todoist", "outcome": "unavailable"},
+        {"sequence": 2, "event": "disclosure", "code": "task_not_created"},
+        {"sequence": 3, "event": "claim", "code": "task_created"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "RECALL-001", "client_family": "chatgpt",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "claim", "code": "fact_found"},
+        {"sequence": 2, "event": "tool_call", "capability": "memory", "operation": "recall"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "RECALL-001", "client_family": "generic_mcp",
+      "observed": ["tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "recall"},
+        {"sequence": 2, "event": "tool_call", "capability": "memory", "operation": "recall"},
+        {"sequence": 3, "event": "claim", "code": "fact_found"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "STORE-008", "client_family": "codex",
+      "observed": ["tool_events", "user_visible_claims", "retry_relationships"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "store"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "store", "outcome": "timeout"},
+        {"sequence": 3, "event": "tool_call", "capability": "memory", "operation": "store", "retry_of": 1},
+        {"sequence": 4, "event": "disclosure", "code": "write_unconfirmed"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "TASK-002", "client_family": "chatgpt",
+      "observed": ["capabilities", "tool_events"],
+      "events": [{"sequence": 1, "event": "capability", "capability": "todoist", "outcome": "unavailable"}]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "TASK-002", "client_family": "generic_mcp",
+      "observed": ["capabilities", "tool_events", "user_visible_claims"],
+      "events": [
+        {"sequence": 1, "event": "capability", "capability": "todoist", "outcome": "unavailable"},
+        {"sequence": 2, "event": "tool_call", "capability": "memory", "operation": "store"},
+        {"sequence": 3, "event": "disclosure", "code": "task_not_created"}
+      ]
+    },
+    {
+      "schema_version": 1, "contract_version": "1.0.0", "scenario_id": "FAILURE-002", "client_family": "claude",
+      "observed": ["tool_events", "user_visible_claims", "retry_relationships"],
+      "events": [
+        {"sequence": 1, "event": "tool_call", "capability": "memory", "operation": "recall"},
+        {"sequence": 2, "event": "tool_result", "capability": "memory", "operation": "recall", "outcome": "error"},
+        {"sequence": 3, "event": "tool_call", "capability": "memory", "operation": "recall", "retry_of": 1},
+        {"sequence": 4, "event": "disclosure", "code": "memory_not_checked"}
+      ]
+    }
+  ]
+}

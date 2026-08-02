@@ -14,3 +14,7 @@ internal/viz/static/assets/vendor/
 # Retrieval evaluation: private inputs and local/generated reports.
 evaldata/private/
 eval-results/
+
+# Model-memory conformance: private inputs and generated reports.
+conformancedata/private/
+conformance-results/
