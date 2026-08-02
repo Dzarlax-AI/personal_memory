@@ -22,9 +22,6 @@ func vectorlessV3Dataset(t *testing.T) string {
 			delete(rawPoint.(map[string]any), "vector")
 		}
 	}
-	for _, rawQuery := range document["queries"].([]any) {
-		rawQuery.(map[string]any)["vector"] = []any{}
-	}
 	data, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
@@ -94,8 +91,62 @@ func TestLoadForMaterializationIsTheOnlyVectorlessDecodePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(dataset.Facts) == 0 || len(dataset.Facts[0].Vector) != 0 ||
-		len(dataset.Queries) == 0 || len(dataset.Queries[0].Vector) != 0 {
+		len(dataset.Queries) == 0 ||
+		len(dataset.Queries[0].Vector) != dataset.Embedding.VectorSize {
 		t.Fatalf("vectorless dataset decoded unexpectedly: %#v", dataset)
+	}
+}
+
+func TestLoadForMaterializationRequiresCompleteQueryVectors(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(map[string]any)
+		want   string
+	}{
+		{
+			name: "missing",
+			mutate: func(query map[string]any) {
+				delete(query, "vector")
+			},
+			want: `field "vector" is required`,
+		},
+		{
+			name: "null",
+			mutate: func(query map[string]any) {
+				query["vector"] = nil
+			},
+			want: "must not be null",
+		},
+		{
+			name: "empty",
+			mutate: func(query map[string]any) {
+				query["vector"] = []any{}
+			},
+			want: "vector must not be empty",
+		},
+		{
+			name: "wrong dimension",
+			mutate: func(query map[string]any) {
+				query["vector"] = []any{1}
+			},
+			want: "vector length",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var document map[string]any
+			if err := json.Unmarshal([]byte(vectorlessV3Dataset(t)), &document); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(document["queries"].([]any)[0].(map[string]any))
+			data, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = LoadForMaterialization(strings.NewReader(string(data)))
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want containing %q", err, test.want)
+			}
+		})
 	}
 }
 
@@ -167,13 +218,20 @@ func TestMaterializeUsesStablePurposeBatchesAndDoesNotMutateSource(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dataset.Chunks = cloneFixturePoints(dataset.Facts[:1])
+	dataset.Chunks, err = cloneFixturePoints(dataset.Facts[:1])
+	if err != nil {
+		t.Fatal(err)
+	}
 	dataset.Chunks[0].Payload["text"] = "chunk text"
-	dataset.Folders = cloneFixturePoints(dataset.Facts[:1])
+	dataset.Folders, err = cloneFixturePoints(dataset.Facts[:1])
+	if err != nil {
+		t.Fatal(err)
+	}
 	dataset.Folders[0].Payload["text"] = "folder text"
 	dataset.Facts[0].Payload["nested"] = map[string]any{"items": []any{map[string]any{"value": "source"}}}
 	dataset.Embedding.ModelID = "intfloat/multilingual-e5-small"
 	dataset.Configuration.TopK = []int{3, 1}
+	dataset.Queries[0].Vector = Vector{0, 1}
 	before, err := json.Marshal(dataset)
 	if err != nil {
 		t.Fatal(err)
@@ -215,7 +273,8 @@ func TestMaterializeUsesStablePurposeBatchesAndDoesNotMutateSource(t *testing.T)
 	}
 	if got.Embedding.InputProfile != profile ||
 		len(got.Facts[0].Vector) != dataset.Embedding.VectorSize ||
-		len(got.Queries[0].Vector) != dataset.Embedding.VectorSize {
+		!reflect.DeepEqual(got.Queries[0].Vector, Vector{1, 0}) ||
+		!reflect.DeepEqual(dataset.Queries[0].Vector, Vector{0, 1}) {
 		t.Fatalf("materialized identity/vectors = %#v", got)
 	}
 	after, err := json.Marshal(dataset)
@@ -244,6 +303,186 @@ func TestMaterializeRejectsMissingCorpusTextBeforeEmbedding(t *testing.T) {
 	}
 	if len(embedder.calls) != 0 {
 		t.Fatalf("embedding started before text validation: %#v", embedder.calls)
+	}
+}
+
+func TestMaterializeUsesSummaryForFolderWhenTextIsUnavailable(t *testing.T) {
+	dataset, err := LoadForMaterialization(strings.NewReader(vectorlessV3Dataset(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset.Folders = []FixturePoint{{
+		ID: dataset.Facts[0].ID,
+		Payload: map[string]any{
+			"text":    " ",
+			"summary": "summary-only folder",
+		},
+	}}
+	embedder := &materializeEmbedder{}
+	got, _, err := Materialize(context.Background(), dataset, embedder, MaterializeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(embedder.calls) != 4 ||
+		!reflect.DeepEqual(embedder.calls[2].texts, []string{"summary-only folder"}) ||
+		len(got.Folders[0].Vector) != dataset.Embedding.VectorSize {
+		t.Fatalf("folder materialization calls=%#v output=%#v", embedder.calls, got.Folders)
+	}
+}
+
+func TestMaterializeRejectsFolderMissingTextAndSummaryBeforeEmbedding(t *testing.T) {
+	dataset, err := LoadForMaterialization(strings.NewReader(vectorlessV3Dataset(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset.Folders = []FixturePoint{{
+		ID:      dataset.Facts[0].ID,
+		Payload: map[string]any{"text": " ", "summary": 42},
+	}}
+	embedder := &materializeEmbedder{}
+	_, _, err = Materialize(context.Background(), dataset, embedder, MaterializeOptions{})
+	if err == nil || !strings.Contains(err.Error(), "folders point") {
+		t.Fatalf("error = %v", err)
+	}
+	if len(embedder.calls) != 0 {
+		t.Fatalf("embedding started before folder text validation: %#v", embedder.calls)
+	}
+}
+
+func TestMaterializeDoesNotUseSummaryForFactsOrChunks(t *testing.T) {
+	for _, group := range []string{"facts", "chunks"} {
+		t.Run(group, func(t *testing.T) {
+			dataset, err := LoadForMaterialization(strings.NewReader(vectorlessV3Dataset(t)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			point := FixturePoint{
+				ID:      dataset.Facts[0].ID,
+				Payload: map[string]any{"summary": "not valid passage text"},
+			}
+			if group == "facts" {
+				dataset.Facts = []FixturePoint{point}
+			} else {
+				dataset.Chunks = []FixturePoint{point}
+			}
+			embedder := &materializeEmbedder{}
+			_, _, err = Materialize(
+				context.Background(), dataset, embedder, MaterializeOptions{},
+			)
+			if err == nil || !strings.Contains(err.Error(), group+" point") {
+				t.Fatalf("error = %v", err)
+			}
+			if len(embedder.calls) != 0 {
+				t.Fatalf("embedding started before %s text validation: %#v", group, embedder.calls)
+			}
+		})
+	}
+}
+
+func TestMaterializeDeepCopiesConcreteJSONPayloadShapesBothDirections(t *testing.T) {
+	type concretePayload struct {
+		Values []float64 `json:"values"`
+	}
+	dataset, err := LoadForMaterialization(strings.NewReader(vectorlessV3Dataset(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := dataset.Facts[0].Payload
+	payload["string_map"] = map[string]string{"key": "source"}
+	payload["map_slice"] = []map[string]any{{
+		"nested": []float64{1, 2},
+	}}
+	payload["floats"] = []float64{3, 4}
+	payload["bytes"] = []byte{5, 6}
+	payload["array"] = [2]map[string]string{{"key": "a"}, {"key": "b"}}
+	payload["struct"] = concretePayload{Values: []float64{7, 8}}
+	payload["raw"] = json.RawMessage(`{"side":"source"}`)
+	payload["nested_raw"] = map[string][]json.RawMessage{
+		"items": {json.RawMessage(`[1,2]`)},
+	}
+
+	got, _, err := Materialize(
+		context.Background(), dataset, &materializeEmbedder{}, MaterializeOptions{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cloned := got.Facts[0].Payload
+	cloned["string_map"].(map[string]string)["key"] = "clone"
+	cloned["map_slice"].([]map[string]any)[0]["nested"].([]float64)[0] = 10
+	cloned["floats"].([]float64)[0] = 30
+	cloned["bytes"].([]byte)[0] = 50
+	cloned["array"].([2]map[string]string)[0]["key"] = "clone"
+	clonedStruct := cloned["struct"].(concretePayload)
+	clonedStruct.Values[0] = 70
+	cloned["raw"].(json.RawMessage)[0] = '['
+	cloned["nested_raw"].(map[string][]json.RawMessage)["items"][0][0] = '{'
+	if payload["string_map"].(map[string]string)["key"] != "source" ||
+		payload["map_slice"].([]map[string]any)[0]["nested"].([]float64)[0] != 1 ||
+		payload["floats"].([]float64)[0] != 3 ||
+		payload["bytes"].([]byte)[0] != 5 ||
+		payload["array"].([2]map[string]string)[0]["key"] != "a" ||
+		payload["struct"].(concretePayload).Values[0] != 7 ||
+		payload["raw"].(json.RawMessage)[0] != '{' ||
+		payload["nested_raw"].(map[string][]json.RawMessage)["items"][0][0] != '[' {
+		t.Fatal("mutating materialized payload changed source payload")
+	}
+
+	payload["string_map"].(map[string]string)["key"] = "source-mutated"
+	payload["map_slice"].([]map[string]any)[0]["nested"].([]float64)[1] = 20
+	payload["floats"].([]float64)[1] = 40
+	payload["bytes"].([]byte)[1] = 60
+	sourceArray := payload["array"].([2]map[string]string)
+	sourceArray[1]["key"] = "source-mutated"
+	sourceStruct := payload["struct"].(concretePayload)
+	sourceStruct.Values[1] = 80
+	payload["raw"].(json.RawMessage)[1] = '['
+	payload["nested_raw"].(map[string][]json.RawMessage)["items"][0][1] = '}'
+	if cloned["string_map"].(map[string]string)["key"] != "clone" ||
+		cloned["map_slice"].([]map[string]any)[0]["nested"].([]float64)[1] != 2 ||
+		cloned["floats"].([]float64)[1] != 4 ||
+		cloned["bytes"].([]byte)[1] != 6 ||
+		cloned["array"].([2]map[string]string)[1]["key"] != "b" ||
+		clonedStruct.Values[1] != 8 ||
+		cloned["raw"].(json.RawMessage)[1] == '[' ||
+		cloned["nested_raw"].(map[string][]json.RawMessage)["items"][0][1] == '}' {
+		t.Fatal("mutating source payload changed materialized payload")
+	}
+}
+
+func TestMaterializeRejectsUnsupportedPayloadWithoutEmbedding(t *testing.T) {
+	dataset, err := LoadForMaterialization(strings.NewReader(vectorlessV3Dataset(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset.Facts[0].Payload["unsupported"] = func() {}
+	embedder := &materializeEmbedder{}
+	got, _, err := Materialize(context.Background(), dataset, embedder, MaterializeOptions{})
+	if err == nil || !strings.Contains(err.Error(), "unsupported payload type func()") {
+		t.Fatalf("error = %v", err)
+	}
+	if got != nil || len(embedder.calls) != 0 {
+		t.Fatalf("unsupported payload returned output or started embedding: got=%#v calls=%#v",
+			got, embedder.calls)
+	}
+}
+
+func TestMaterializeRejectsCyclicPayloadWithoutEmbedding(t *testing.T) {
+	dataset, err := LoadForMaterialization(strings.NewReader(vectorlessV3Dataset(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cyclic := map[string]any{}
+	cyclic["self"] = cyclic
+	dataset.Facts[0].Payload["cyclic"] = cyclic
+	embedder := &materializeEmbedder{}
+	got, _, err := Materialize(context.Background(), dataset, embedder, MaterializeOptions{})
+	if err == nil || !strings.Contains(err.Error(), "cyclic payload value") {
+		t.Fatalf("error = %v", err)
+	}
+	if got != nil || len(embedder.calls) != 0 {
+		t.Fatalf("cyclic payload returned output or started embedding: got=%#v calls=%#v",
+			got, embedder.calls)
 	}
 }
 

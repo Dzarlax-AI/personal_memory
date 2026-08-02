@@ -88,10 +88,10 @@ func decodeDataset(data []byte) (*Dataset, error) {
 // Validate checks schema, vectors, IDs, queries, metrics, and gates without
 // requiring live query IDs to exist in fixture point arrays.
 func (d *Dataset) Validate() error {
-	return d.validate(false)
+	return d.validate(false, false)
 }
 
-func (d *Dataset) validate(allowEmptyCorpusVectors bool) error {
+func (d *Dataset) validate(allowEmptyCorpusVectors, requireQueryVectors bool) error {
 	if d.SchemaVersion != SchemaVersion &&
 		d.SchemaVersion != LifecycleSchemaVersion &&
 		d.SchemaVersion != CurrentDatasetSchemaVersion {
@@ -212,6 +212,9 @@ func (d *Dataset) validate(allowEmptyCorpusVectors bool) error {
 		}
 		if strings.TrimSpace(query.Text) == "" {
 			return fmt.Errorf("query %q text is required", query.ID)
+		}
+		if requireQueryVectors && len(query.Vector) == 0 {
+			return fmt.Errorf("query %q vector must not be empty", query.ID)
 		}
 		if len(query.Vector) > 0 {
 			if err := validateVector(query.Vector, identity.VectorSize); err != nil {
@@ -343,7 +346,7 @@ func (d *Dataset) ValidateForMaterialization() error {
 	if d.SchemaVersion != CurrentDatasetSchemaVersion {
 		return fmt.Errorf("materialization requires schema_version %d", CurrentDatasetSchemaVersion)
 	}
-	if err := d.validate(true); err != nil {
+	if err := d.validate(true, true); err != nil {
 		return err
 	}
 	for _, group := range []struct {
@@ -355,7 +358,7 @@ func (d *Dataset) ValidateForMaterialization() error {
 		{name: "folders", points: d.Folders},
 	} {
 		for _, point := range group.points {
-			if _, ok := corpusText(point.Payload); !ok {
+			if _, ok := corpusText(point.Payload, group.name); !ok {
 				return fmt.Errorf("%s point %q has no usable corpus text",
 					group.name, point.ID.String())
 			}

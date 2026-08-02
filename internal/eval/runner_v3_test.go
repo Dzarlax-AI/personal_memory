@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -621,6 +622,13 @@ func TestTEIFixtureDiagnosticsUsePerQueryOnlineTiming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	dataset.Folders = []FixturePoint{{
+		ID:     dataset.Facts[0].ID,
+		Vector: Vector{1, 0},
+		Payload: map[string]any{
+			"summary": "summary-only folder",
+		},
+	}}
 	originalSecondVector := append(Vector(nil), dataset.Facts[1].Vector...)
 	embedder := &recordingPurposeEmbedder{}
 	current := time.Unix(0, 0)
@@ -642,7 +650,7 @@ func TestTEIFixtureDiagnosticsUsePerQueryOnlineTiming(t *testing.T) {
 	if report.Diagnostics == nil || report.Diagnostics.Corpus == nil {
 		t.Fatalf("diagnostics = %#v", report.Diagnostics)
 	}
-	if report.Diagnostics.Corpus.EmbeddingCount != 2 ||
+	if report.Diagnostics.Corpus.EmbeddingCount != 3 ||
 		report.Diagnostics.Query.Embed.Count != 1 ||
 		report.Diagnostics.Query.Search.Count != 1 ||
 		report.Diagnostics.Query.Total.Count != 1 {
@@ -664,6 +672,9 @@ func TestTEIFixtureDiagnosticsUsePerQueryOnlineTiming(t *testing.T) {
 		if embedder.calls[i] != want {
 			t.Fatalf("purpose call %d = %v, want %v", i, embedder.calls[i], want)
 		}
+	}
+	if !reflect.DeepEqual(embedder.inputs[2], []string{"summary-only folder"}) {
+		t.Fatalf("folder inputs = %#v", embedder.inputs[2])
 	}
 }
 
@@ -725,7 +736,10 @@ func TestFixtureSourcesPropagateDocumentsRootForPathLift(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			dataset.Chunks = cloneFixturePoints(dataset.Facts)
+			dataset.Chunks, err = cloneFixturePoints(dataset.Facts)
+			if err != nil {
+				t.Fatal(err)
+			}
 			dataset.Chunks[0].Payload = map[string]any{
 				"text": "general", "file_path": "/docs/project/PM-1427.md",
 			}

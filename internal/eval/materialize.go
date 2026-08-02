@@ -51,7 +51,10 @@ func Materialize(
 	if embedder == nil {
 		return nil, MaterializationDiagnostics{}, fmt.Errorf("purpose-aware embedder is required")
 	}
-	materialized := cloneDataset(source)
+	materialized, err := cloneDataset(source)
+	if err != nil {
+		return nil, MaterializationDiagnostics{}, fmt.Errorf("clone dataset: %w", err)
+	}
 	if err := materialized.ValidateForMaterialization(); err != nil {
 		return nil, MaterializationDiagnostics{}, err
 	}
@@ -82,7 +85,7 @@ func Materialize(
 		points := group.points
 		texts := make([]string, len(*points))
 		for i := range *points {
-			text, _ := corpusText((*points)[i].Payload)
+			text, _ := corpusText((*points)[i].Payload, group.name)
 			texts[i] = text
 		}
 		batches = append(batches, purposeBatch{

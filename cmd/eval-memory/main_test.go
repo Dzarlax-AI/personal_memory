@@ -202,6 +202,7 @@ func materializationDatasetJSON() string {
 			"target":"facts",
 			"mode":"flat",
 			"text":"private materialization query",
+			"vector":[1,0],
 			"expected":[{"id":"42","grade":3}],
 			"cohorts":["general-semantic"]
 		}],

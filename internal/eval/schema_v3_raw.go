@@ -24,7 +24,7 @@ func validateMaterializationDatasetRaw(data []byte) error {
 	return validateV3DatasetRawWithOptions(data, true)
 }
 
-func validateV3DatasetRawWithOptions(data []byte, allowMissingPointVectors bool) error {
+func validateV3DatasetRawWithOptions(data []byte, allowMissingCorpusVectors bool) error {
 	root, isV3 := rawVersionedRoot(data, CurrentDatasetSchemaVersion)
 	if !isV3 {
 		return nil
@@ -93,7 +93,7 @@ func validateV3DatasetRawWithOptions(data []byte, allowMissingPointVectors bool)
 				return err
 			}
 			required := []string{"id", "payload"}
-			if !allowMissingPointVectors {
+			if !allowMissingCorpusVectors {
 				required = append(required, "vector")
 			}
 			if err := requireRawFields(point, fmt.Sprintf("%s[%d]", field, i), required...); err != nil {
@@ -118,6 +118,11 @@ func validateV3DatasetRawWithOptions(data []byte, allowMissingPointVectors bool)
 			"id", "target", "mode", "text", "expected", "cohorts",
 		); err != nil {
 			return err
+		}
+		if allowMissingCorpusVectors {
+			if err := requireRawFields(query, label, "vector"); err != nil {
+				return err
+			}
 		}
 		if err := rejectRawNulls(query, label,
 			"vector", "forbidden_ids", "intent", "as_of", "lifecycle_expectations",

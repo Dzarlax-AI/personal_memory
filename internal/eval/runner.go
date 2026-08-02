@@ -887,7 +887,7 @@ func (collector *timingCollector) diagnostics() *Diagnostics {
 	}}
 }
 
-func cloneDataset(source *Dataset) Dataset {
+func cloneDataset(source *Dataset) (Dataset, error) {
 	cloned := *source
 	cloned.Configuration.TopK = append([]int(nil), source.Configuration.TopK...)
 	cloned.Configuration.present = clonePresence(source.Configuration.present)
@@ -897,9 +897,19 @@ func cloneDataset(source *Dataset) Dataset {
 		minimumMRR := *source.Gates.MinimumMRR
 		cloned.Gates.MinimumMRR = &minimumMRR
 	}
-	cloned.Facts = cloneFixturePoints(source.Facts)
-	cloned.Chunks = cloneFixturePoints(source.Chunks)
-	cloned.Folders = cloneFixturePoints(source.Folders)
+	var err error
+	cloned.Facts, err = cloneFixturePoints(source.Facts)
+	if err != nil {
+		return Dataset{}, fmt.Errorf("clone facts: %w", err)
+	}
+	cloned.Chunks, err = cloneFixturePoints(source.Chunks)
+	if err != nil {
+		return Dataset{}, fmt.Errorf("clone chunks: %w", err)
+	}
+	cloned.Folders, err = cloneFixturePoints(source.Folders)
+	if err != nil {
+		return Dataset{}, fmt.Errorf("clone folders: %w", err)
+	}
 	cloned.Queries = append([]Query(nil), source.Queries...)
 	for i := range cloned.Queries {
 		cloned.Queries[i].Vector = append(Vector(nil), source.Queries[i].Vector...)
@@ -922,7 +932,7 @@ func cloneDataset(source *Dataset) Dataset {
 		cloned.TransitionScenarios[i].TargetLifecycle =
 			cloneLifecyclePayload(source.TransitionScenarios[i].TargetLifecycle)
 	}
-	return cloned
+	return cloned, nil
 }
 
 func cloneLifecyclePayload(source LifecyclePayload) LifecyclePayload {
@@ -955,45 +965,16 @@ func cloneStringMetricMap(source map[string]float64) map[string]float64 {
 	return cloned
 }
 
-func cloneFixturePoints(points []FixturePoint) []FixturePoint {
-	cloned := make([]FixturePoint, len(points))
-	for i := range points {
-		cloned[i] = points[i]
-		cloned[i].Vector = append(Vector(nil), points[i].Vector...)
-		cloned[i].Payload = clonePayload(points[i].Payload)
-	}
-	return cloned
-}
-
-func clonePayload(source map[string]any) map[string]any {
-	cloned := make(map[string]any, len(source))
-	for key, value := range source {
-		cloned[key] = clonePayloadValue(value)
-	}
-	return cloned
-}
-
-func clonePayloadValue(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		return clonePayload(typed)
-	case []string:
-		return append([]string(nil), typed...)
-	case []any:
-		items := make([]any, len(typed))
-		for i := range typed {
-			items[i] = clonePayloadValue(typed[i])
-		}
-		return items
-	default:
-		return value
-	}
-}
-
-func corpusText(payload map[string]any) (string, bool) {
+func corpusText(payload map[string]any, group string) (string, bool) {
 	value, ok := payload["text"].(string)
 	if ok && strings.TrimSpace(value) != "" {
 		return value, true
+	}
+	if group == "folders" {
+		summary, ok := payload["summary"].(string)
+		if ok && strings.TrimSpace(summary) != "" {
+			return summary, true
+		}
 	}
 	return "", false
 }

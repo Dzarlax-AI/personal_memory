@@ -18,7 +18,10 @@ func WithExperimentOverrides(source *Dataset, overrides ExperimentOverrides, run
 	if source == nil {
 		return nil, fmt.Errorf("dataset is required")
 	}
-	cloned := cloneDataset(source)
+	cloned, err := cloneDataset(source)
+	if err != nil {
+		return nil, fmt.Errorf("clone dataset: %w", err)
+	}
 	cloned.Configuration.present = clonePresence(source.Configuration.present)
 	if cloned.Configuration.present == nil {
 		cloned.Configuration.present = make(map[string]bool)
