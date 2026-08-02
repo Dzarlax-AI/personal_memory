@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"path/filepath"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -26,12 +26,13 @@ type PurposeEmbedder interface {
 
 // RunOptions selects the evaluation source and external clients.
 type RunOptions struct {
-	Source        string
-	QdrantURL     string
-	Embed         func(context.Context, string) ([]float32, error)
-	Embedder      PurposeEmbedder
-	DocumentsRoot string
-	Now           func() time.Time
+	Source         string
+	QdrantURL      string
+	Embed          func(context.Context, string) ([]float32, error)
+	Embedder       PurposeEmbedder
+	DocumentsRoot  string
+	CleanupTimeout time.Duration
+	Now            func() time.Time
 }
 
 // Run validates and evaluates a dataset in fixture or read-only live mode.
@@ -54,7 +55,7 @@ func Run(ctx context.Context, dataset *Dataset, options RunOptions) (Report, err
 	}
 	switch options.Source {
 	case "fixture":
-		return runFixture(ctx, dataset, options.QdrantURL, options.DocumentsRoot)
+		return runFixture(ctx, dataset, options.QdrantURL, options.DocumentsRoot, options.CleanupTimeout)
 	case "live":
 		return runLive(ctx, dataset, options)
 	case "tei-fixture":
@@ -70,15 +71,15 @@ type collections struct {
 	folders *qdrant.Client
 }
 
-func runFixture(ctx context.Context, dataset *Dataset, qdrantURL, documentsRoot string) (report Report, err error) {
-	return runFixtureTimed(ctx, dataset, qdrantURL, "fixture", nil, documentsRoot)
+func runFixture(ctx context.Context, dataset *Dataset, qdrantURL, documentsRoot string, cleanupTimeout time.Duration) (report Report, err error) {
+	return runFixtureTimed(ctx, dataset, qdrantURL, "fixture", nil, documentsRoot, cleanupTimeout)
 }
 
-func runFixtureTimed(ctx context.Context, dataset *Dataset, qdrantURL, mode string, timings *timingCollector, documentsRoot string) (report Report, err error) {
-	return runFixtureTimedWithEmbedder(ctx, dataset, qdrantURL, mode, timings, documentsRoot, nil)
+func runFixtureTimed(ctx context.Context, dataset *Dataset, qdrantURL, mode string, timings *timingCollector, documentsRoot string, cleanupTimeout time.Duration) (report Report, err error) {
+	return runFixtureTimedWithEmbedder(ctx, dataset, qdrantURL, mode, timings, documentsRoot, cleanupTimeout, nil)
 }
 
-func runFixtureTimedWithEmbedder(ctx context.Context, dataset *Dataset, qdrantURL, mode string, timings *timingCollector, documentsRoot string, queryEmbedder PurposeEmbedder) (report Report, err error) {
+func runFixtureTimedWithEmbedder(ctx context.Context, dataset *Dataset, qdrantURL, mode string, timings *timingCollector, documentsRoot string, cleanupTimeout time.Duration, queryEmbedder PurposeEmbedder) (report Report, err error) {
 	suffix, err := randomSuffix()
 	if err != nil {
 		return Report{}, err
@@ -95,14 +96,17 @@ func runFixtureTimedWithEmbedder(ctx context.Context, dataset *Dataset, qdrantUR
 	}
 	allClients := []*qdrant.Client{clients.facts, clients.chunks, clients.folders}
 	created := make([]*qdrant.Client, 0, len(allClients))
+	if cleanupTimeout <= 0 {
+		cleanupTimeout = 15 * time.Second
+	}
 	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
 		var cleanupErrors []error
 		for i := len(created) - 1; i >= 0; i-- {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 			if cleanupErr := cleanupTemporaryCollection(cleanupCtx, created[i]); cleanupErr != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("clean up %s: %w", created[i].CollectionName(), cleanupErr))
 			}
+			cancel()
 		}
 		if cleanupErr := errors.Join(cleanupErrors...); cleanupErr != nil {
 			err = errors.Join(err, cleanupErr)
@@ -269,7 +273,7 @@ func runTEIFixture(ctx context.Context, dataset *Dataset, options RunOptions) (R
 	for i := range copyDataset.Queries {
 		copyDataset.Queries[i].Vector = nil
 	}
-	report, err := runFixtureTimedWithEmbedder(ctx, &copyDataset, options.QdrantURL, "tei-fixture", timings, options.DocumentsRoot, options.Embedder)
+	report, err := runFixtureTimedWithEmbedder(ctx, &copyDataset, options.QdrantURL, "tei-fixture", timings, options.DocumentsRoot, options.CleanupTimeout, options.Embedder)
 	if err == nil {
 		report.Diagnostics.Corpus = &CorpusDiagnostics{EmbeddingDurationUS: corpusUS, EmbeddingCount: count}
 	}
@@ -675,22 +679,57 @@ func lexicalFields(payload map[string]any, kind, documentsRoot string) []retriev
 }
 
 func relativeLexicalPath(value, documentsRoot string) (string, bool) {
-	cleaned := filepath.Clean(value)
-	if !filepath.IsAbs(cleaned) {
-		if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+	normalized := strings.ReplaceAll(strings.TrimSpace(value), `\`, "/")
+	if normalized == "" {
+		return "", false
+	}
+	valueKind := lexicalAbsoluteKind(normalized)
+	if valueKind == "" {
+		if len(normalized) >= 2 && normalized[1] == ':' {
 			return "", false
 		}
-		return filepath.ToSlash(cleaned), true
+		return safeRelativeLexicalPath(normalized)
 	}
-	if strings.TrimSpace(documentsRoot) == "" {
+	root := strings.ReplaceAll(strings.TrimSpace(documentsRoot), `\`, "/")
+	if root == "" || lexicalAbsoluteKind(root) != valueKind {
 		return "", false
 	}
-	relative, err := filepath.Rel(filepath.Clean(documentsRoot), cleaned)
-	if err != nil || relative == "." || relative == ".." ||
-		strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+	cleanedValue := path.Clean(normalized)
+	cleanedRoot := strings.TrimSuffix(path.Clean(root), "/")
+	valueForCompare, rootForCompare := cleanedValue, cleanedRoot
+	if valueKind == "windows-drive" || valueKind == "unc" {
+		valueForCompare = strings.ToLower(valueForCompare)
+		rootForCompare = strings.ToLower(rootForCompare)
+	}
+	prefix := rootForCompare + "/"
+	if !strings.HasPrefix(valueForCompare, prefix) {
 		return "", false
 	}
-	return filepath.ToSlash(relative), true
+	return safeRelativeLexicalPath(cleanedValue[len(cleanedRoot)+1:])
+}
+
+func lexicalAbsoluteKind(value string) string {
+	if strings.HasPrefix(value, "//") {
+		return "unc"
+	}
+	if len(value) >= 3 &&
+		((value[0] >= 'A' && value[0] <= 'Z') || (value[0] >= 'a' && value[0] <= 'z')) &&
+		value[1] == ':' && value[2] == '/' {
+		return "windows-drive"
+	}
+	if strings.HasPrefix(value, "/") {
+		return "posix"
+	}
+	return ""
+}
+
+func safeRelativeLexicalPath(value string) (string, bool) {
+	cleaned := path.Clean(value)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") ||
+		strings.HasPrefix(cleaned, "/") {
+		return "", false
+	}
+	return cleaned, true
 }
 
 func normalizeResults(points []qdrant.Point) []RetrievedItem {

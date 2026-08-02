@@ -136,8 +136,8 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 		comparison.CandidateConfiguration = &candidateConfiguration
 		comparison.BaselineMode = baseline.Mode
 		comparison.CandidateMode = candidate.Mode
-		comparison.BaselineDiagnostics = baseline.Diagnostics
-		comparison.CandidateDiagnostics = candidate.Diagnostics
+		comparison.BaselineDiagnostics = cloneDiagnostics(baseline.Diagnostics)
+		comparison.CandidateDiagnostics = cloneDiagnostics(candidate.Diagnostics)
 		comparison.Cohorts = compareCohorts(baseline, candidate)
 	}
 	if baseline.SchemaVersion >= LifecycleSchemaVersion {
@@ -184,6 +184,18 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 	}
 	sort.Slice(comparison.Queries, func(i, j int) bool { return comparison.Queries[i].ID < comparison.Queries[j].ID })
 	return comparison, nil
+}
+
+func cloneDiagnostics(source *Diagnostics) *Diagnostics {
+	if source == nil {
+		return nil
+	}
+	cloned := *source
+	if source.Corpus != nil {
+		corpus := *source.Corpus
+		cloned.Corpus = &corpus
+	}
+	return &cloned
 }
 
 func recomputeV3Ranking(report Report) Report {

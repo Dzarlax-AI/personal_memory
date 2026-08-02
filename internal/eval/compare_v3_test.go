@@ -145,6 +145,38 @@ func TestCompareV3RejectsCompatibilityDrift(t *testing.T) {
 	}
 }
 
+func TestCompareV3DiagnosticsSnapshotsOwnTheirData(t *testing.T) {
+	baseline := validV3ComparisonReport()
+	candidate := validV3ComparisonReport()
+	baseline.Mode = "live"
+	candidate.Mode = "live"
+	count := len(baseline.Queries)
+	makeDiagnostics := func(value int64) *Diagnostics {
+		return &Diagnostics{Query: QueryDiagnostics{
+			Total:  DurationSummary{Count: count, Min: value, P50: value, P95: value, Max: value},
+			Search: DurationSummary{Count: count, Min: value, P50: value, P95: value, Max: value},
+		}}
+	}
+	baseline.Diagnostics = makeDiagnostics(10)
+	candidate.Diagnostics = makeDiagnostics(20)
+	comparison, err := Compare(baseline, candidate, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline.Diagnostics.Query.Total.Min = 99
+	candidate.Diagnostics.Query.Search.Max = 99
+	if comparison.BaselineDiagnostics.Query.Total.Min != 10 ||
+		comparison.CandidateDiagnostics.Query.Search.Max != 20 {
+		t.Fatal("report mutation changed comparison diagnostic snapshots")
+	}
+	comparison.BaselineDiagnostics.Query.Total.Min = 77
+	comparison.CandidateDiagnostics.Query.Search.Max = 77
+	if baseline.Diagnostics.Query.Total.Min != 99 ||
+		candidate.Diagnostics.Query.Search.Max != 99 {
+		t.Fatal("comparison mutation changed source report diagnostics")
+	}
+}
+
 func TestCompareV3ConservativeGates(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -30,8 +30,14 @@ func WithExperimentOverrides(source *Dataset, overrides ExperimentOverrides, run
 		if runSource == "fixture" {
 			return nil, fmt.Errorf("input profile override cannot relabel precomputed fixture vectors")
 		}
+		profileChanged := cloned.Embedding.InputProfile != *overrides.InputProfile
 		cloned.Embedding.InputProfile = *overrides.InputProfile
 		cloned.Embedding.inputProfilePresent = true
+		if runSource == "live" && profileChanged {
+			for i := range cloned.Queries {
+				cloned.Queries[i].Vector = nil
+			}
+		}
 	}
 	if overrides.RetrievalStrategy != nil {
 		cloned.Configuration.RetrievalStrategy = *overrides.RetrievalStrategy

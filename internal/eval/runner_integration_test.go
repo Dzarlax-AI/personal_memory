@@ -719,6 +719,79 @@ func TestLiveV3HybridLifecyclePromotesCanonicalBeyondRankOneHundred(t *testing.T
 	}
 }
 
+func TestLiveProfileOverrideReembedsPopulatedQueryVector(t *testing.T) {
+	searches := 0
+	var searchedVector []float32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/collections/memory" {
+			_, _ = w.Write([]byte(`{"result":{"points_count":1,"config":{
+				"params":{"vectors":{"size":2,"distance":"Cosine"}},
+				"metadata":{"personal_memory.embedding":{
+					"schema_version":1,"provider":"tei","model_id":"intfloat/multilingual-e5-small",
+					"model_revision":"v1","model_dtype":"float32","pooling":"mean",
+					"vector_size":2,"input_profile":"multilingual-e5-v1"
+				}}
+			}}}`))
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/search" {
+			searches++
+			var body struct {
+				Vector []float32 `json:"vector"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode search: %v", err)
+			}
+			searchedVector = body.Vector
+			_, _ = w.Write([]byte(`{"result":[{"id":42,"score":1,"payload":{
+				"text":"numeric","lifecycle_state":"current","canonical":true,
+				"supersedes":[],"superseded_by":[]
+			}}]}`))
+			return
+		}
+		http.Error(w, "unexpected request", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	source, err := Load(strings.NewReader(validV3Dataset()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Embedding.Provider = "tei"
+	source.Embedding.ModelID = multilingualE5SmallModelID
+	source.Facts = nil
+	oldVector := append(Vector(nil), source.Queries[0].Vector...)
+	profile := MultilingualE5V1
+	dataset, err := WithExperimentOverrides(source, ExperimentOverrides{
+		InputProfile: &profile,
+	}, "live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(context.Background(), dataset, RunOptions{
+		Source: "live", QdrantURL: server.URL,
+	}); err == nil || !strings.Contains(err.Error(), "purpose-aware embedder") {
+		t.Fatalf("missing embedder error = %v", err)
+	}
+	if searches != 0 {
+		t.Fatalf("missing embedder reached search %d times", searches)
+	}
+	embedder := &recordingPurposeEmbedder{vector: []float32{0, 1}}
+	if _, err := Run(context.Background(), dataset, RunOptions{
+		Source: "live", QdrantURL: server.URL, Embedder: embedder,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if searches != 1 || len(searchedVector) != 2 ||
+		searchedVector[0] != 0 || searchedVector[1] != 1 ||
+		len(embedder.calls) != 1 || embedder.calls[0] != embeddings.RetrievalQuery {
+		t.Fatalf("searches=%d vector=%v purposes=%v", searches, searchedVector, embedder.calls)
+	}
+	if source.Queries[0].Vector[0] != oldVector[0] ||
+		source.Queries[0].Vector[1] != oldVector[1] {
+		t.Fatal("live override or run mutated source query vector")
+	}
+}
+
 func TestLiveV2LifecycleEvidenceUsesExactReadWithoutChangingRanking(t *testing.T) {
 	var requestBody map[string]any
 	var requests []string

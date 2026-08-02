@@ -26,6 +26,7 @@ type fixtureQdrant struct {
 	searchResult        string
 	failInfoAfterCreate int
 	deleteAttempts      int
+	blockDeleteKind     string
 }
 
 func (fake *fixtureQdrant) handler(w http.ResponseWriter, r *http.Request) {
@@ -66,6 +67,10 @@ func (fake *fixtureQdrant) handler(w http.ResponseWriter, r *http.Request) {
 			return
 		case http.MethodDelete:
 			fake.deleteAttempts++
+			if fake.blockDeleteKind != "" && strings.Contains(name, fake.blockDeleteKind) {
+				<-r.Context().Done()
+				return
+			}
 			if !fake.exists[name] {
 				http.NotFound(w, r)
 				return
@@ -102,6 +107,7 @@ type recordingPurposeEmbedder struct {
 	inputs      [][]string
 	fail        error
 	failPurpose embeddings.Purpose
+	vector      []float32
 }
 
 func (embedder *recordingPurposeEmbedder) EmbedWithPurpose(_ context.Context, text string,
@@ -111,7 +117,11 @@ func (embedder *recordingPurposeEmbedder) EmbedWithPurpose(_ context.Context, te
 	if embedder.failPurpose == purpose {
 		return nil, fmt.Errorf("purpose failure")
 	}
-	return []float32{1, 0}, embedder.fail
+	vector := embedder.vector
+	if vector == nil {
+		vector = []float32{1, 0}
+	}
+	return append([]float32(nil), vector...), embedder.fail
 }
 
 func (embedder *recordingPurposeEmbedder) EmbedBatchWithPurpose(_ context.Context, texts []string,
@@ -226,6 +236,36 @@ func TestLexicalFieldsRelativizeDeploymentPaths(t *testing.T) {
 	}
 }
 
+func TestRelativeLexicalPathIsPlatformNeutralAndContained(t *testing.T) {
+	tests := []struct {
+		name, value, root, want string
+		ok                      bool
+	}{
+		{"drive outside POSIX root", `C:\deploy\secret.md`, "/docs", "", false},
+		{"drive slash outside POSIX root", `C:/deploy/secret.md`, "/docs", "", false},
+		{"UNC outside root", `\\server\share\secret.md`, "/docs", "", false},
+		{"UNC slash outside root", `//server/share/secret.md`, "/docs", "", false},
+		{"backslash traversal", `..\secret.md`, "", "", false},
+		{"nested backslash traversal", `safe\..\..\secret.md`, "", "", false},
+		{"safe windows relative", `project\design.md`, "", "project/design.md", true},
+		{"drive under root", `C:\docs\project\design.md`, `C:\docs`, "project/design.md", true},
+		{"POSIX under root", "/docs/project/design.md", "/docs", "project/design.md", true},
+		{"POSIX outside root", "/private/design.md", "/docs", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := relativeLexicalPath(tt.value, tt.root)
+			if ok != tt.ok || got != tt.want {
+				t.Fatalf("relativeLexicalPath(%q, %q) = %q,%t want %q,%t",
+					tt.value, tt.root, got, ok, tt.want, tt.ok)
+			}
+			if strings.Contains(got, tt.root) && tt.root != "" {
+				t.Fatalf("lexical path leaked deployment root: %q", got)
+			}
+		})
+	}
+}
+
 func TestExperimentOverridesDoNotMutateDataset(t *testing.T) {
 	original, err := Load(strings.NewReader(validV3Dataset()))
 	if err != nil {
@@ -283,6 +323,48 @@ func TestExperimentOverridesRejectFixtureInputProfileRelabel(t *testing.T) {
 		InputProfile: &profile,
 	}, "fixture"); err == nil || !strings.Contains(err.Error(), "cannot relabel") {
 		t.Fatalf("fixture profile override error = %v", err)
+	}
+}
+
+func TestLiveInputProfileOverrideClearsOnlyCloneVectorsWhenProfileChanges(t *testing.T) {
+	dataset, err := Load(strings.NewReader(validV3Dataset()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset.Embedding.ModelID = multilingualE5SmallModelID
+	second := dataset.Queries[0]
+	second.ID = "q2"
+	second.Vector = append(Vector(nil), second.Vector...)
+	dataset.Queries = append(dataset.Queries, second)
+	original := append(Vector(nil), dataset.Queries[0].Vector...)
+	changed := MultilingualE5V1
+	cloned, err := WithExperimentOverrides(dataset, ExperimentOverrides{
+		InputProfile: &changed,
+	}, "live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cloned.Queries[0].Vector) != 0 || len(cloned.Queries[1].Vector) != 0 {
+		t.Fatalf("changed-profile clone retained vectors %v / %v",
+			cloned.Queries[0].Vector, cloned.Queries[1].Vector)
+	}
+	if len(dataset.Queries[0].Vector) != len(original) ||
+		dataset.Queries[0].Vector[0] != original[0] ||
+		len(dataset.Queries[1].Vector) != len(original) {
+		t.Fatal("profile override mutated source query vector")
+	}
+
+	same := LegacyRawV1
+	unchanged, err := WithExperimentOverrides(dataset, ExperimentOverrides{
+		InputProfile: &same,
+	}, "live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unchanged.Queries[0].Vector) != len(original) ||
+		unchanged.Queries[0].Vector[0] != original[0] ||
+		len(unchanged.Queries[1].Vector) != len(original) {
+		t.Fatal("same-profile override cleared precomputed vector")
 	}
 }
 
@@ -499,6 +581,30 @@ func TestFixtureCleanupCoversSuccessFailureAndAmbiguousCreate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFixtureCleanupUsesIndependentDeadlinePerCollection(t *testing.T) {
+	fake := &fixtureQdrant{
+		exists: make(map[string]bool), blockDeleteKind: "folders",
+	}
+	server := httptest.NewServer(http.HandlerFunc(fake.handler))
+	defer server.Close()
+	dataset, err := Load(strings.NewReader(validV3Dataset()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Run(context.Background(), dataset, RunOptions{
+		Source: "fixture", QdrantURL: server.URL, CleanupTimeout: 20 * time.Millisecond,
+	})
+	if err == nil || !strings.Contains(err.Error(), "clean up") {
+		t.Fatalf("cleanup error = %v", err)
+	}
+	if fake.deleteAttempts != 3 {
+		t.Fatalf("delete attempts = %d, want all 3", fake.deleteAttempts)
+	}
+	if len(fake.deleted) != 2 {
+		t.Fatalf("later cleanup attempts did not succeed: deleted=%v", fake.deleted)
 	}
 }
 
