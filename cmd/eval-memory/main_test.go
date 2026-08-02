@@ -335,6 +335,12 @@ func TestMaterializeCLIProfileOverrideWritesStrictDeterministicFixture(t *testin
 	dir := t.TempDir()
 	input := writeMaterializationDataset(t, dir)
 	output := filepath.Join(dir, "output.json")
+	if err := os.WriteFile(output, []byte("replace me"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(output, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	var stdout bytes.Buffer
 	err := runCLI([]string{
 		"materialize", "--dataset", input, "--output", output,
@@ -360,6 +366,13 @@ func TestMaterializeCLIProfileOverrideWritesStrictDeterministicFixture(t *testin
 	closeErr := file.Close()
 	if loadErr != nil || closeErr != nil {
 		t.Fatalf("strict output decode = %v, close = %v", loadErr, closeErr)
+	}
+	info, err := os.Stat(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("materialized output mode = %o, want 600", info.Mode().Perm())
 	}
 	if dataset.Embedding.InputProfile != memoryeval.MultilingualE5V1 ||
 		len(dataset.Facts[0].Vector) != 2 || len(dataset.Queries[0].Vector) != 2 {

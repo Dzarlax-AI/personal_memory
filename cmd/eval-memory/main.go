@@ -249,7 +249,7 @@ func materializeCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("render materialized dataset: %w", err)
 	}
-	if err := writeAtomic(*outputPath, data, 0o644); err != nil {
+	if err := writeAtomic(*outputPath, data, 0o600); err != nil {
 		return fmt.Errorf("write materialized dataset: %w", err)
 	}
 	fmt.Fprintf(

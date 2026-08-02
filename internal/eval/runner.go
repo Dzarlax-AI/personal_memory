@@ -267,19 +267,22 @@ func runTEIFixture(ctx context.Context, dataset *Dataset, options RunOptions) (R
 		delegate: options.Embedder,
 		now:      timings.now,
 	}
-	materialized, preparation, err := Materialize(
-		ctx, dataset, materializationTimings, MaterializeOptions{},
+	materialized, err := cloneDataset(dataset)
+	if err != nil {
+		return Report{}, fmt.Errorf("clone tei-fixture dataset: %w", err)
+	}
+	preparation, err := materializeCorpusPurposeBatches(
+		ctx, &materialized, materializationTimings,
 	)
 	if err != nil {
 		return Report{}, err
 	}
-	queryUS := materializationTimings.queryUS / int64(len(materialized.Queries))
-	for range materialized.Queries {
-		timings.embed = append(timings.embed, queryUS)
+	for i := range materialized.Queries {
+		materialized.Queries[i].Vector = nil
 	}
 	report, err := runFixtureTimedWithEmbedder(
-		ctx, materialized, options.QdrantURL, "tei-fixture", timings,
-		options.DocumentsRoot, options.CleanupTimeout, nil,
+		ctx, &materialized, options.QdrantURL, "tei-fixture", timings,
+		options.DocumentsRoot, options.CleanupTimeout, options.Embedder,
 	)
 	if err == nil {
 		report.Diagnostics.Corpus = &CorpusDiagnostics{
@@ -336,17 +339,14 @@ func executeQueriesTimed(ctx context.Context, dataset *Dataset, clients collecti
 				return Report{}, fmt.Errorf("query %q has no vector and no purpose-aware embedder was configured", query.ID)
 			}
 			embedStart := timings.now()
-			vector, embedErr := queryEmbedder.EmbedWithPurpose(ctx, query.Text,
-				embeddings.RetrievalQuery, embeddings.InputProfile(dataset.Embedding.InputProfile),
-				dataset.Embedding.ModelID)
+			vectors, embedErr := embedQueryPurpose(
+				ctx, []string{query.Text}, dataset.Embedding, queryEmbedder, false,
+			)
 			if embedErr != nil {
 				return Report{}, fmt.Errorf("embed query %q: %w", query.ID, embedErr)
 			}
 			timings.embed = append(timings.embed, elapsedUS(embedStart, timings.now()))
-			if err := validateVector(vector, dataset.Embedding.VectorSize); err != nil {
-				return Report{}, fmt.Errorf("query %q: %w", query.ID, err)
-			}
-			query.Vector = vector
+			query.Vector = append(Vector(nil), vectors[0]...)
 		}
 		searchLimit := maxK
 		if mode == "fixture" || mode == "tei-fixture" {
@@ -813,7 +813,6 @@ type timedMaterializationEmbedder struct {
 	delegate PurposeEmbedder
 	now      func() time.Time
 	corpusUS int64
-	queryUS  int64
 }
 
 func (embedder *timedMaterializationEmbedder) EmbedWithPurpose(
@@ -838,11 +837,7 @@ func (embedder *timedMaterializationEmbedder) EmbedBatchWithPurpose(
 		ctx, texts, purpose, profile, modelID,
 	)
 	duration := elapsedUS(start, embedder.now())
-	if purpose == embeddings.RetrievalQuery {
-		embedder.queryUS += duration
-	} else {
-		embedder.corpusUS += duration
-	}
+	embedder.corpusUS += duration
 	return vectors, err
 }
 

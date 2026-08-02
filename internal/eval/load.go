@@ -36,8 +36,9 @@ func Load(reader io.Reader) (*Dataset, error) {
 	return dataset, nil
 }
 
-// LoadForMaterialization decodes a strict schema-v3 dataset whose vectors may
-// be omitted or empty because Materialize will replace every vector.
+// LoadForMaterialization decodes a strict schema-v3 dataset whose corpus
+// vectors may be omitted or empty. Query vectors remain required even though
+// Materialize replaces every corpus and query vector.
 func LoadForMaterialization(reader io.Reader) (*Dataset, error) {
 	data, err := readDataset(reader)
 	if err != nil {
@@ -338,7 +339,7 @@ func (d *Dataset) validate(allowEmptyCorpusVectors, requireQueryVectors bool) er
 }
 
 // ValidateForMaterialization retains the strict schema-v3 contract while
-// permitting only corpus/query vectors that Materialize will replace.
+// permitting only corpus vectors that Materialize will replace to be empty.
 func (d *Dataset) ValidateForMaterialization() error {
 	if d == nil {
 		return fmt.Errorf("dataset is required")

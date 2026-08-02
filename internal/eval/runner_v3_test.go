@@ -106,6 +106,8 @@ func (fake *fixtureQdrant) handler(w http.ResponseWriter, r *http.Request) {
 type recordingPurposeEmbedder struct {
 	calls       []embeddings.Purpose
 	inputs      [][]string
+	batchCalls  int
+	singleCalls int
 	fail        error
 	failPurpose embeddings.Purpose
 	vector      []float32
@@ -113,6 +115,7 @@ type recordingPurposeEmbedder struct {
 
 func (embedder *recordingPurposeEmbedder) EmbedWithPurpose(_ context.Context, text string,
 	purpose embeddings.Purpose, _ embeddings.InputProfile, _ string) ([]float32, error) {
+	embedder.singleCalls++
 	embedder.calls = append(embedder.calls, purpose)
 	embedder.inputs = append(embedder.inputs, []string{text})
 	if embedder.failPurpose == purpose {
@@ -127,6 +130,7 @@ func (embedder *recordingPurposeEmbedder) EmbedWithPurpose(_ context.Context, te
 
 func (embedder *recordingPurposeEmbedder) EmbedBatchWithPurpose(_ context.Context, texts []string,
 	purpose embeddings.Purpose, _ embeddings.InputProfile, _ string) ([][]float32, error) {
+	embedder.batchCalls++
 	embedder.calls = append(embedder.calls, purpose)
 	embedder.inputs = append(embedder.inputs, append([]string(nil), texts...))
 	if embedder.failPurpose == purpose {
@@ -629,6 +633,7 @@ func TestTEIFixtureDiagnosticsUsePerQueryOnlineTiming(t *testing.T) {
 			"summary": "summary-only folder",
 		},
 	}}
+	dataset.Queries[0].Vector = nil
 	originalSecondVector := append(Vector(nil), dataset.Facts[1].Vector...)
 	embedder := &recordingPurposeEmbedder{}
 	current := time.Unix(0, 0)
@@ -658,8 +663,14 @@ func TestTEIFixtureDiagnosticsUsePerQueryOnlineTiming(t *testing.T) {
 	}
 	if report.Diagnostics.Query.Embed.Min != 1 ||
 		report.Diagnostics.Query.Search.Min != 1 ||
-		report.Diagnostics.Query.Total.Min != 3 {
+		report.Diagnostics.Query.Total.Min != 5 ||
+		report.Diagnostics.Query.Total.Min <
+			report.Diagnostics.Query.Embed.Min+report.Diagnostics.Query.Search.Min {
 		t.Fatalf("diagnostic timings = %#v", report.Diagnostics.Query)
+	}
+	if embedder.batchCalls != 3 || embedder.singleCalls != 1 {
+		t.Fatalf("embed call modes: batch=%d single=%d",
+			embedder.batchCalls, embedder.singleCalls)
 	}
 	wantPurposes := []embeddings.Purpose{
 		embeddings.FactPassage, embeddings.ChunkPassage,
@@ -678,7 +689,7 @@ func TestTEIFixtureDiagnosticsUsePerQueryOnlineTiming(t *testing.T) {
 	}
 }
 
-func TestTEIFixtureQueryMaterializationFailureStopsBeforeTemporaryCollections(t *testing.T) {
+func TestTEIFixtureOnlineQueryFailureCleansAllTemporaryCollections(t *testing.T) {
 	fake := &fixtureQdrant{exists: make(map[string]bool)}
 	server := httptest.NewServer(http.HandlerFunc(fake.handler))
 	defer server.Close()
@@ -690,11 +701,12 @@ func TestTEIFixtureQueryMaterializationFailureStopsBeforeTemporaryCollections(t 
 		Source: "tei-fixture", QdrantURL: server.URL,
 		Embedder: &recordingPurposeEmbedder{failPurpose: embeddings.RetrievalQuery},
 	})
-	if err == nil || !strings.Contains(err.Error(), "embed queries") {
+	if err == nil || !strings.Contains(err.Error(), "embed query") {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if fake.createCount != 0 || len(fake.deleted) != 0 || len(fake.exists) != 0 {
-		t.Fatalf("external temporary state changed: %#v", fake)
+	if fake.createCount != 3 || len(fake.deleted) != 3 || len(fake.exists) != 0 {
+		t.Fatalf("cleanup deleted=%v leaked=%v create_count=%d",
+			fake.deleted, fake.exists, fake.createCount)
 	}
 }
 

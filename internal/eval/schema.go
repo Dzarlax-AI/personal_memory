@@ -572,7 +572,7 @@ func (gates Gates) MarshalJSON() ([]byte, error) {
 		MinimumMRR:                gates.MinimumMRR,
 		MinimumNDCGAt:             gates.MinimumNDCGAt,
 	}
-	if gates.forbidLifecycleViolationsPresent {
+	if gates.forbidLifecycleViolationsPresent || gates.ForbidLifecycleViolations {
 		encoded.ForbidLifecycleViolations = &gates.ForbidLifecycleViolations
 	}
 	return json.Marshal(encoded)
