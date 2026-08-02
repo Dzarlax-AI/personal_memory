@@ -63,7 +63,7 @@ func TestLoadRejectsMalformedDatasets(t *testing.T) {
 		with    string
 		want    string
 	}{
-		{"unknown schema", `"schema_version": 1`, `"schema_version": 2`, "schema_version"},
+		{"unknown schema", `"schema_version": 1`, `"schema_version": 3`, "schema_version"},
 		{"duplicate point ID", `"id": "11111111-1111-4111-8111-111111111111"`, `"id": 42`, "duplicate facts point ID"},
 		{"invalid string point ID", `"id": "11111111-1111-4111-8111-111111111111"`, `"id": "fact-2"`, "UUID"},
 		{"wrong vector dimension", `"vector": [0, 1]`, `"vector": [0]`, "vector length"},

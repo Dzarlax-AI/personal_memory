@@ -100,6 +100,48 @@ jobs:
         run: make eval-public
         env:
           QDRANT_TEST_URL: http://127.0.0.1:6333
+      - name: Publish lifecycle evaluation summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Public lifecycle evaluation"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if ! jq -e '
+            type == "object" and
+            .schema_version == 2 and
+            (.gates_passed | type == "boolean") and
+            (.lifecycle | type == "object") and
+            (.lifecycle.aggregate | type == "object") and
+            (.lifecycle.transitions | type == "array")
+          ' eval-results/public.json >/dev/null 2>&1; then
+            {
+              echo "The lifecycle report is missing or invalid. See the evaluation step and uploaded artifacts."
+              echo
+              echo "| Gates | Checks | Violations | Canonical checks | Canonical violations | Transitions | Transition failures |"
+              echo "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"
+              echo "| unavailable | — | — | — | — | — | — |"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          gates=$(jq -r 'if .gates_passed == true then "passed" elif .gates_passed == false then "failed" else "unavailable" end' eval-results/public.json)
+          checks=$(jq -r '.lifecycle.aggregate.checks // "—"' eval-results/public.json)
+          violations=$(jq -r '.lifecycle.aggregate.violations // "—"' eval-results/public.json)
+          canonical_checks=$(jq -r '.lifecycle.aggregate.canonical_preference_checks // "—"' eval-results/public.json)
+          canonical_violations=$(jq -r '.lifecycle.aggregate.canonical_preference_violations // "—"' eval-results/public.json)
+          transitions=$(jq -r '(.lifecycle.transitions // []) | length' eval-results/public.json)
+          transition_failures=$(jq -r '[.lifecycle.transitions[]? | select(.passed != true)] | length' eval-results/public.json)
+
+          {
+            echo "| Gates | Checks | Violations | Canonical checks | Canonical violations | Transitions | Transition failures |"
+            echo "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"
+            echo "| ${gates} | ${checks} | ${violations} | ${canonical_checks} | ${canonical_violations} | ${transitions} | ${transition_failures} |"
+            echo
+            echo "The complete JSON, Markdown, and baseline comparison reports are attached as the \`retrieval-evaluation\` artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload retrieval evaluation report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

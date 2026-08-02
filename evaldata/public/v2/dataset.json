@@ -1,0 +1,756 @@
+{
+  "schema_version": 2,
+  "dataset_version": "2.0.0",
+  "embedding": {
+    "provider": "synthetic",
+    "model_id": "personal-memory-golden-v2",
+    "model_revision": "2",
+    "dtype": "float32",
+    "pooling": "mean",
+    "vector_size": 16
+  },
+  "configuration": {
+    "name": "lifecycle-retrieval-v2",
+    "fact_collection": "memory",
+    "chunk_collection": "doc_chunks",
+    "folder_collection": "doc_folders",
+    "folder_top_k": 2,
+    "folder_threshold": 0.8,
+    "top_k": [1, 3, 20]
+  },
+  "facts": [
+    {
+      "id": 42,
+      "vector": [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "payload": {
+        "text": "The synthetic user prefers green tea.",
+        "namespace": "personal",
+        "lifecycle_state": "current",
+        "canonical": true
+      }
+    },
+    {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "vector": [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "payload": {
+        "text": "Синтетический пользователь предпочитает утренние прогулки.",
+        "namespace": "personal",
+        "lifecycle_state": "current",
+        "canonical": true
+      }
+    },
+    {
+      "id": "22222222-2222-4222-8222-222222222222",
+      "vector": [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "payload": {
+        "text": "The synthetic project uses Go; синтетический проект написан на Go.",
+        "namespace": "projects",
+        "lifecycle_state": "current",
+        "canonical": true
+      }
+    },
+    {
+      "id": "33333333-3333-4333-8333-333333333333",
+      "vector": [0, 0, 0, 0.70710677, 0.70710677, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "payload": {
+        "text": "The synthetic meeting can happen on Tuesday.",
+        "namespace": "personal",
+        "lifecycle_state": "current",
+        "canonical": true
+      }
+    },
+    {
+      "id": "44444444-4444-4444-8444-444444444444",
+      "vector": [0, 0, 0, 0.70710677, 0.70710677, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "payload": {
+        "text": "The synthetic meeting can happen on Thursday.",
+        "namespace": "personal",
+        "lifecycle_state": "current",
+        "canonical": true
+      }
+    },
+    {
+      "id": "99999999-9999-4999-8999-999999999999",
+      "vector": [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "payload": {
+        "text": "The synthetic user previously preferred black tea.",
+        "namespace": "personal",
+        "lifecycle_state": "superseded",
+        "superseded_by": ["42"]
+      }
+    },
+    {
+      "id": "51000000-0000-4000-8000-000000000001",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0.98, 0, 0, 0, 0, 0, 0, 0.19899749],
+      "payload": {
+        "text": "The synthetic launch window is now October.",
+        "namespace": "projects",
+        "lifecycle_state": "current",
+        "canonical": true,
+        "supersedes": ["51000000-0000-4000-8000-000000000002"]
+      }
+    },
+    {
+      "id": "51000000-0000-4000-8000-000000000002",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+      "payload": {
+        "text": "The synthetic launch window used to be September.",
+        "namespace": "projects",
+        "lifecycle_state": "superseded",
+        "superseded_by": ["51000000-0000-4000-8000-000000000001"]
+      }
+    },
+    {
+      "id": "51000000-0000-4000-8000-000000000003",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0.96, 0, 0, 0, 0, 0, 0, 0.28],
+      "payload": {
+        "text": "An older synthetic launch note mentioned August.",
+        "namespace": "projects",
+        "lifecycle_state": "historical"
+      }
+    },
+    {
+      "id": "52000000-0000-4000-8000-000000000001",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+      "payload": {
+        "text": "The synthetic certificate was valid through March 13.",
+        "namespace": "projects",
+        "lifecycle_state": "current",
+        "canonical": true,
+        "verified_at": "2025-01-10T09:00:00Z",
+        "valid_until": "2025-03-13"
+      }
+    },
+    {
+      "id": "52000000-0000-4000-8000-000000000002",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99, 0, 0, 0, 0, 0, 0.14106736],
+      "payload": {
+        "text": "The synthetic certificate remains valid through June.",
+        "namespace": "projects",
+        "lifecycle_state": "current",
+        "canonical": true,
+        "verified_at": "2025-05-01T09:00:00Z",
+        "valid_until": "2025-06-30"
+      }
+    },
+    {
+      "id": "52000000-0000-4000-8000-000000000003",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0.8, 0, 0, 0, 0, 0, 0.6],
+      "payload": {
+        "text": "The active synthetic fallback certificate has no expiry.",
+        "namespace": "projects",
+        "lifecycle_state": "current",
+        "canonical": true
+      }
+    },
+    {
+      "id": "53000000-0000-4000-8000-000000000001",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.8, 0, 0, 0, 0, 0.6],
+      "payload": {
+        "text": "A synthetic current note says the experiment is unresolved.",
+        "namespace": "projects",
+        "lifecycle_state": "current",
+        "canonical": true
+      }
+    },
+    {
+      "id": "53000000-0000-4000-8000-000000000002",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+      "payload": {
+        "text": "Synthetic evidence supports experiment outcome A.",
+        "namespace": "projects",
+        "lifecycle_state": "disputed"
+      }
+    },
+    {
+      "id": "53000000-0000-4000-8000-000000000003",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.999, 0, 0, 0, 0, 0.04471018],
+      "payload": {
+        "text": "Synthetic evidence supports experiment outcome B.",
+        "namespace": "projects",
+        "lifecycle_state": "disputed"
+      }
+    },
+    {
+      "id": "54000000-0000-4000-8000-000000000001",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.98, 0, 0, 0, 0.19899749],
+      "payload": {
+        "text": "The synthetic archive policy is currently enabled.",
+        "namespace": "projects",
+        "lifecycle_state": "current",
+        "canonical": true
+      }
+    },
+    {
+      "id": "54000000-0000-4000-8000-000000000002",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+      "payload": {
+        "text": "A retained synthetic archive policy is historical.",
+        "namespace": "projects",
+        "lifecycle_state": "historical",
+        "permanent": true
+      }
+    },
+    {
+      "id": "55000000-0000-4000-8000-000000000001",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.95, 0, 0, 0.3122499],
+      "payload": {
+        "text": "The canonical synthetic region is north.",
+        "namespace": "projects",
+        "lifecycle_state": "current",
+        "canonical": true
+      }
+    },
+    {
+      "id": "55000000-0000-4000-8000-000000000002",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+      "payload": {
+        "text": "An ordinary synthetic region candidate says south.",
+        "namespace": "projects",
+        "lifecycle_state": "current"
+      }
+    },
+    {
+      "id": "56000000-0000-4000-8000-000000000001",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.9, 0, 0.4358899],
+      "payload": {
+        "text": "The synthetic lifecycle control candidate is current.",
+        "namespace": "projects",
+        "lifecycle_state": "current",
+        "canonical": true
+      }
+    },
+    {
+      "id": "56000000-0000-4000-8000-000000000002",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.99, 0, 0.14106736],
+      "payload": {
+        "text": "The synthetic legacy candidate has no lifecycle fields.",
+        "namespace": "projects"
+      }
+    },
+    {
+      "id": "56000000-0000-4000-8000-000000000003",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
+      "payload": {
+        "text": "The synthetic malformed candidate has an invalid explicit state.",
+        "namespace": "projects",
+        "lifecycle_state": "future"
+      }
+    }
+  ],
+  "chunks": [
+    {
+      "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+      "vector": [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "payload": {
+        "text": "A synthetic guide explains how to prepare green tea.",
+        "file_path": "/synthetic/guides/tea.md",
+        "folder_path": "/synthetic/guides",
+        "heading": "Tea",
+        "chunk_index": 0
+      }
+    },
+    {
+      "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+      "vector": [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "payload": {
+        "text": "A synthetic technical note documents a Go service.",
+        "file_path": "/synthetic/technical/go.md",
+        "folder_path": "/synthetic/technical",
+        "heading": "Service",
+        "chunk_index": 0
+      }
+    },
+    {
+      "id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc3",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+      "payload": {
+        "text": "A synthetic fallback note is outside the selected folders.",
+        "file_path": "/synthetic/fallback/note.md",
+        "folder_path": "/synthetic/fallback",
+        "heading": "Fallback",
+        "chunk_index": 0
+      }
+    },
+    {
+      "id": "dddddddd-dddd-4ddd-8ddd-ddddddddddd4",
+      "vector": [0, 0, 0, 0.70710677, 0, 0, 0, 0.70710677, 0, 0, 0, 0, 0, 0, 0, 0],
+      "payload": {
+        "file_path": "/synthetic/malformed/missing-text.md",
+        "folder_path": "/synthetic/malformed",
+        "heading": "Missing text",
+        "chunk_index": 0
+      }
+    },
+    {
+      "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5",
+      "vector": [0.2, 0, 0, 0.9797959, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "payload": {
+        "text": "An intentionally less relevant synthetic document.",
+        "file_path": "/synthetic/other/note.md",
+        "folder_path": "/synthetic/other",
+        "heading": "Other",
+        "chunk_index": 0
+      }
+    }
+  ],
+  "folders": [
+    {
+      "id": "f1111111-1111-4111-8111-111111111111",
+      "vector": [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "payload": {
+        "text": "Synthetic guides folder",
+        "folder_path": "/synthetic/guides"
+      }
+    },
+    {
+      "id": "f2222222-2222-4222-8222-222222222222",
+      "vector": [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "payload": {
+        "text": "Synthetic technical folder",
+        "folder_path": "/synthetic/technical"
+      }
+    },
+    {
+      "id": "f3333333-3333-4333-8333-333333333333",
+      "vector": [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "payload": {
+        "text": "Synthetic unrelated folder",
+        "folder_path": "/synthetic/other"
+      }
+    }
+  ],
+  "queries": [
+    {
+      "id": "document-flat",
+      "target": "documents",
+      "mode": "flat",
+      "text": "How do I prepare synthetic green tea?",
+      "vector": [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "expected": [{"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1", "grade": 3}]
+    },
+    {
+      "id": "document-hierarchical",
+      "target": "documents",
+      "mode": "hierarchical",
+      "text": "Where is the synthetic Go service documented?",
+      "vector": [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "expected": [{"id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2", "grade": 3}]
+    },
+    {
+      "id": "document-hierarchical-fallback",
+      "target": "documents",
+      "mode": "hierarchical",
+      "text": "Find the synthetic fallback note.",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+      "expected": [{"id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc3", "grade": 3}]
+    },
+    {
+      "id": "document-missing-text",
+      "target": "documents",
+      "mode": "flat",
+      "text": "Find the intentionally malformed synthetic chunk.",
+      "vector": [0, 0, 0, 0.70710677, 0, 0, 0, 0.70710677, 0, 0, 0, 0, 0, 0, 0, 0],
+      "expected": [{"id": "dddddddd-dddd-4ddd-8ddd-ddddddddddd4", "grade": 3}]
+    },
+    {
+      "id": "fact-ambiguous-en",
+      "target": "facts",
+      "mode": "flat",
+      "intent": "current",
+      "text": "When can the synthetic meeting happen?",
+      "vector": [0, 0, 0, 0.70710677, 0.70710677, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "expected": [
+        {"id": "33333333-3333-4333-8333-333333333333", "grade": 3},
+        {"id": "44444444-4444-4444-8444-444444444444", "grade": 3}
+      ]
+    },
+    {
+      "id": "fact-legacy-numeric-en",
+      "target": "facts",
+      "mode": "flat",
+      "intent": "current",
+      "text": "Which tea does the synthetic user prefer?",
+      "vector": [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "expected": [{"id": "42", "grade": 3}],
+      "forbidden_ids": ["99999999-9999-4999-8999-999999999999"]
+    },
+    {
+      "id": "fact-multilingual",
+      "target": "facts",
+      "mode": "flat",
+      "intent": "current",
+      "text": "What language is the synthetic project written in? На чём написан проект?",
+      "vector": [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "expected": [{"id": "22222222-2222-4222-8222-222222222222", "grade": 3}]
+    },
+    {
+      "id": "fact-russian",
+      "target": "facts",
+      "mode": "flat",
+      "intent": "current",
+      "text": "Какие прогулки предпочитает синтетический пользователь?",
+      "vector": [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "expected": [{"id": "11111111-1111-4111-8111-111111111111", "grade": 3}]
+    },
+    {
+      "id": "lifecycle-as-of-expiry",
+      "target": "facts",
+      "mode": "flat",
+      "intent": "as_of",
+      "as_of": "2025-03-14",
+      "text": "Which synthetic certificate was valid on the fixed query date?",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+      "expected": [{"id": "52000000-0000-4000-8000-000000000002", "grade": 3}],
+      "lifecycle_expectations": [
+        {
+          "id": "52000000-0000-4000-8000-000000000001",
+          "state": "current",
+          "decision": "suppress",
+          "reason_codes": ["expired"]
+        },
+        {
+          "id": "52000000-0000-4000-8000-000000000002",
+          "state": "current",
+          "decision": "include",
+          "reason_codes": ["current_context"]
+        }
+      ]
+    },
+    {
+      "id": "lifecycle-canonical-preference",
+      "target": "facts",
+      "mode": "flat",
+      "intent": "current",
+      "text": "Which synthetic region is authoritative?",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+      "expected": [{"id": "55000000-0000-4000-8000-000000000001", "grade": 3}],
+      "lifecycle_expectations": [
+        {
+          "id": "55000000-0000-4000-8000-000000000001",
+          "state": "current",
+          "decision": "include",
+          "reason_codes": ["current_truth"]
+        },
+        {
+          "id": "55000000-0000-4000-8000-000000000002",
+          "state": "current",
+          "decision": "demote",
+          "reason_codes": ["canonical_preference"]
+        }
+      ]
+    },
+    {
+      "id": "lifecycle-current-superseded",
+      "target": "facts",
+      "mode": "flat",
+      "intent": "current",
+      "text": "What is the current synthetic launch window?",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+      "expected": [{"id": "51000000-0000-4000-8000-000000000001", "grade": 3}],
+      "forbidden_ids": ["51000000-0000-4000-8000-000000000002"],
+      "lifecycle_expectations": [
+        {
+          "id": "51000000-0000-4000-8000-000000000001",
+          "state": "current",
+          "decision": "include",
+          "reason_codes": ["current_truth"]
+        },
+        {
+          "id": "51000000-0000-4000-8000-000000000002",
+          "state": "superseded",
+          "decision": "suppress",
+          "reason_codes": ["superseded"]
+        }
+      ]
+    },
+    {
+      "id": "lifecycle-expired-canonical",
+      "target": "facts",
+      "mode": "flat",
+      "intent": "current",
+      "text": "Which synthetic certificate is current now?",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+      "expected": [{"id": "52000000-0000-4000-8000-000000000003", "grade": 3}],
+      "forbidden_ids": ["52000000-0000-4000-8000-000000000001"],
+      "lifecycle_expectations": [
+        {
+          "id": "52000000-0000-4000-8000-000000000001",
+          "state": "current",
+          "decision": "suppress",
+          "reason_codes": ["expired"]
+        }
+      ]
+    },
+    {
+      "id": "lifecycle-history",
+      "target": "facts",
+      "mode": "flat",
+      "intent": "history",
+      "text": "Show the synthetic launch history.",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+      "expected": [
+        {"id": "51000000-0000-4000-8000-000000000001", "grade": 3},
+        {"id": "51000000-0000-4000-8000-000000000002", "grade": 2},
+        {"id": "51000000-0000-4000-8000-000000000003", "grade": 1}
+      ],
+      "lifecycle_expectations": [
+        {
+          "id": "51000000-0000-4000-8000-000000000001",
+          "state": "current",
+          "decision": "include",
+          "reason_codes": ["current_context"]
+        },
+        {
+          "id": "51000000-0000-4000-8000-000000000002",
+          "state": "superseded",
+          "decision": "include",
+          "reason_codes": ["superseded_context"]
+        },
+        {
+          "id": "51000000-0000-4000-8000-000000000003",
+          "state": "historical",
+          "decision": "include",
+          "reason_codes": ["historical_context"]
+        }
+      ]
+    },
+    {
+      "id": "lifecycle-legacy-invalid",
+      "target": "facts",
+      "mode": "flat",
+      "intent": "current",
+      "text": "Inspect synthetic legacy and malformed lifecycle behavior.",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
+      "expected": [{"id": "56000000-0000-4000-8000-000000000001", "grade": 3}],
+      "forbidden_ids": ["56000000-0000-4000-8000-000000000003"],
+      "lifecycle_expectations": [
+        {
+          "id": "56000000-0000-4000-8000-000000000002",
+          "state": "current",
+          "decision": "demote",
+          "reason_codes": ["canonical_preference"]
+        },
+        {
+          "id": "56000000-0000-4000-8000-000000000003",
+          "decision": "suppress",
+          "reason_codes": ["invalid_lifecycle"]
+        }
+      ]
+    },
+    {
+      "id": "lifecycle-permanent-historical",
+      "target": "facts",
+      "mode": "flat",
+      "intent": "current",
+      "text": "What is the current synthetic archive policy?",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+      "expected": [{"id": "54000000-0000-4000-8000-000000000001", "grade": 3}],
+      "forbidden_ids": ["54000000-0000-4000-8000-000000000002"],
+      "lifecycle_expectations": [
+        {
+          "id": "54000000-0000-4000-8000-000000000002",
+          "state": "historical",
+          "decision": "suppress",
+          "reason_codes": ["historical"]
+        }
+      ]
+    },
+    {
+      "id": "lifecycle-uncertainty",
+      "target": "facts",
+      "mode": "flat",
+      "intent": "uncertainty",
+      "text": "What are the unresolved synthetic experiment outcomes?",
+      "vector": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+      "expected": [
+        {"id": "53000000-0000-4000-8000-000000000001", "grade": 3},
+        {"id": "53000000-0000-4000-8000-000000000002", "grade": 2},
+        {"id": "53000000-0000-4000-8000-000000000003", "grade": 2}
+      ],
+      "lifecycle_expectations": [
+        {
+          "id": "53000000-0000-4000-8000-000000000002",
+          "state": "disputed",
+          "decision": "uncertain",
+          "reason_codes": ["disputed"]
+        },
+        {
+          "id": "53000000-0000-4000-8000-000000000003",
+          "state": "disputed",
+          "decision": "uncertain",
+          "reason_codes": ["disputed"]
+        }
+      ]
+    }
+  ],
+  "gates": {
+    "forbid_invariant_violations": true,
+    "forbid_lifecycle_violations": true,
+    "minimum_hit_at": {"1": 1},
+    "minimum_mrr": 1,
+    "minimum_ndcg_at": {"1": 1}
+  },
+  "transition_scenarios": [
+    {
+      "id": "transition-current-to-current",
+      "point_id": 42,
+      "source_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-current-to-historical",
+      "point_id": 42,
+      "source_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "historical", "canonical": false, "supersedes": [], "superseded_by": []},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-current-to-superseded",
+      "point_id": 42,
+      "source_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "superseded", "canonical": false, "supersedes": [], "superseded_by": ["51000000-0000-4000-8000-000000000001"]},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-current-to-disputed",
+      "point_id": 42,
+      "source_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "disputed", "canonical": false, "supersedes": [], "superseded_by": []},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-historical-to-current",
+      "point_id": 42,
+      "source_lifecycle": {"state": "historical", "canonical": false, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-historical-to-historical",
+      "point_id": 42,
+      "source_lifecycle": {"state": "historical", "canonical": false, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "historical", "canonical": false, "supersedes": [], "superseded_by": []},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-historical-to-superseded",
+      "point_id": 42,
+      "source_lifecycle": {"state": "historical", "canonical": false, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "superseded", "canonical": false, "supersedes": [], "superseded_by": ["51000000-0000-4000-8000-000000000001"]},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-historical-to-disputed",
+      "point_id": 42,
+      "source_lifecycle": {"state": "historical", "canonical": false, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "disputed", "canonical": false, "supersedes": [], "superseded_by": []},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-superseded-to-current",
+      "point_id": 42,
+      "source_lifecycle": {"state": "superseded", "canonical": false, "supersedes": [], "superseded_by": ["51000000-0000-4000-8000-000000000001"]},
+      "target_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-superseded-to-historical",
+      "point_id": 42,
+      "source_lifecycle": {"state": "superseded", "canonical": false, "supersedes": [], "superseded_by": ["51000000-0000-4000-8000-000000000001"]},
+      "target_lifecycle": {"state": "historical", "canonical": false, "supersedes": [], "superseded_by": []},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-superseded-to-superseded",
+      "point_id": 42,
+      "source_lifecycle": {"state": "superseded", "canonical": false, "supersedes": [], "superseded_by": ["51000000-0000-4000-8000-000000000001"]},
+      "target_lifecycle": {"state": "superseded", "canonical": false, "supersedes": [], "superseded_by": ["51000000-0000-4000-8000-000000000001"]},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-superseded-to-disputed",
+      "point_id": 42,
+      "source_lifecycle": {"state": "superseded", "canonical": false, "supersedes": [], "superseded_by": ["51000000-0000-4000-8000-000000000001"]},
+      "target_lifecycle": {"state": "disputed", "canonical": false, "supersedes": [], "superseded_by": []},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-disputed-to-current",
+      "point_id": 42,
+      "source_lifecycle": {"state": "disputed", "canonical": false, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-disputed-to-historical",
+      "point_id": 42,
+      "source_lifecycle": {"state": "disputed", "canonical": false, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "historical", "canonical": false, "supersedes": [], "superseded_by": []},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-disputed-to-superseded",
+      "point_id": 42,
+      "source_lifecycle": {"state": "disputed", "canonical": false, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "superseded", "canonical": false, "supersedes": [], "superseded_by": ["51000000-0000-4000-8000-000000000001"]},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "transition-disputed-to-disputed",
+      "point_id": 42,
+      "source_lifecycle": {"state": "disputed", "canonical": false, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "disputed", "canonical": false, "supersedes": [], "superseded_by": []},
+      "expected_valid": true,
+      "expected_reason_code": "transition_valid"
+    },
+    {
+      "id": "invalid-canonical-historical",
+      "point_id": 42,
+      "source_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "historical", "canonical": true, "supersedes": [], "superseded_by": []},
+      "expected_valid": false,
+      "expected_reason_code": "target_invalid"
+    },
+    {
+      "id": "invalid-superseded-without-successor",
+      "point_id": 42,
+      "source_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "superseded", "canonical": false, "supersedes": [], "superseded_by": []},
+      "expected_valid": false,
+      "expected_reason_code": "target_invalid"
+    },
+    {
+      "id": "invalid-current-with-successor",
+      "point_id": 42,
+      "source_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "current", "canonical": false, "supersedes": [], "superseded_by": ["51000000-0000-4000-8000-000000000001"]},
+      "expected_valid": false,
+      "expected_reason_code": "target_invalid"
+    },
+    {
+      "id": "invalid-self-reference",
+      "point_id": 42,
+      "source_lifecycle": {"state": "current", "canonical": true, "supersedes": [], "superseded_by": []},
+      "target_lifecycle": {"state": "historical", "canonical": false, "supersedes": ["42"], "superseded_by": []},
+      "expected_valid": false,
+      "expected_reason_code": "target_invalid"
+    }
+  ]
+}

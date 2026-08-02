@@ -50,12 +50,12 @@ QDRANT_TEST_URL ?= http://127.0.0.1:6333
 eval-public:
 	go run ./cmd/eval-memory run \
 		--source fixture \
-		--dataset evaldata/public/v1/dataset.json \
+		--dataset evaldata/public/v2/dataset.json \
 		--qdrant-url $(QDRANT_TEST_URL) \
 		--json eval-results/public.json \
 		--markdown eval-results/public.md
 	go run ./cmd/eval-memory compare \
-		--baseline evaldata/public/v1/baseline.json \
+		--baseline evaldata/public/v2/baseline.json \
 		--candidate eval-results/public.json \
 		--json eval-results/comparison.json \
 		--enforce-gates

@@ -159,7 +159,20 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 	sort.Slice(queries, func(i, j int) bool { return queries[i].ID < queries[j].ID })
 	queryReports := make([]QueryReport, 0, len(queries))
 	metrics := make([]QueryMetrics, 0, len(queries))
+	var lifecycleReport *LifecycleReport
+	var lifecycleFailures []string
+	if dataset.SchemaVersion == CurrentDatasetSchemaVersion {
+		lifecycleReport = &LifecycleReport{
+			Transitions: executeTransitionScenarios(dataset.TransitionScenarios),
+		}
+		for _, transition := range lifecycleReport.Transitions {
+			lifecycleReport.Aggregate.Checks++
+			lifecycleReport.Aggregate.Violations += len(transition.Violations)
+			lifecycleFailures = append(lifecycleFailures, lifecycleViolationMessages(transition.Violations)...)
+		}
+	}
 	maxK := dataset.Configuration.TopK[len(dataset.Configuration.TopK)-1]
+	now := time.Now()
 	for _, query := range queries {
 		searchLimit := maxK
 		if mode == "fixture" {
@@ -180,7 +193,11 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 			if mode == "fixture" {
 				candidateLimit = max(candidateLimit, len(dataset.Facts))
 			}
-			points, err = clients.facts.Search(ctx, query.Vector, candidateLimit, currentLifecycleFilter(), nil)
+			var filter map[string]any
+			if query.EffectiveIntent() == QueryIntentCurrent {
+				filter = currentLifecycleFilter()
+			}
+			points, err = clients.facts.Search(ctx, query.Vector, candidateLimit, filter, nil)
 		case query.Mode == "flat":
 			points, err = clients.chunks.Search(ctx, query.Vector, searchLimit, nil, nil)
 		default:
@@ -190,8 +207,32 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 			return Report{}, fmt.Errorf("execute query %q: %w", query.ID, err)
 		}
 		var items []RetrievedItem
-		if query.Target == "facts" {
-			items = normalizeFactResults(points, time.Now())
+		var queryLifecycle *QueryLifecycleReport
+		if query.Target == "facts" && dataset.SchemaVersion == CurrentDatasetSchemaVersion {
+			evidencePoints := points
+			if requiresBroadLifecycleSearch(query) {
+				evidencePoints, err = fetchLifecycleEvidence(ctx, clients.facts, query, points)
+				if err != nil {
+					return Report{}, fmt.Errorf("fetch lifecycle evidence for query %q: %w", query.ID, err)
+				}
+			}
+			presentation := presentFactCandidates(query, evidencePoints, now)
+			if query.EffectiveIntent() == QueryIntentCurrent {
+				items = normalizeFactResults(points, now)
+			} else {
+				items = presentFactCandidates(query, points, now).results
+			}
+			queryLifecycle = &presentation.report
+			lifecycleReport.Aggregate.Checks += presentation.canonical.Checks
+			lifecycleReport.Aggregate.Violations += presentation.canonical.Violations
+			lifecycleReport.Aggregate.CanonicalPreferenceChecks += presentation.canonical.CanonicalPreferenceChecks
+			lifecycleReport.Aggregate.CanonicalPreferenceViolations += presentation.canonical.CanonicalPreferenceViolations
+			lifecycleFailures = append(lifecycleFailures, lifecycleViolationMessages(presentation.report.Violations)...)
+			lifecycleFailures = append(lifecycleFailures, canonicalPreferenceFailureMessages(
+				query.ID, presentation.canonical.CanonicalPreferenceViolations,
+			)...)
+		} else if query.Target == "facts" {
+			items = normalizeFactResults(points, now)
 		} else {
 			items = normalizeResults(points)
 		}
@@ -201,13 +242,22 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 		queryMetrics := ScoreQuery(query, items, dataset.Configuration.TopK)
 		queryReports = append(queryReports, QueryReport{
 			ID: query.ID, Target: query.Target, Mode: query.Mode, Results: items, Metrics: queryMetrics,
+			Lifecycle: queryLifecycle,
 		})
 		metrics = append(metrics, queryMetrics)
 	}
 	aggregate := Aggregate(metrics, dataset.Configuration.TopK)
 	failures := EvaluateGates(aggregate, dataset.Gates)
+	if dataset.Gates.ForbidLifecycleViolations {
+		failures = append(failures, lifecycleFailures...)
+		sort.Strings(failures)
+	}
+	reportSchema := SchemaVersion
+	if dataset.SchemaVersion == CurrentDatasetSchemaVersion {
+		reportSchema = CurrentReportSchemaVersion
+	}
 	return normalizeReport(Report{
-		SchemaVersion:  SchemaVersion,
+		SchemaVersion:  reportSchema,
 		DatasetVersion: dataset.DatasetVersion,
 		Mode:           mode,
 		Embedding:      dataset.Embedding,
@@ -215,9 +265,73 @@ func executeQueries(ctx context.Context, dataset *Dataset, clients collections, 
 		TopK:           dataset.Configuration.TopK,
 		Aggregate:      aggregate,
 		Queries:        queryReports,
+		Lifecycle:      lifecycleReport,
 		GatesPassed:    len(failures) == 0,
 		GateFailures:   failures,
 	}), nil
+}
+
+func fetchLifecycleEvidence(
+	ctx context.Context,
+	client *qdrant.Client,
+	query Query,
+	rankingPoints []qdrant.Point,
+) ([]qdrant.Point, error) {
+	evidence := append([]qdrant.Point(nil), rankingPoints...)
+	seen := make(map[string]struct{}, len(rankingPoints)+len(query.LifecycleExpectations))
+	for _, point := range rankingPoints {
+		seen[point.ID] = struct{}{}
+	}
+	ids := make([]string, 0, len(query.LifecycleExpectations))
+	for _, expectation := range query.LifecycleExpectations {
+		if _, exists := seen[expectation.ID]; exists {
+			continue
+		}
+		seen[expectation.ID] = struct{}{}
+		ids = append(ids, expectation.ID)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		point, exists, err := client.Get(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("get candidate %s: %w", id, err)
+		}
+		if exists {
+			evidence = append(evidence, point)
+		}
+	}
+	return evidence, nil
+}
+
+func requiresBroadLifecycleSearch(query Query) bool {
+	if query.EffectiveIntent() != QueryIntentCurrent {
+		return true
+	}
+	for _, expectation := range query.LifecycleExpectations {
+		if expectation.Decision == PresentationSuppress ||
+			expectation.Decision == PresentationUncertain {
+			return true
+		}
+		if expectation.State != "" && expectation.State != lifecycle.Current {
+			return true
+		}
+	}
+	return false
+}
+
+func lifecycleViolationMessages(violations []LifecycleViolation) []string {
+	messages := make([]string, len(violations))
+	for i, violation := range violations {
+		messages[i] = violation.message()
+	}
+	return messages
+}
+
+func canonicalPreferenceFailureMessages(queryID string, violations int) []string {
+	if violations == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("query %s invariant %s", queryID, ReasonCanonicalPreference)}
 }
 
 func currentLifecycleFilter() map[string]any {

@@ -24,12 +24,22 @@ type QueryDelta struct {
 
 // Comparison is the deterministic baseline/candidate comparison output.
 type Comparison struct {
-	SchemaVersion  int          `json:"schema_version"`
-	DatasetVersion string       `json:"dataset_version"`
-	Aggregate      MetricDelta  `json:"aggregate"`
-	Queries        []QueryDelta `json:"queries"`
-	GatesPassed    bool         `json:"gates_passed"`
-	GateFailures   []string     `json:"gate_failures,omitempty"`
+	SchemaVersion  int                  `json:"schema_version"`
+	DatasetVersion string               `json:"dataset_version"`
+	Aggregate      MetricDelta          `json:"aggregate"`
+	Queries        []QueryDelta         `json:"queries"`
+	Lifecycle      *LifecycleComparison `json:"lifecycle,omitempty"`
+	GatesPassed    bool                 `json:"gates_passed"`
+	GateFailures   []string             `json:"gate_failures,omitempty"`
+}
+
+// LifecycleComparison keeps lifecycle regressions visible without blending
+// them into ranking deltas.
+type LifecycleComparison struct {
+	BaselineAggregate   LifecycleAggregateMetrics `json:"baseline_aggregate"`
+	CandidateAggregate  LifecycleAggregateMetrics `json:"candidate_aggregate"`
+	BaselineViolations  []LifecycleViolation      `json:"baseline_violations,omitempty"`
+	CandidateViolations []LifecycleViolation      `json:"candidate_violations,omitempty"`
 }
 
 // Compare validates report compatibility and computes candidate deltas.
@@ -40,6 +50,26 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 		!reflect.DeepEqual(baseline.Configuration, candidate.Configuration) {
 		return Comparison{}, fmt.Errorf("baseline and candidate identities are incompatible")
 	}
+	if err := validateMatchedQueryContracts(baseline, candidate); err != nil {
+		return Comparison{}, err
+	}
+	if err := validateReportQueryContracts(baseline); err != nil {
+		return Comparison{}, fmt.Errorf("baseline report query contract is invalid: %w", err)
+	}
+	if err := validateReportQueryContracts(candidate); err != nil {
+		return Comparison{}, fmt.Errorf("candidate report query contract is invalid: %w", err)
+	}
+	if baseline.SchemaVersion == CurrentReportSchemaVersion {
+		if baseline.Lifecycle == nil || candidate.Lifecycle == nil {
+			return Comparison{}, fmt.Errorf("schema_version %d reports require lifecycle sections", CurrentReportSchemaVersion)
+		}
+		if err := validateLifecycleReport(baseline); err != nil {
+			return Comparison{}, fmt.Errorf("baseline lifecycle report is invalid: %w", err)
+		}
+		if err := validateLifecycleReport(candidate); err != nil {
+			return Comparison{}, fmt.Errorf("candidate lifecycle report is invalid: %w", err)
+		}
+	}
 	if len(baseline.TopK) != len(candidate.TopK) {
 		return Comparison{}, fmt.Errorf("baseline and candidate top_k differ")
 	}
@@ -49,10 +79,18 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 		}
 	}
 	comparison := Comparison{
-		SchemaVersion:  SchemaVersion,
+		SchemaVersion:  baseline.SchemaVersion,
 		DatasetVersion: baseline.DatasetVersion,
 		Aggregate:      deltaMetrics(baseline.Aggregate, candidate.Aggregate, baseline.TopK),
 		GatesPassed:    !enforceGates || candidate.GatesPassed,
+	}
+	if baseline.SchemaVersion == CurrentReportSchemaVersion {
+		comparison.Lifecycle = &LifecycleComparison{
+			BaselineAggregate:   baseline.Lifecycle.Aggregate,
+			CandidateAggregate:  candidate.Lifecycle.Aggregate,
+			BaselineViolations:  reportLifecycleViolations(baseline),
+			CandidateViolations: reportLifecycleViolations(candidate),
+		}
 	}
 	if enforceGates {
 		comparison.GateFailures = append([]string(nil), candidate.GateFailures...)
@@ -80,6 +118,64 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 	}
 	sort.Slice(comparison.Queries, func(i, j int) bool { return comparison.Queries[i].ID < comparison.Queries[j].ID })
 	return comparison, nil
+}
+
+func validateMatchedQueryContracts(baseline, candidate Report) error {
+	baselineQueries := make(map[string]QueryReport, len(baseline.Queries))
+	for _, query := range baseline.Queries {
+		if _, duplicate := baselineQueries[query.ID]; duplicate {
+			return fmt.Errorf("baseline contains duplicate query ID %q", query.ID)
+		}
+		baselineQueries[query.ID] = query
+	}
+	for _, candidateQuery := range candidate.Queries {
+		baselineQuery, exists := baselineQueries[candidateQuery.ID]
+		if !exists {
+			return fmt.Errorf("candidate query %q is absent from baseline", candidateQuery.ID)
+		}
+		if baselineQuery.Target != candidateQuery.Target {
+			return queryContractMismatch(candidateQuery.ID, "target")
+		}
+		if baselineQuery.Mode != candidateQuery.Mode {
+			return queryContractMismatch(candidateQuery.ID, "mode")
+		}
+		if (baselineQuery.Lifecycle == nil) != (candidateQuery.Lifecycle == nil) {
+			return queryContractMismatch(candidateQuery.ID, "lifecycle")
+		}
+		if baseline.SchemaVersion == CurrentReportSchemaVersion && baselineQuery.Lifecycle != nil {
+			if baselineQuery.Lifecycle.Intent != candidateQuery.Lifecycle.Intent {
+				return queryContractMismatch(candidateQuery.ID, "intent")
+			}
+			if baselineQuery.Lifecycle.AsOf != candidateQuery.Lifecycle.AsOf {
+				return queryContractMismatch(candidateQuery.ID, "as_of")
+			}
+		}
+		delete(baselineQueries, candidateQuery.ID)
+	}
+	if len(baselineQueries) != 0 {
+		return fmt.Errorf("candidate report is missing %d baseline queries", len(baselineQueries))
+	}
+	return nil
+}
+
+func queryContractMismatch(queryID, field string) error {
+	return fmt.Errorf("query %q contract field %s mismatch", queryID, field)
+}
+
+func reportLifecycleViolations(report Report) []LifecycleViolation {
+	var violations []LifecycleViolation
+	for _, query := range report.Queries {
+		if query.Lifecycle != nil {
+			violations = append(violations, query.Lifecycle.Violations...)
+		}
+	}
+	if report.Lifecycle != nil {
+		for _, transition := range report.Lifecycle.Transitions {
+			violations = append(violations, transition.Violations...)
+		}
+	}
+	sortLifecycleViolations(violations)
+	return violations
 }
 
 // EvaluateGates returns deterministic descriptions of explicit gate failures.
