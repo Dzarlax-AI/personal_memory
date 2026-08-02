@@ -48,15 +48,15 @@ func identifierLexemes(value string) map[string]struct{} {
 	var lexeme strings.Builder
 
 	add := func(raw string) {
-		raw = strings.TrimFunc(raw, isIdentifierSeparator)
-		if raw == "" || !strings.ContainsFunc(raw, isIdentifierSeparator) {
+		raw = strings.TrimFunc(raw, isIdentifierConnector)
+		if raw == "" || !strings.ContainsFunc(raw, isIdentifierConnector) {
 			return
 		}
 		result[raw] = struct{}{}
 
 		for _, part := range strings.FieldsFunc(raw, isPathSeparator) {
-			part = strings.TrimFunc(part, isIdentifierSeparator)
-			if part != "" && strings.ContainsFunc(part, isIdentifierSeparator) {
+			part = strings.TrimFunc(part, isIdentifierConnector)
+			if part != "" && strings.ContainsFunc(part, isIdentifierConnector) {
 				result[part] = struct{}{}
 			}
 		}
@@ -70,7 +70,7 @@ func identifierLexemes(value string) map[string]struct{} {
 	}
 
 	for _, current := range normalized {
-		if unicode.IsLetter(current) || unicode.IsDigit(current) || isIdentifierSeparator(current) {
+		if unicode.IsLetter(current) || unicode.IsDigit(current) || isIdentifierConnector(current) {
 			lexeme.WriteRune(current)
 			continue
 		}
@@ -80,7 +80,9 @@ func identifierLexemes(value string) map[string]struct{} {
 	return result
 }
 
-func isIdentifierSeparator(current rune) bool {
+// isIdentifierConnector is the shared contract for lexeme extraction and
+// phrase boundaries: adjacent connectors keep text in the same identifier.
+func isIdentifierConnector(current rune) bool {
 	switch current {
 	case '-', '_', '.', '/', '\\', ':', '@':
 		return true
@@ -123,10 +125,16 @@ func phraseBoundary(value string, byteIndex int, before bool) bool {
 	}
 	if before {
 		current, _ := runeBefore(value, byteIndex)
-		return !unicode.IsLetter(current) && !unicode.IsDigit(current)
+		return isPhraseBoundary(current)
 	}
 	current, _ := runeAt(value, byteIndex)
-	return !unicode.IsLetter(current) && !unicode.IsDigit(current)
+	return isPhraseBoundary(current)
+}
+
+func isPhraseBoundary(current rune) bool {
+	return !unicode.IsLetter(current) &&
+		!unicode.IsDigit(current) &&
+		!isIdentifierConnector(current)
 }
 
 func runeBefore(value string, byteIndex int) (rune, int) {
