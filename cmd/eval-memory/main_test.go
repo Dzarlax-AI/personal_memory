@@ -31,6 +31,54 @@ func TestRunCLIRejectsSameReportPath(t *testing.T) {
 	}
 }
 
+func TestRunCLIForbidsFixtureInputProfileRelabel(t *testing.T) {
+	dir := t.TempDir()
+	err := runCLI([]string{
+		"run", "--source", "fixture",
+		"--dataset", filepath.Join("..", "..", "evaldata", "public", "v1", "dataset.json"),
+		"--json", filepath.Join(dir, "report.json"),
+		"--markdown", filepath.Join(dir, "report.md"),
+		"--input-profile", "multilingual-e5-v1",
+	}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "cannot relabel") {
+		t.Fatalf("error = %v, want fixture relabel rejection", err)
+	}
+}
+
+func TestRunCLITEIFixtureRequiresV3BeforeExternalWork(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("EMBED_URL", "http://127.0.0.1:1")
+	err := runCLI([]string{
+		"run", "--source", "tei-fixture",
+		"--dataset", filepath.Join("..", "..", "evaldata", "public", "v1", "dataset.json"),
+		"--json", filepath.Join(dir, "report.json"),
+		"--markdown", filepath.Join(dir, "report.md"),
+	}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "schema_version 3") ||
+		strings.Contains(err.Error(), "TEI") {
+		t.Fatalf("error = %v, want preflight schema rejection", err)
+	}
+}
+
+func TestRunCLIFixtureIgnoresAmbientEmbedURL(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("EMBED_URL", "http://127.0.0.1:1")
+	err := runCLI([]string{
+		"run", "--source", "fixture",
+		"--dataset", filepath.Join("..", "..", "evaldata", "public", "v1", "dataset.json"),
+		"--qdrant-url", "http://127.0.0.1:1",
+		"--json", filepath.Join(dir, "report.json"),
+		"--markdown", filepath.Join(dir, "report.md"),
+		"--timeout", "10ms",
+	}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected unavailable Qdrant error")
+	}
+	if strings.Contains(err.Error(), "TEI") || strings.Contains(err.Error(), "embed") {
+		t.Fatalf("fixture consumed ambient EMBED_URL: %v", err)
+	}
+}
+
 func TestCompareCLIProducesDeterministicOutput(t *testing.T) {
 	dir := t.TempDir()
 	report := memoryeval.Report{

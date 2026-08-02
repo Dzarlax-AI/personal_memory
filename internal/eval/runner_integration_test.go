@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
 	"github.com/Dzarlax-AI/personal-memory/internal/memory/lifecycle"
 )
 
@@ -304,7 +305,7 @@ func TestLiveV3MinimumDatasetRunRenderDecodeRoundTrip(t *testing.T) {
 					"params":{"vectors":{"size":2,"distance":"Cosine"}},
 					"metadata":{"personal_memory.embedding":{
 						"schema_version":1,
-						"provider":"synthetic",
+						"provider":"tei",
 						"model_id":"synthetic-eval-v1",
 						"model_revision":"v1",
 						"model_dtype":"float32",
@@ -338,6 +339,7 @@ func TestLiveV3MinimumDatasetRunRenderDecodeRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	dataset.Facts = nil
+	dataset.Embedding.Provider = "tei"
 	report, err := Run(context.Background(), dataset, RunOptions{
 		Source: "live", QdrantURL: server.URL,
 	})
@@ -360,6 +362,232 @@ func TestLiveV3MinimumDatasetRunRenderDecodeRoundTrip(t *testing.T) {
 	}
 	if len(decoded.Queries) != 1 || len(decoded.Cohorts) != 3 {
 		t.Fatalf("decoded minimum v3 report query/cohort counts = %d/%d", len(decoded.Queries), len(decoded.Cohorts))
+	}
+}
+
+func TestLiveV3HybridFiltersBeforeBoundedRerankAndPreservesScore(t *testing.T) {
+	var searchBody map[string]any
+	searches := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/collections/memory" {
+			writeLiveIdentityCollection(w, 1)
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/search" {
+			searches++
+			if err := json.NewDecoder(r.Body).Decode(&searchBody); err != nil {
+				t.Errorf("decode search: %v", err)
+			}
+			_, _ = w.Write([]byte(`{"result":[
+				{"id":43,"score":0.99,"payload":{"text":"general memory","lifecycle_state":"current","canonical":false,"supersedes":[],"superseded_by":[]}},
+				{"id":42,"score":0.4,"payload":{"text":"incident PM-1427","lifecycle_state":"current","canonical":false,"supersedes":[],"superseded_by":[]}}
+			]}`))
+			return
+		}
+		http.Error(w, "unexpected request", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	dataset, err := Load(strings.NewReader(validV3Dataset()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset.Embedding.Provider = "tei"
+	dataset.Facts = nil
+	dataset.Queries[0].Text = "PM-1427"
+	dataset.Configuration.RetrievalStrategy = RetrievalHybridRRF
+	dataset.Configuration.DenseCandidateLimit = 20
+	dataset.Configuration.RRFConstant = 60
+	report, err := Run(context.Background(), dataset, RunOptions{
+		Source: "live", QdrantURL: server.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if searches != 1 || searchBody["limit"] != float64(20) || searchBody["filter"] == nil {
+		t.Fatalf("search request = %#v searches=%d", searchBody, searches)
+	}
+	if got := report.Queries[0].Results; len(got) != 2 || got[0].ID != "42" || got[0].Score != .4 {
+		t.Fatalf("hybrid results = %+v", got)
+	}
+}
+
+func writeLiveIdentityCollection(w http.ResponseWriter, points int) {
+	fmt.Fprintf(w, `{"result":{
+		"points_count":%d,
+		"config":{"params":{"vectors":{"size":2,"distance":"Cosine"}},"metadata":{
+			"personal_memory.embedding":{
+				"schema_version":1,"provider":"tei","model_id":"synthetic-eval-v1",
+				"model_revision":"v1","model_dtype":"float32","pooling":"mean",
+				"vector_size":2,"input_profile":"legacy-raw-v1"
+			}
+		}}
+	}}`, points)
+}
+
+func TestLiveV3HierarchicalHybridRanksFoldersChunksAndFallsBack(t *testing.T) {
+	for _, fallback := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fallback=%t", fallback), func(t *testing.T) {
+			chunkSearches := 0
+			sawFiltered := false
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet &&
+					(r.URL.Path == "/collections/doc_chunks" || r.URL.Path == "/collections/doc_folders") {
+					writeLiveIdentityCollection(w, 1)
+					return
+				}
+				if r.Method == http.MethodPost && r.URL.Path == "/collections/doc_folders/points/search" {
+					_, _ = w.Write([]byte(`{"result":[
+						{"id":51,"score":0.99,"payload":{"text":"general","folder_path":"/docs/a"}},
+						{"id":52,"score":0.4,"payload":{"summary":"PM-1427 folder","folder_path":"/docs/b"}}
+					]}`))
+					return
+				}
+				if r.Method == http.MethodPost && r.URL.Path == "/collections/doc_chunks/points/search" {
+					chunkSearches++
+					var body map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Errorf("decode chunk search: %v", err)
+					}
+					if body["filter"] != nil {
+						sawFiltered = true
+						encoded, _ := json.Marshal(body["filter"])
+						if !bytes.Contains(encoded, []byte(`/docs/b`)) {
+							t.Errorf("selected folder filter = %s", encoded)
+						}
+						if fallback {
+							_, _ = w.Write([]byte(`{"result":[]}`))
+							return
+						}
+					}
+					_, _ = w.Write([]byte(`{"result":[
+						{"id":43,"score":0.99,"payload":{"text":"general","heading":"other","file_path":"/docs/b/other.md"}},
+						{"id":42,"score":0.4,"payload":{"text":"PM-1427 details","heading":"incident","file_path":"/docs/b/incident.md"}}
+					]}`))
+					return
+				}
+				http.Error(w, "unexpected request", http.StatusInternalServerError)
+			}))
+			defer server.Close()
+			dataset, err := Load(strings.NewReader(validV3Dataset()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			dataset.Embedding.Provider = "tei"
+			dataset.Queries[0].Target = "documents"
+			dataset.Queries[0].Mode = "hierarchical"
+			dataset.Queries[0].Text = "PM-1427"
+			dataset.Queries[0].LifecycleExpectations = nil
+			dataset.Queries[0].ForbiddenIDs = nil
+			dataset.Configuration.RetrievalStrategy = RetrievalHybridRRF
+			dataset.Configuration.DenseCandidateLimit = 20
+			dataset.Configuration.RRFConstant = 60
+			report, err := Run(context.Background(), dataset, RunOptions{
+				Source: "live", QdrantURL: server.URL, DocumentsRoot: "/docs",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantSearches := 1
+			if fallback {
+				wantSearches = 2
+			}
+			if !sawFiltered || chunkSearches != wantSearches {
+				t.Fatalf("filtered=%t chunkSearches=%d", sawFiltered, chunkSearches)
+			}
+			if got := report.Queries[0].Results; len(got) != 2 || got[0].ID != "42" || got[0].Score != .4 {
+				t.Fatalf("hierarchical results = %+v", got)
+			}
+		})
+	}
+}
+
+func TestLiveV3LegacyIdentityAndPurposeAwareQueryEmbedding(t *testing.T) {
+	searches := 0
+	writes := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/collections/memory" {
+			_, _ = w.Write([]byte(`{"result":{"points_count":1,"config":{
+				"params":{"vectors":{"size":2,"distance":"Cosine"}},
+				"metadata":{"personal_memory.embedding":{
+					"schema_version":1,"provider":"tei","model_id":"synthetic-eval-v1",
+					"model_revision":"v1","model_dtype":"float32","pooling":"mean","vector_size":2
+				}}
+			}}}`))
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/search" {
+			searches++
+			_, _ = w.Write([]byte(`{"result":[{"id":42,"score":1,"payload":{
+				"text":"numeric","lifecycle_state":"current","canonical":true,
+				"supersedes":[],"superseded_by":[]
+			}}]}`))
+			return
+		}
+		writes++
+		http.Error(w, "unexpected request", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	dataset, err := Load(strings.NewReader(validV3Dataset()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset.Embedding.Provider = "tei"
+	dataset.Facts = nil
+	dataset.Queries[0].Vector = nil
+	embedder := &recordingPurposeEmbedder{}
+	report, err := Run(context.Background(), dataset, RunOptions{
+		Source: "live", QdrantURL: server.URL, Embedder: embedder,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if searches != 1 || writes != 0 || len(embedder.calls) != 1 ||
+		embedder.calls[0] != embeddings.RetrievalQuery ||
+		report.Diagnostics.Query.Embed.Count != 1 {
+		t.Fatalf("searches=%d writes=%d purposes=%v diagnostics=%#v",
+			searches, writes, embedder.calls, report.Diagnostics)
+	}
+}
+
+func TestLiveV3IdentityMismatchOrMalformedStopsBeforeSearchAndWrites(t *testing.T) {
+	for _, profileJSON := range []string{`"multilingual-e5-v1"`, `""`, `null`} {
+		t.Run(profileJSON, func(t *testing.T) {
+			searches, writes := 0, 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.Path == "/collections/memory" {
+					fmt.Fprintf(w, `{"result":{"points_count":1,"config":{
+						"params":{"vectors":{"size":2,"distance":"Cosine"}},
+						"metadata":{"personal_memory.embedding":{
+							"schema_version":1,"provider":"tei","model_id":"synthetic-eval-v1",
+							"model_revision":"v1","model_dtype":"float32","pooling":"mean",
+							"vector_size":2,"input_profile":%s
+						}}
+					}}}`, profileJSON)
+					return
+				}
+				if strings.Contains(r.URL.Path, "/points/search") {
+					searches++
+				} else {
+					writes++
+				}
+				http.Error(w, "unexpected request", http.StatusInternalServerError)
+			}))
+			defer server.Close()
+			dataset, err := Load(strings.NewReader(validV3Dataset()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			dataset.Embedding.Provider = "tei"
+			dataset.Facts = nil
+			if _, err := Run(context.Background(), dataset, RunOptions{
+				Source: "live", QdrantURL: server.URL,
+			}); err == nil {
+				t.Fatal("identity verification unexpectedly succeeded")
+			}
+			if searches != 0 || writes != 0 {
+				t.Fatalf("searches=%d writes=%d", searches, writes)
+			}
+		})
 	}
 }
 

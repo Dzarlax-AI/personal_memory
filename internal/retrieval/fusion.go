@@ -35,6 +35,9 @@ type Candidate struct {
 	ID         string
 	DenseScore float64
 	Fields     []Field
+	// DenseOnly explicitly keeps a candidate with no usable lexical fields in
+	// the fusion pool. It receives no lexical rank and falls back to dense RRF.
+	DenseOnly bool
 }
 
 // Options controls deterministic fusion. RRFConstant is intentionally
@@ -164,7 +167,11 @@ func validateCandidates(candidates []Candidate) error {
 		if math.IsNaN(candidate.DenseScore) || math.IsInf(candidate.DenseScore, 0) {
 			return errInvalidCandidate
 		}
-		if err := validateFields(candidate.Fields); err != nil {
+		if candidate.DenseOnly {
+			if len(candidate.Fields) != 0 {
+				return errInvalidCandidate
+			}
+		} else if err := validateFields(candidate.Fields); err != nil {
 			return err
 		}
 	}

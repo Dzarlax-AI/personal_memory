@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -25,11 +26,12 @@ type PurposeEmbedder interface {
 
 // RunOptions selects the evaluation source and external clients.
 type RunOptions struct {
-	Source    string
-	QdrantURL string
-	Embed     func(context.Context, string) ([]float32, error)
-	Embedder  PurposeEmbedder
-	Now       func() time.Time
+	Source        string
+	QdrantURL     string
+	Embed         func(context.Context, string) ([]float32, error)
+	Embedder      PurposeEmbedder
+	DocumentsRoot string
+	Now           func() time.Time
 }
 
 // Run validates and evaluates a dataset in fixture or read-only live mode.
@@ -39,6 +41,13 @@ func Run(ctx context.Context, dataset *Dataset, options RunOptions) (Report, err
 	}
 	if err := dataset.ValidateForSource(options.Source); err != nil {
 		return Report{}, err
+	}
+	if options.Source == "live" && strings.TrimSpace(options.DocumentsRoot) == "" {
+		for _, query := range dataset.Queries {
+			if query.Target == "documents" {
+				return Report{}, fmt.Errorf("live document evaluation requires DocumentsRoot")
+			}
+		}
 	}
 	if strings.TrimSpace(options.QdrantURL) == "" {
 		return Report{}, fmt.Errorf("qdrant URL is required")
@@ -66,6 +75,10 @@ func runFixture(ctx context.Context, dataset *Dataset, qdrantURL string) (report
 }
 
 func runFixtureTimed(ctx context.Context, dataset *Dataset, qdrantURL, mode string, timings *timingCollector) (report Report, err error) {
+	return runFixtureTimedWithEmbedder(ctx, dataset, qdrantURL, mode, timings, nil)
+}
+
+func runFixtureTimedWithEmbedder(ctx context.Context, dataset *Dataset, qdrantURL, mode string, timings *timingCollector, queryEmbedder PurposeEmbedder) (report Report, err error) {
 	suffix, err := randomSuffix()
 	if err != nil {
 		return Report{}, err
@@ -87,7 +100,7 @@ func runFixtureTimed(ctx context.Context, dataset *Dataset, qdrantURL, mode stri
 		defer cancel()
 		var cleanupErrors []error
 		for i := len(created) - 1; i >= 0; i-- {
-			if cleanupErr := created[i].DeleteCollection(cleanupCtx, "eval_"); cleanupErr != nil {
+			if cleanupErr := cleanupTemporaryCollection(cleanupCtx, created[i]); cleanupErr != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("clean up %s: %w", created[i].CollectionName(), cleanupErr))
 			}
 		}
@@ -123,6 +136,18 @@ func runFixtureTimed(ctx context.Context, dataset *Dataset, qdrantURL, mode stri
 			return Report{}, fmt.Errorf("temporary collection %q already exists", client.CollectionName())
 		}
 		if createErr := client.CreateCollection(ctx, dataset.Embedding.VectorSize, metadata); createErr != nil {
+			resolveCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			postCreateInfo, inspectErr := client.CollectionInfo(resolveCtx)
+			cancel()
+			if inspectErr != nil {
+				return Report{}, errors.Join(
+					fmt.Errorf("create temporary collection %s: %w", client.CollectionName(), createErr),
+					fmt.Errorf("resolve ambiguous creation of %s: %w", client.CollectionName(), inspectErr),
+				)
+			}
+			if postCreateInfo.Exists {
+				created = append(created, client)
+			}
 			return Report{}, fmt.Errorf("create temporary collection %s: %w", client.CollectionName(), createErr)
 		}
 		created = append(created, client)
@@ -136,7 +161,18 @@ func runFixtureTimed(ctx context.Context, dataset *Dataset, qdrantURL, mode stri
 	if err := upsertFixturePoints(ctx, clients.folders, dataset.Folders); err != nil {
 		return Report{}, fmt.Errorf("seed folders: %w", err)
 	}
-	return executeQueriesTimed(ctx, dataset, clients, mode, timings)
+	return executeQueriesTimed(ctx, dataset, clients, mode, timings, "", queryEmbedder)
+}
+
+func cleanupTemporaryCollection(ctx context.Context, client *qdrant.Client) error {
+	info, err := client.CollectionInfo(ctx)
+	if err != nil {
+		return fmt.Errorf("inspect before cleanup: %w", err)
+	}
+	if !info.Exists {
+		return nil
+	}
+	return client.DeleteCollection(ctx, "eval_")
 }
 
 func runLive(ctx context.Context, dataset *Dataset, options RunOptions) (Report, error) {
@@ -147,7 +183,10 @@ func runLive(ctx context.Context, dataset *Dataset, options RunOptions) (Report,
 	}
 	copyDataset := *dataset
 	copyDataset.Queries = append([]Query(nil), dataset.Queries...)
-	timings := newTimingCollector(options.Now)
+	var timings *timingCollector
+	if dataset.SchemaVersion == CurrentDatasetSchemaVersion {
+		timings = newTimingCollector(options.Now)
+	}
 	if dataset.SchemaVersion == CurrentDatasetSchemaVersion {
 		expected := embeddingidentity.Record{
 			SchemaVersion: 1, Provider: dataset.Embedding.Provider,
@@ -167,16 +206,12 @@ func runLive(ctx context.Context, dataset *Dataset, options RunOptions) (Report,
 		if len(query.Vector) > 0 {
 			continue
 		}
-		start := timings.now()
+		if dataset.SchemaVersion == CurrentDatasetSchemaVersion {
+			continue
+		}
 		var vector []float32
 		var err error
-		if dataset.SchemaVersion == CurrentDatasetSchemaVersion {
-			if options.Embedder == nil {
-				return Report{}, fmt.Errorf("live query %q has no vector and no purpose-aware embedder was configured", query.ID)
-			}
-			vector, err = options.Embedder.EmbedWithPurpose(ctx, query.Text, embeddings.RetrievalQuery,
-				embeddings.InputProfile(dataset.Embedding.InputProfile), dataset.Embedding.ModelID)
-		} else if options.Embed != nil {
+		if options.Embed != nil {
 			vector, err = options.Embed(ctx, query.Text)
 		} else {
 			return Report{}, fmt.Errorf("live query %q has no vector and no embedder was configured", query.ID)
@@ -184,13 +219,12 @@ func runLive(ctx context.Context, dataset *Dataset, options RunOptions) (Report,
 		if err != nil {
 			return Report{}, fmt.Errorf("embed live query %q: %w", query.ID, err)
 		}
-		timings.embed[query.ID] = elapsedUS(start, timings.now())
 		if err := validateVector(vector, copyDataset.Embedding.VectorSize); err != nil {
 			return Report{}, fmt.Errorf("live query %q: %w", query.ID, err)
 		}
 		query.Vector = vector
 	}
-	return executeQueriesTimed(ctx, &copyDataset, clients, "live", timings)
+	return executeQueriesTimed(ctx, &copyDataset, clients, "live", timings, options.DocumentsRoot, options.Embedder)
 }
 
 func liveCollectionsUsed(dataset *Dataset, clients collections) []*qdrant.Client {
@@ -229,29 +263,10 @@ func runTEIFixture(ctx context.Context, dataset *Dataset, options RunOptions) (R
 		return Report{}, err
 	}
 	corpusUS := elapsedUS(start, timings.now())
-	queryTexts := make([]string, len(copyDataset.Queries))
 	for i := range copyDataset.Queries {
-		queryTexts[i] = copyDataset.Queries[i].Text
+		copyDataset.Queries[i].Vector = nil
 	}
-	start = timings.now()
-	queryVectors, err := options.Embedder.EmbedBatchWithPurpose(ctx, queryTexts,
-		embeddings.RetrievalQuery, embeddings.InputProfile(copyDataset.Embedding.InputProfile),
-		copyDataset.Embedding.ModelID)
-	queryElapsed := elapsedUS(start, timings.now())
-	if err != nil {
-		return Report{}, fmt.Errorf("embed queries: %w", err)
-	}
-	if len(queryVectors) != len(copyDataset.Queries) {
-		return Report{}, fmt.Errorf("embed queries: result count mismatch")
-	}
-	for i, vector := range queryVectors {
-		if err := validateVector(vector, copyDataset.Embedding.VectorSize); err != nil {
-			return Report{}, fmt.Errorf("query %q: %w", copyDataset.Queries[i].ID, err)
-		}
-		copyDataset.Queries[i].Vector = vector
-		timings.embed[copyDataset.Queries[i].ID] = queryElapsed
-	}
-	report, err := runFixtureTimed(ctx, &copyDataset, options.QdrantURL, "tei-fixture", timings)
+	report, err := runFixtureTimedWithEmbedder(ctx, &copyDataset, options.QdrantURL, "tei-fixture", timings, options.Embedder)
 	if err == nil {
 		report.Diagnostics.Corpus = &CorpusDiagnostics{EmbeddingDurationUS: corpusUS, EmbeddingCount: count}
 	}
@@ -272,10 +287,10 @@ func upsertFixturePoints(ctx context.Context, client *qdrant.Client, points []Fi
 }
 
 func executeQueries(ctx context.Context, dataset *Dataset, clients collections, mode string) (Report, error) {
-	return executeQueriesTimed(ctx, dataset, clients, mode, nil)
+	return executeQueriesTimed(ctx, dataset, clients, mode, nil, "", nil)
 }
 
-func executeQueriesTimed(ctx context.Context, dataset *Dataset, clients collections, mode string, timings *timingCollector) (Report, error) {
+func executeQueriesTimed(ctx context.Context, dataset *Dataset, clients collections, mode string, timings *timingCollector, documentsRoot string, queryEmbedder PurposeEmbedder) (Report, error) {
 	queries := append([]Query(nil), dataset.Queries...)
 	sort.Slice(queries, func(i, j int) bool { return queries[i].ID < queries[j].ID })
 	queryReports := make([]QueryReport, 0, len(queries))
@@ -298,6 +313,24 @@ func executeQueriesTimed(ctx context.Context, dataset *Dataset, clients collecti
 		queryStart := time.Now()
 		if timings != nil {
 			queryStart = timings.now()
+		}
+		if dataset.SchemaVersion == CurrentDatasetSchemaVersion &&
+			(mode == "tei-fixture" || len(query.Vector) == 0) {
+			if queryEmbedder == nil {
+				return Report{}, fmt.Errorf("query %q has no vector and no purpose-aware embedder was configured", query.ID)
+			}
+			embedStart := timings.now()
+			vector, embedErr := queryEmbedder.EmbedWithPurpose(ctx, query.Text,
+				embeddings.RetrievalQuery, embeddings.InputProfile(dataset.Embedding.InputProfile),
+				dataset.Embedding.ModelID)
+			if embedErr != nil {
+				return Report{}, fmt.Errorf("embed query %q: %w", query.ID, embedErr)
+			}
+			timings.embed = append(timings.embed, elapsedUS(embedStart, timings.now()))
+			if err := validateVector(vector, dataset.Embedding.VectorSize); err != nil {
+				return Report{}, fmt.Errorf("query %q: %w", query.ID, err)
+			}
+			query.Vector = vector
 		}
 		searchLimit := maxK
 		if mode == "fixture" || mode == "tei-fixture" {
@@ -331,7 +364,7 @@ func executeQueriesTimed(ctx context.Context, dataset *Dataset, clients collecti
 			}
 			points, err = clients.facts.Search(ctx, query.Vector, candidateLimit, filter, nil)
 			if err == nil {
-				points, err = rerankPoints(query.Text, points, maxK, dataset.Configuration, "facts")
+				points, err = rerankPoints(query.Text, points, maxK, dataset.Configuration, "facts", documentsRoot)
 			}
 		case query.Mode == "flat":
 			candidateLimit := searchLimit
@@ -340,10 +373,10 @@ func executeQueriesTimed(ctx context.Context, dataset *Dataset, clients collecti
 			}
 			points, err = clients.chunks.Search(ctx, query.Vector, candidateLimit, nil, nil)
 			if err == nil {
-				points, err = rerankPoints(query.Text, points, searchLimit, dataset.Configuration, "chunks")
+				points, err = rerankPoints(query.Text, points, searchLimit, dataset.Configuration, "chunks", documentsRoot)
 			}
 		default:
-			points, err = hierarchicalSearchStrategy(ctx, clients, query.Text, query.Vector, searchLimit, dataset.Configuration)
+			points, err = hierarchicalSearchStrategy(ctx, clients, query.Text, query.Vector, searchLimit, dataset.Configuration, documentsRoot)
 		}
 		if timings != nil {
 			timings.search = append(timings.search, elapsedUS(searchStart, timings.now()))
@@ -361,16 +394,9 @@ func executeQueriesTimed(ctx context.Context, dataset *Dataset, clients collecti
 					return Report{}, fmt.Errorf("fetch lifecycle evidence for query %q: %w", query.ID, err)
 				}
 			}
-			presentation := presentFactCandidates(query, evidencePoints, now)
-			if query.EffectiveIntent() == QueryIntentCurrent {
-				if dataset.Configuration.RetrievalStrategy == RetrievalHybridRRF {
-					items = normalizeFactResultsInOrder(points, now)
-				} else {
-					items = normalizeFactResults(points, now)
-				}
-			} else {
-				items = presentFactCandidates(query, points, now).results
-			}
+			hybridOrder := dataset.Configuration.RetrievalStrategy == RetrievalHybridRRF
+			presentation := presentFactCandidatesWithOrder(query, evidencePoints, now, hybridOrder)
+			items = presentFactCandidatesWithOrder(query, points, now, hybridOrder).results
 			queryLifecycle = &presentation.report
 			lifecycleReport.Aggregate.Checks += presentation.canonical.Checks
 			lifecycleReport.Aggregate.Violations += presentation.canonical.Violations
@@ -381,11 +407,7 @@ func executeQueriesTimed(ctx context.Context, dataset *Dataset, clients collecti
 				query.ID, presentation.canonical.CanonicalPreferenceViolations,
 			)...)
 		} else if query.Target == "facts" {
-			if dataset.Configuration.RetrievalStrategy == RetrievalHybridRRF {
-				items = normalizeFactResultsInOrder(points, now)
-			} else {
-				items = normalizeFactResults(points, now)
-			}
+			items = normalizeFactResults(points, now)
 		} else {
 			if dataset.Configuration.RetrievalStrategy == RetrievalHybridRRF {
 				items = itemsFromPoints(points)
@@ -406,8 +428,7 @@ func executeQueriesTimed(ctx context.Context, dataset *Dataset, clients collecti
 		})
 		metrics = append(metrics, queryMetrics)
 		if timings != nil {
-			timings.total = append(timings.total,
-				elapsedUS(queryStart, timings.now())+timings.embed[query.ID])
+			timings.total = append(timings.total, elapsedUS(queryStart, timings.now()))
 		}
 	}
 	aggregate := Aggregate(metrics, dataset.Configuration.TopK)
@@ -512,10 +533,10 @@ func currentLifecycleFilter() map[string]any {
 }
 
 func hierarchicalSearch(ctx context.Context, clients collections, vector []float32, limit int, cfg Configuration) ([]qdrant.Point, error) {
-	return hierarchicalSearchStrategy(ctx, clients, "", vector, limit, cfg)
+	return hierarchicalSearchStrategy(ctx, clients, "", vector, limit, cfg, "")
 }
 
-func hierarchicalSearchStrategy(ctx context.Context, clients collections, rawQuery string, vector []float32, limit int, cfg Configuration) ([]qdrant.Point, error) {
+func hierarchicalSearchStrategy(ctx context.Context, clients collections, rawQuery string, vector []float32, limit int, cfg Configuration, documentsRoot string) ([]qdrant.Point, error) {
 	threshold := cfg.FolderThreshold
 	folderLimit := cfg.FolderTopK
 	if cfg.RetrievalStrategy == RetrievalHybridRRF {
@@ -525,7 +546,7 @@ func hierarchicalSearchStrategy(ctx context.Context, clients collections, rawQue
 	if err != nil {
 		return nil, err
 	}
-	folders, err = rerankPoints(rawQuery, folders, cfg.FolderTopK, cfg, "folders")
+	folders, err = rerankPoints(rawQuery, folders, cfg.FolderTopK, cfg, "folders", documentsRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -538,21 +559,21 @@ func hierarchicalSearchStrategy(ctx context.Context, clients collections, rawQue
 		}
 	}
 	if len(conditions) == 0 {
-		return searchAndRerankChunks(ctx, clients.chunks, rawQuery, vector, limit, cfg, nil)
+		return searchAndRerankChunks(ctx, clients.chunks, rawQuery, vector, limit, cfg, nil, documentsRoot)
 	}
 	points, err := searchAndRerankChunks(ctx, clients.chunks, rawQuery, vector, limit, cfg,
-		map[string]any{"should": conditions})
+		map[string]any{"should": conditions}, documentsRoot)
 	if err != nil {
 		return nil, err
 	}
 	if len(points) == 0 {
-		return searchAndRerankChunks(ctx, clients.chunks, rawQuery, vector, limit, cfg, nil)
+		return searchAndRerankChunks(ctx, clients.chunks, rawQuery, vector, limit, cfg, nil, documentsRoot)
 	}
 	return points, nil
 }
 
 func searchAndRerankChunks(ctx context.Context, client *qdrant.Client, rawQuery string,
-	vector []float32, limit int, cfg Configuration, filter map[string]any) ([]qdrant.Point, error) {
+	vector []float32, limit int, cfg Configuration, filter map[string]any, documentsRoot string) ([]qdrant.Point, error) {
 	candidateLimit := limit
 	if cfg.RetrievalStrategy == RetrievalHybridRRF {
 		candidateLimit = cfg.DenseCandidateLimit
@@ -561,23 +582,20 @@ func searchAndRerankChunks(ctx context.Context, client *qdrant.Client, rawQuery 
 	if err != nil {
 		return nil, err
 	}
-	return rerankPoints(rawQuery, points, limit, cfg, "chunks")
+	return rerankPoints(rawQuery, points, limit, cfg, "chunks", documentsRoot)
 }
 
-func rerankPoints(rawQuery string, points []qdrant.Point, limit int, cfg Configuration, kind string) ([]qdrant.Point, error) {
+func rerankPoints(rawQuery string, points []qdrant.Point, limit int, cfg Configuration, kind, documentsRoot string) ([]qdrant.Point, error) {
 	if cfg.RetrievalStrategy != RetrievalHybridRRF || len(points) == 0 {
 		return points, nil
 	}
 	byID := make(map[string]qdrant.Point, len(points))
 	candidates := make([]retrieval.Candidate, 0, len(points))
 	for _, point := range points {
-		fields := lexicalFields(point.Payload, kind)
-		if len(fields) == 0 {
-			return nil, fmt.Errorf("%s candidate %q has no usable lexical fields", kind, point.ID)
-		}
+		fields := lexicalFields(point.Payload, kind, documentsRoot)
 		byID[point.ID] = point
 		candidates = append(candidates, retrieval.Candidate{
-			ID: point.ID, DenseScore: point.Score, Fields: fields,
+			ID: point.ID, DenseScore: point.Score, Fields: fields, DenseOnly: len(fields) == 0,
 		})
 	}
 	ranked, err := retrieval.Rank(rawQuery, candidates, retrieval.Options{
@@ -593,7 +611,7 @@ func rerankPoints(rawQuery string, points []qdrant.Point, limit int, cfg Configu
 	return result, nil
 }
 
-func lexicalFields(payload map[string]any, kind string) []retrieval.Field {
+func lexicalFields(payload map[string]any, kind, documentsRoot string) []retrieval.Field {
 	names := []string{"text"}
 	switch kind {
 	case "chunks":
@@ -605,6 +623,12 @@ func lexicalFields(payload map[string]any, kind string) []retrieval.Field {
 	for _, name := range names {
 		value, ok := payload[name].(string)
 		if ok && strings.TrimSpace(value) != "" {
+			if name == "file_path" || name == "folder_path" {
+				value, ok = relativeLexicalPath(value, documentsRoot)
+				if !ok {
+					continue
+				}
+			}
 			values = append(values, struct{ name, value string }{name, value})
 		}
 	}
@@ -620,6 +644,25 @@ func lexicalFields(payload map[string]any, kind string) []retrieval.Field {
 		}
 	}
 	return fields
+}
+
+func relativeLexicalPath(value, documentsRoot string) (string, bool) {
+	cleaned := filepath.Clean(value)
+	if !filepath.IsAbs(cleaned) {
+		if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+			return "", false
+		}
+		return filepath.ToSlash(cleaned), true
+	}
+	if strings.TrimSpace(documentsRoot) == "" {
+		return "", false
+	}
+	relative, err := filepath.Rel(filepath.Clean(documentsRoot), cleaned)
+	if err != nil || relative == "." || relative == ".." ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return "", false
+	}
+	return filepath.ToSlash(relative), true
 }
 
 func normalizeResults(points []qdrant.Point) []RetrievedItem {
@@ -662,17 +705,6 @@ func normalizeFactResults(points []qdrant.Point, now time.Time) []RetrievedItem 
 	return itemsFromPoints(sorted)
 }
 
-func normalizeFactResultsInOrder(points []qdrant.Point, now time.Time) []RetrievedItem {
-	filtered := make([]qdrant.Point, 0, len(points))
-	for _, point := range points {
-		view, _ := lifecycle.Parse(point.Payload, point.ID)
-		if lifecycle.IsCurrentTruth(view, factExpiredAt(point.Payload, now)) {
-			filtered = append(filtered, point)
-		}
-	}
-	return itemsFromPoints(filtered)
-}
-
 func factExpiredAt(payload map[string]any, now time.Time) bool {
 	raw, exists := payload["valid_until"]
 	if !exists || raw == nil {
@@ -696,7 +728,7 @@ func randomSuffix() (string, error) {
 
 type timingCollector struct {
 	now    func() time.Time
-	embed  map[string]int64
+	embed  []int64
 	total  []int64
 	search []int64
 }
@@ -705,7 +737,7 @@ func newTimingCollector(now func() time.Time) *timingCollector {
 	if now == nil {
 		now = time.Now
 	}
-	return &timingCollector{now: now, embed: make(map[string]int64)}
+	return &timingCollector{now: now}
 }
 
 func elapsedUS(start, end time.Time) int64 {
@@ -736,12 +768,8 @@ func summarizeDurations(values []int64) DurationSummary {
 }
 
 func (collector *timingCollector) diagnostics() *Diagnostics {
-	embeds := make([]int64, 0, len(collector.embed))
-	for _, value := range collector.embed {
-		embeds = append(embeds, value)
-	}
 	return &Diagnostics{Query: QueryDiagnostics{
-		Total: summarizeDurations(collector.total), Embed: summarizeDurations(embeds),
+		Total: summarizeDurations(collector.total), Embed: summarizeDurations(collector.embed),
 		Search: summarizeDurations(collector.search),
 	}}
 }

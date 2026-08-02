@@ -416,7 +416,11 @@ func (d *Dataset) ValidateForSource(source string) error {
 	switch source {
 	case "live":
 		return nil
-	case "fixture", "tei-fixture":
+	case "tei-fixture":
+		if d.SchemaVersion != CurrentDatasetSchemaVersion {
+			return fmt.Errorf("tei-fixture requires schema_version %d", CurrentDatasetSchemaVersion)
+		}
+	case "fixture":
 	default:
 		return fmt.Errorf("source must be fixture, live, or tei-fixture")
 	}

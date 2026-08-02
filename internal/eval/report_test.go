@@ -3,6 +3,7 @@ package eval
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -39,6 +40,31 @@ func TestRenderReportIsDeterministic(t *testing.T) {
 	}
 	if bytes.Index(firstJSON, []byte(`"id": "a"`)) > bytes.Index(firstJSON, []byte(`"id": "z"`)) {
 		t.Fatal("queries are not sorted by ID")
+	}
+}
+
+func TestDecodeReportRejectsDiagnosticsOnOldSchema(t *testing.T) {
+	data, err := os.ReadFile("../../evaldata/public/v1/baseline.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	document["diagnostics"] = map[string]any{
+		"query": map[string]any{
+			"total":  map[string]any{"count": 0, "min_us": 0, "p50_us": 0, "p95_us": 0, "max_us": 0},
+			"embed":  map[string]any{"count": 0, "min_us": 0, "p50_us": 0, "p95_us": 0, "max_us": 0},
+			"search": map[string]any{"count": 0, "min_us": 0, "p50_us": 0, "p95_us": 0, "max_us": 0},
+		},
+	}
+	tampered, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeReport(tampered); err == nil || !strings.Contains(err.Error(), "schema_version 3") {
+		t.Fatalf("DecodeReport() error = %v", err)
 	}
 }
 

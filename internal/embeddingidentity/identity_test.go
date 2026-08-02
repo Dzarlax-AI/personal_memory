@@ -130,6 +130,56 @@ func TestEnsureBindsEmptyLegacyCollectionAndPreservesMetadata(t *testing.T) {
 	}
 }
 
+func TestVerifyCollectionNormalizesMissingProfileToLegacyWithoutWrites(t *testing.T) {
+	record := testRecord()
+	raw := map[string]any{
+		"schema_version": record.SchemaVersion, "provider": record.Provider,
+		"model_id": record.ModelID, "model_revision": record.ModelRevision,
+		"model_dtype": record.ModelDType, "pooling": record.Pooling,
+		"vector_size": record.VectorSize,
+	}
+	collection := existingCollection("memory", 1, map[string]any{MetadataKey: raw})
+	if err := verifyCollection(context.Background(), collection, record); err != nil {
+		t.Fatal(err)
+	}
+	if collection.created != 0 || collection.updated != 0 {
+		t.Fatalf("read-only verification wrote collection: %#v", collection)
+	}
+}
+
+func TestVerifyCollectionRejectsMismatchAndMalformedWithoutWrites(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		raw  any
+	}{
+		{"mismatch", func() any {
+			record := testRecord()
+			record.InputProfile = embeddings.MultilingualE5V1
+			return record
+		}()},
+		{"empty", map[string]any{
+			"schema_version": 1, "provider": "tei", "model_id": expectedModel().ModelID,
+			"model_revision": testRevision, "model_dtype": "float32", "pooling": "mean",
+			"vector_size": 3, "input_profile": "",
+		}},
+		{"null", map[string]any{
+			"schema_version": 1, "provider": "tei", "model_id": expectedModel().ModelID,
+			"model_revision": testRevision, "model_dtype": "float32", "pooling": "mean",
+			"vector_size": 3, "input_profile": nil,
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			collection := existingCollection("memory", 1, map[string]any{MetadataKey: tt.raw})
+			if err := verifyCollection(context.Background(), collection, testRecord()); err == nil {
+				t.Fatal("verification unexpectedly succeeded")
+			}
+			if collection.created != 0 || collection.updated != 0 {
+				t.Fatalf("read-only verification wrote collection: %#v", collection)
+			}
+		})
+	}
+}
+
 func TestEnsureRequiresExplicitAdoptionForNonEmptyLegacyCollection(t *testing.T) {
 	collection := existingCollection("memory", 556, nil)
 	_, err := ensure(context.Background(), newFakeModel(), []collectionClient{collection}, expectedModel(), false)

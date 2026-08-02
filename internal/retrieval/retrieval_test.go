@@ -327,6 +327,20 @@ func TestRankTreatsIDsAsOpaqueAndAllowsNamedFieldCase(t *testing.T) {
 	}
 }
 
+func TestRankKeepsExplicitDenseOnlyCandidate(t *testing.T) {
+	got, err := Rank("PM-1427", []Candidate{
+		{ID: "dense", DenseScore: .9, DenseOnly: true},
+		candidate("lexical", .2, "PM-1427"),
+	}, Options{RRFConstant: 60, Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Candidate.ID != "lexical" ||
+		got[1].Candidate.ID != "dense" || got[1].LexicalRank != 0 {
+		t.Fatalf("dense-only ranking = %+v", got)
+	}
+}
+
 func normalizedNumericID(i int) string {
 	const digits = "0123456789"
 	if i == 0 {

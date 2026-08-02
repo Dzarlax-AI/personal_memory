@@ -77,6 +77,16 @@ func VerifyCollection(ctx context.Context, collection *qdrant.Client, expected R
 	if collection == nil {
 		return fmt.Errorf("embedding identity collection is nil")
 	}
+	return verifyCollection(ctx, collection, expected)
+}
+
+type verificationCollection interface {
+	CollectionName() string
+	CollectionInfo(context.Context) (qdrant.CollectionInfo, error)
+	ExactCount(context.Context) (uint64, error)
+}
+
+func verifyCollection(ctx context.Context, collection verificationCollection, expected Record) error {
 	info, err := collection.CollectionInfo(ctx)
 	if err != nil {
 		return fmt.Errorf("inspect collection %q for embedding identity: %w", collection.CollectionName(), err)
@@ -101,7 +111,7 @@ func VerifyCollection(ctx context.Context, collection *qdrant.Client, expected R
 	if !present {
 		return fmt.Errorf("collection %q contains points but has no embedding identity", collection.CollectionName())
 	}
-	stored, err := decodeVerificationRecord(raw)
+	stored, err := decodeRecord(raw)
 	if err != nil {
 		return fmt.Errorf("collection %q has invalid embedding identity metadata: %w", collection.CollectionName(), err)
 	}
@@ -110,24 +120,6 @@ func VerifyCollection(ctx context.Context, collection *qdrant.Client, expected R
 			collection.CollectionName(), formatRecord(stored), formatRecord(expected))
 	}
 	return nil
-}
-
-func decodeVerificationRecord(raw any) (Record, error) {
-	encoded, err := json.Marshal(raw)
-	if err != nil {
-		return Record{}, err
-	}
-	var record Record
-	if err := json.Unmarshal(encoded, &record); err != nil {
-		return Record{}, err
-	}
-	if record.SchemaVersion < 1 || strings.TrimSpace(record.Provider) == "" ||
-		strings.TrimSpace(record.ModelID) == "" || strings.TrimSpace(record.ModelRevision) == "" ||
-		strings.TrimSpace(record.ModelDType) == "" || strings.TrimSpace(record.Pooling) == "" ||
-		record.VectorSize < 1 || strings.TrimSpace(string(record.InputProfile)) == "" {
-		return Record{}, fmt.Errorf("incomplete embedding identity record")
-	}
-	return record, nil
 }
 
 type pendingAction struct {

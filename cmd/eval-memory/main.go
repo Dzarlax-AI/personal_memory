@@ -51,6 +51,7 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	qdrantURL := flags.String("qdrant-url", "http://127.0.0.1:6333", "Qdrant base URL")
 	embedURL := flags.String("embed-url", os.Getenv("EMBED_URL"), "TEI base URL for live/tei-fixture embedding")
 	embedModel := flags.String("embed-model", os.Getenv("EMBED_MODEL"), "TEI model ID (defaults to dataset identity)")
+	documentsRoot := flags.String("documents-root", "", "document root used to make live lexical paths relative")
 	configurationName := flags.String("configuration-name", "", "override experiment configuration name")
 	inputProfile := flags.String("input-profile", "", "override experiment input profile")
 	retrievalStrategy := flags.String("retrieval-strategy", "", "override retrieval strategy")
@@ -88,6 +89,9 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 		overrides.ConfigurationName = configurationName
 	}
 	if *inputProfile != "" {
+		if *source == "fixture" {
+			return fmt.Errorf("--input-profile cannot relabel precomputed fixture vectors")
+		}
 		value := memoryeval.InputProfile(*inputProfile)
 		overrides.InputProfile = &value
 	}
@@ -108,11 +112,26 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
-	options := memoryeval.RunOptions{Source: *source, QdrantURL: strings.TrimRight(*qdrantURL, "/")}
-	if *embedURL != "" {
-		if *source != "live" && *source != "tei-fixture" {
-			return fmt.Errorf("--embed-url is supported only with --source live or tei-fixture")
+	if *source == "live" && strings.TrimSpace(*documentsRoot) == "" {
+		*documentsRoot = os.Getenv("RAG_DOCUMENTS_DIR")
+		if strings.TrimSpace(*documentsRoot) == "" {
+			*documentsRoot = "/root/documents/personal"
 		}
+	}
+	options := memoryeval.RunOptions{
+		Source: *source, QdrantURL: strings.TrimRight(*qdrantURL, "/"),
+		DocumentsRoot: *documentsRoot,
+	}
+	needsEmbedding := *source == "tei-fixture"
+	if *source == "live" {
+		for _, query := range dataset.Queries {
+			if len(query.Vector) == 0 {
+				needsEmbedding = true
+				break
+			}
+		}
+	}
+	if needsEmbedding && *embedURL != "" {
 		client := embeddings.NewClient(strings.TrimRight(*embedURL, "/"))
 		info, err := client.Info(ctx)
 		if err != nil {
@@ -127,8 +146,8 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 		}
 		options.Embed = client.Embed
 		options.Embedder = client
-	} else if *source == "tei-fixture" {
-		return fmt.Errorf("--embed-url or EMBED_URL is required for --source tei-fixture")
+	} else if needsEmbedding {
+		return fmt.Errorf("--embed-url or EMBED_URL is required for %s query embedding", *source)
 	}
 	report, err := memoryeval.Run(ctx, dataset, options)
 	if err != nil {

@@ -307,7 +307,7 @@ func DecodeReport(data []byte) (Report, error) {
 		report.Configuration.present["retrieval_strategy"] ||
 		report.Configuration.present["dense_candidate_limit"] ||
 		report.Configuration.present["rrf_constant"] ||
-		report.Cohorts != nil {
+		report.Cohorts != nil || report.Diagnostics != nil {
 		return Report{}, fmt.Errorf("report v3 identity and cohort fields require schema_version %d", CurrentReportSchemaVersion)
 	}
 	return normalizeReport(report), nil
@@ -408,7 +408,7 @@ func validateV3Report(report Report) error {
 	if err := validateCohortAggregates(report); err != nil {
 		return err
 	}
-	if err := validateDiagnostics(report.Diagnostics); err != nil {
+	if err := validateDiagnostics(report); err != nil {
 		return err
 	}
 	queryMetrics := make([]QueryMetrics, len(report.Queries))
@@ -428,9 +428,13 @@ func validateV3Report(report Report) error {
 	return nil
 }
 
-func validateDiagnostics(diagnostics *Diagnostics) error {
+func validateDiagnostics(report Report) error {
+	diagnostics := report.Diagnostics
 	if diagnostics == nil {
 		return nil
+	}
+	if report.Mode == "fixture" {
+		return fmt.Errorf("fixture report must omit diagnostics")
 	}
 	validateSummary := func(name string, summary DurationSummary) error {
 		if summary.Count < 0 || summary.Min < 0 || summary.P50 < summary.Min ||
@@ -454,6 +458,23 @@ func validateDiagnostics(diagnostics *Diagnostics) error {
 	if diagnostics.Corpus != nil &&
 		(diagnostics.Corpus.EmbeddingDurationUS < 0 || diagnostics.Corpus.EmbeddingCount < 0) {
 		return fmt.Errorf("diagnostics corpus values must be nonnegative")
+	}
+	queryCount := len(report.Queries)
+	if diagnostics.Query.Total.Count != queryCount || diagnostics.Query.Search.Count != queryCount {
+		return fmt.Errorf("diagnostics total/search counts must match query count")
+	}
+	if diagnostics.Query.Embed.Count > queryCount {
+		return fmt.Errorf("diagnostics embed count must not exceed query count")
+	}
+	if report.Mode == "tei-fixture" {
+		if diagnostics.Corpus == nil {
+			return fmt.Errorf("tei-fixture diagnostics require corpus measurements")
+		}
+		if diagnostics.Query.Embed.Count != queryCount {
+			return fmt.Errorf("tei-fixture diagnostics embed count must match query count")
+		}
+	} else if diagnostics.Corpus != nil {
+		return fmt.Errorf("corpus diagnostics are only valid for tei-fixture")
 	}
 	return nil
 }
