@@ -83,6 +83,10 @@ func (d *Dataset) Validate() error {
 			cfg.present["rrf_constant"]) {
 		return fmt.Errorf("retrieval strategy fields require schema_version %d", CurrentDatasetSchemaVersion)
 	}
+	if d.SchemaVersion == CurrentDatasetSchemaVersion && len(d.Queries) == 0 {
+		return fmt.Errorf("schema_version %d dataset requires at least one query",
+			CurrentDatasetSchemaVersion)
+	}
 
 	for name, points := range map[string][]FixturePoint{
 		"facts": d.Facts, "chunks": d.Chunks, "folders": d.Folders,

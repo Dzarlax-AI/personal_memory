@@ -295,6 +295,55 @@ func TestLiveRunnerUsesOnlySearchRequests(t *testing.T) {
 	}
 }
 
+func TestLiveV3MinimumDatasetRunRenderDecodeRoundTrip(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/collections/memory/points/search" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte(`{"result":[{
+			"id":42,
+			"score":1,
+			"payload":{
+				"text":"numeric",
+				"lifecycle_state":"current",
+				"canonical":true
+			}
+		}]}`))
+	}))
+	defer server.Close()
+
+	dataset, err := Load(strings.NewReader(validV3Dataset()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataset.Facts = nil
+	report, err := Run(context.Background(), dataset, RunOptions{
+		Source: "live", QdrantURL: server.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Queries) != 1 || len(report.Cohorts) != 3 {
+		t.Fatalf("minimum v3 report query/cohort counts = %d/%d", len(report.Queries), len(report.Cohorts))
+	}
+	encoded, err := RenderJSON(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(encoded, []byte(`"cohorts": [`)) {
+		t.Fatalf("minimum v3 report omitted cohorts: %s", encoded)
+	}
+	decoded, err := DecodeReport(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Queries) != 1 || len(decoded.Cohorts) != 3 {
+		t.Fatalf("decoded minimum v3 report query/cohort counts = %d/%d", len(decoded.Queries), len(decoded.Cohorts))
+	}
+}
+
 func TestLiveV2LifecycleEvidenceUsesExactReadWithoutChangingRanking(t *testing.T) {
 	var requestBody map[string]any
 	var requests []string

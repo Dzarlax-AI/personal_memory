@@ -375,6 +375,12 @@ func validateV3Report(report Report) error {
 	if report.Mode != "fixture" && report.Mode != "live" {
 		return fmt.Errorf("mode must be fixture or live")
 	}
+	if len(report.Queries) == 0 {
+		return fmt.Errorf("report requires at least one query")
+	}
+	if len(report.Cohorts) == 0 {
+		return fmt.Errorf("report requires at least one cohort aggregate")
+	}
 	if err := validateEmbeddingIdentity(report.Embedding, true); err != nil {
 		return err
 	}

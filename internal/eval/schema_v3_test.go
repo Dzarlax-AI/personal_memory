@@ -268,3 +268,36 @@ func TestLoadHistoricalSchemasRejectV3Fields(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadV3RequiresAtLeastOneQueryWithoutChangingHistoricalSchemas(t *testing.T) {
+	var v3 map[string]any
+	if err := json.Unmarshal([]byte(validV3Dataset()), &v3); err != nil {
+		t.Fatal(err)
+	}
+	v3["queries"] = []any{}
+	encodedV3, err := json.Marshal(v3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(strings.NewReader(string(encodedV3))); err == nil ||
+		!strings.Contains(err.Error(), "at least one query") {
+		t.Fatalf("Load(empty v3 queries) error = %v", err)
+	}
+
+	for name, value := range map[string]string{"v1": validDataset, "v2": validV2Dataset()} {
+		t.Run(name, func(t *testing.T) {
+			var document map[string]any
+			if err := json.Unmarshal([]byte(value), &document); err != nil {
+				t.Fatal(err)
+			}
+			document["queries"] = []any{}
+			encoded, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(strings.NewReader(string(encoded))); err != nil {
+				t.Fatalf("historical empty query dataset changed behavior: %v", err)
+			}
+		})
+	}
+}

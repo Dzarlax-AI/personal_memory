@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 )
 
 func validateV3DatasetRaw(data []byte) error {
@@ -51,6 +53,18 @@ func validateV3DatasetRaw(data []byte) error {
 		"minimum_hit_at", "minimum_mrr", "minimum_ndcg_at",
 	); err != nil {
 		return err
+	}
+	for _, field := range []string{"minimum_hit_at", "minimum_ndcg_at"} {
+		if raw, exists := gates[field]; exists {
+			if err := validateRawFiniteNumberMap(raw, "gates."+field); err != nil {
+				return err
+			}
+		}
+	}
+	if raw, exists := gates["minimum_mrr"]; exists {
+		if err := validateRawFiniteNumber(raw, "gates.minimum_mrr"); err != nil {
+			return err
+		}
 	}
 	for _, field := range []string{"facts", "chunks", "folders"} {
 		points, err := rawArrayField(root, field, "dataset")
@@ -232,6 +246,31 @@ func validateV3ReportRaw(data []byte) error {
 	); err != nil {
 		return err
 	}
+	if err := validateRawMetricAggregate(aggregate, "aggregate"); err != nil {
+		return err
+	}
+	cohorts, err := rawArrayField(root, "cohorts", "report")
+	if err != nil {
+		return err
+	}
+	for i, cohortRaw := range cohorts {
+		label := fmt.Sprintf("cohorts[%d]", i)
+		cohort, err := rawObject(cohortRaw, label)
+		if err != nil {
+			return err
+		}
+		if err := requireRawFields(cohort, label,
+			"cohort", "query_count", "hit_at", "mrr", "ndcg_at", "invariant_violations",
+		); err != nil {
+			return err
+		}
+		if err := validateRawMetricAggregate(cohort, label); err != nil {
+			return err
+		}
+		if err := validateRawFiniteNumber(cohort["query_count"], label+".query_count"); err != nil {
+			return err
+		}
+	}
 	queries, err := rawArrayField(root, "queries", "report")
 	if err != nil {
 		return err
@@ -263,6 +302,9 @@ func validateV3ReportRaw(data []byte) error {
 			if err := requireRawFields(result, resultLabel, "id", "score"); err != nil {
 				return err
 			}
+			if err := validateRawFiniteNumber(result["score"], resultLabel+".score"); err != nil {
+				return err
+			}
 			if err := rejectRawNulls(result, resultLabel, "missing_text"); err != nil {
 				return err
 			}
@@ -274,11 +316,68 @@ func validateV3ReportRaw(data []byte) error {
 		if err := requireRawFields(metrics, label+".metrics", "hit_at", "mrr", "ndcg_at"); err != nil {
 			return err
 		}
+		for _, field := range []string{"hit_at", "ndcg_at"} {
+			if err := validateRawFiniteNumberMap(
+				metrics[field],
+				label+".metrics."+field,
+			); err != nil {
+				return err
+			}
+		}
+		if err := validateRawFiniteNumber(metrics["mrr"], label+".metrics.mrr"); err != nil {
+			return err
+		}
 		if err := rejectRawNulls(metrics, label+".metrics",
 			"invariant_violations", "missing_text_result_ids",
 		); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateRawMetricAggregate(
+	aggregate map[string]json.RawMessage,
+	label string,
+) error {
+	for _, field := range []string{"hit_at", "ndcg_at"} {
+		if err := validateRawFiniteNumberMap(aggregate[field], label+"."+field); err != nil {
+			return err
+		}
+	}
+	if err := validateRawFiniteNumber(aggregate["mrr"], label+".mrr"); err != nil {
+		return err
+	}
+	return validateRawFiniteNumber(
+		aggregate["invariant_violations"],
+		label+".invariant_violations",
+	)
+}
+
+func validateRawFiniteNumberMap(raw json.RawMessage, label string) error {
+	values, err := rawObject(raw, label)
+	if err != nil {
+		return err
+	}
+	for _, valueRaw := range values {
+		if err := validateRawFiniteNumber(valueRaw, label); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRawFiniteNumber(raw json.RawMessage, label string) error {
+	if rawIsNull(raw) {
+		return fmt.Errorf("v3 %s must be a finite JSON number", label)
+	}
+	var number json.Number
+	if err := json.Unmarshal(raw, &number); err != nil {
+		return fmt.Errorf("v3 %s must be a finite JSON number", label)
+	}
+	value, err := strconv.ParseFloat(number.String(), 64)
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+		return fmt.Errorf("v3 %s must be a finite JSON number", label)
 	}
 	return nil
 }
