@@ -14,6 +14,11 @@ const (
 
 	// MaxResults is the maximum accepted output limit.
 	MaxResults = 100
+
+	// MaxRRFConstant is a conservative operational bound that keeps every
+	// denominator from RRFConstant+1 through RRFConstant+MaxCandidates exactly
+	// representable and meaningfully separated in float64.
+	MaxRRFConstant = 1_000_000
 )
 
 var (
@@ -33,7 +38,8 @@ type Candidate struct {
 }
 
 // Options controls deterministic fusion. RRFConstant is intentionally
-// required rather than supplied as a hidden package default.
+// required rather than supplied as a hidden package default and must be in
+// the inclusive range [1, MaxRRFConstant].
 type Options struct {
 	RRFConstant int
 	Limit       int
@@ -116,7 +122,7 @@ func Rank(rawQuery string, candidates []Candidate, options Options) ([]Result, e
 	results := make([]Result, limit)
 	for index := range results {
 		results[index] = Result{
-			Candidate:   ranked[index].candidate,
+			Candidate:   cloneCandidate(ranked[index].candidate),
 			DenseRank:   ranked[index].denseRank,
 			LexicalRank: ranked[index].lexicalRank,
 			RRFScore:    ranked[index].fusedScore,
@@ -127,10 +133,19 @@ func Rank(rawQuery string, candidates []Candidate, options Options) ([]Result, e
 }
 
 func validateOptions(options Options) error {
-	if options.RRFConstant <= 0 || options.Limit <= 0 || options.Limit > MaxResults {
+	if options.RRFConstant <= 0 ||
+		options.RRFConstant > MaxRRFConstant ||
+		options.Limit <= 0 ||
+		options.Limit > MaxResults {
 		return errInvalidOptions
 	}
 	return nil
+}
+
+func cloneCandidate(candidate Candidate) Candidate {
+	cloned := candidate
+	cloned.Fields = slices.Clone(candidate.Fields)
+	return cloned
 }
 
 func validateCandidates(candidates []Candidate) error {

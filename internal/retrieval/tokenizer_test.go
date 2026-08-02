@@ -2,6 +2,7 @@ package retrieval
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -11,11 +12,54 @@ func TestNormalize(t *testing.T) {
 	}
 }
 
+func TestNormalizeCanonicalEquivalenceAndCaseFold(t *testing.T) {
+	tests := []struct {
+		name  string
+		left  string
+		right string
+		want  string
+	}{
+		{name: "nfc and nfd", left: "CAFÉ", right: "cafe\u0301", want: "café"},
+		{name: "greek sigma forms", left: "ΟΣ", right: "ο\u03c2", want: "οσ"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Normalize(tt.left); got != tt.want {
+				t.Fatalf("Normalize(left) = %q, want %q", got, tt.want)
+			}
+			if got := Normalize(tt.right); got != tt.want {
+				t.Fatalf("Normalize(right) = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestTokenizeUnicodeLettersAndDigits(t *testing.T) {
 	got := tokenize("Память-v2/Project_42: café")
 	want := []string{"память", "v2", "project", "42", "café"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("tokenize() = %v, want %v", got, want)
+	}
+}
+
+func TestTokenizeKeepsCombiningMarksAttached(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  []string
+	}{
+		{name: "decomposed latin", value: "cafe\u0301", want: []string{"café"}},
+		{name: "mark heavy script", value: "हिंदी भाषा", want: []string{"हिंदी", "भाषा"}},
+		{name: "non composing mark", value: "x\u20dd", want: []string{"x\u20dd"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tokenize(tt.value); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("tokenize() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -30,6 +74,11 @@ func TestIdentifierLexemes(t *testing.T) {
 		if _, ok := got[want]; !ok {
 			t.Fatalf("identifierLexemes() missing %q: %v", want, got)
 		}
+	}
+
+	withMark := identifierLexemes("docs/x\u20dd-file/readme")
+	if _, ok := withMark["x\u20dd-file"]; !ok {
+		t.Fatalf("identifierLexemes() detached combining mark: %v", withMark)
 	}
 }
 
@@ -123,5 +172,75 @@ func TestIdentifierPrefixDoesNotGainStrongestPhraseSignal(t *testing.T) {
 	}
 	if !byID["exact"].Lexical.ExactPhrase || byID["exact"].Lexical.IdentifierMatches != 1 {
 		t.Fatalf("exact identifier diagnostics = %+v", byID["exact"].Lexical)
+	}
+}
+
+func TestCanonicalEquivalentPathsAndGreekSigmaMatch(t *testing.T) {
+	t.Run("macos decomposed path", func(t *testing.T) {
+		got := rank(t, "docs/café/menu", []Candidate{
+			candidate("id", 0.5, "document", Field{Name: "path", Value: "docs/cafe\u0301/menu"}),
+		}, 1)
+		if got[0].Lexical.IdentifierMatches != 1 {
+			t.Fatalf("identifier matches = %d, want 1", got[0].Lexical.IdentifierMatches)
+		}
+	})
+
+	t.Run("greek sigma", func(t *testing.T) {
+		got := rank(t, "ΟΣ", []Candidate{candidate("id", 0.5, "ος")}, 1)
+		if !got[0].Lexical.ExactPhrase || got[0].Lexical.TokenCoverage != 1 {
+			t.Fatalf("Greek fold diagnostics = %+v", got[0].Lexical)
+		}
+	})
+}
+
+func TestCombiningMarkContinuesTokenAtPhraseBoundary(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		field string
+	}{
+		{name: "nfd acute", query: "e", field: "e\u0301"},
+		{name: "non composing mark", query: "x", field: "x\u20dd"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := rank(t, tt.query, []Candidate{candidate("id", 0.5, tt.field)}, 1)
+			if got[0].Lexical.ExactPhrase {
+				t.Fatal("base letter received exact phrase across combining mark")
+			}
+		})
+	}
+}
+
+func TestConnectorOnlyQueryUsesDenseOnlyFallback(t *testing.T) {
+	got := rank(t, "...---///", []Candidate{
+		candidate("lower", 0.5, "...---///"),
+		candidate("higher", 0.9, "semantic candidate"),
+	}, 2)
+	if want := []string{"higher", "lower"}; !reflect.DeepEqual(ids(got), want) {
+		t.Fatalf("ids = %v, want %v", ids(got), want)
+	}
+	for _, result := range got {
+		if result.Lexical.HasSignal || result.Lexical.ExactPhrase || result.LexicalRank != 0 {
+			t.Fatalf("connector-only query produced lexical signal: %+v", result)
+		}
+	}
+}
+
+func TestLongConnectorRunsRemainContextSensitive(t *testing.T) {
+	const connectorCount = 1 << 20
+	connectors := strings.Repeat("-._/:@\\", connectorCount/7)
+
+	if containsExactPhrase(Normalize("x"+connectors+"y"), Normalize("x")) {
+		t.Fatal("connector run leading to identifier continuation was accepted")
+	}
+	if !containsExactPhrase(Normalize("x"+connectors+" "), Normalize("x")) {
+		t.Fatal("connector run leading to whitespace was rejected")
+	}
+	if containsExactPhrase(Normalize("y"+connectors+"x"), Normalize("x")) {
+		t.Fatal("left connector run leading to identifier continuation was accepted")
+	}
+	if !containsExactPhrase(Normalize(" "+connectors+"x"), Normalize("x")) {
+		t.Fatal("left connector run leading to whitespace was rejected")
 	}
 }

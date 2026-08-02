@@ -4,12 +4,16 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 )
 
-// Normalize applies deterministic Unicode lower-casing and collapses every
-// whitespace run to one ASCII space.
+// Normalize applies locale-independent Unicode case folding, canonical NFC
+// normalization, and collapses every whitespace run to one ASCII space.
 func Normalize(value string) string {
-	return strings.Join(strings.Fields(strings.ToLower(value)), " ")
+	folded := cases.Fold().String(value)
+	return strings.Join(strings.Fields(norm.NFC.String(folded)), " ")
 }
 
 func tokenize(value string) []string {
@@ -25,6 +29,10 @@ func tokenize(value string) []string {
 	}
 	for _, current := range normalized {
 		if unicode.IsLetter(current) || unicode.IsDigit(current) {
+			token.WriteRune(current)
+			continue
+		}
+		if unicode.IsMark(current) && token.Len() > 0 {
 			token.WriteRune(current)
 			continue
 		}
@@ -46,6 +54,7 @@ func identifierLexemes(value string) map[string]struct{} {
 	normalized := Normalize(value)
 	result := make(map[string]struct{})
 	var lexeme strings.Builder
+	canAttachMark := false
 
 	add := func(raw string) {
 		raw = strings.TrimFunc(raw, isIdentifierConnector)
@@ -67,11 +76,22 @@ func identifierLexemes(value string) map[string]struct{} {
 		}
 		add(lexeme.String())
 		lexeme.Reset()
+		canAttachMark = false
 	}
 
 	for _, current := range normalized {
-		if unicode.IsLetter(current) || unicode.IsDigit(current) || isIdentifierConnector(current) {
+		if unicode.IsLetter(current) || unicode.IsDigit(current) {
 			lexeme.WriteRune(current)
+			canAttachMark = true
+			continue
+		}
+		if unicode.IsMark(current) && canAttachMark {
+			lexeme.WriteRune(current)
+			continue
+		}
+		if isIdentifierConnector(current) {
+			lexeme.WriteRune(current)
+			canAttachMark = false
 			continue
 		}
 		flush()
@@ -161,7 +181,7 @@ func hasIdentifierContinuation(value string, byteIndex int, direction scanDirect
 			cursor += size
 		}
 
-		if unicode.IsLetter(current) || unicode.IsDigit(current) {
+		if unicode.IsLetter(current) || unicode.IsDigit(current) || unicode.IsMark(current) {
 			return true
 		}
 		if !isIdentifierConnector(current) {

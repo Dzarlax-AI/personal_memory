@@ -47,8 +47,10 @@ func scoreLexical(normalizedQuery string, queryTokens, queryIdentifiers map[stri
 		fieldTokens := tokenSet(normalizedField)
 		fieldIdentifiers := identifierLexemes(normalizedField)
 		fieldDiagnostics := LexicalFieldDiagnostics{
-			Name:        field.Name,
-			ExactPhrase: containsExactPhrase(normalizedField, normalizedQuery),
+			Name: field.Name,
+		}
+		if len(queryTokens) > 0 || len(queryIdentifiers) > 0 {
+			fieldDiagnostics.ExactPhrase = containsExactPhrase(normalizedField, normalizedQuery)
 		}
 
 		for queryToken := range queryTokens {

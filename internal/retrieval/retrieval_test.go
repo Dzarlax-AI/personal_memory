@@ -286,6 +286,35 @@ func TestRankCandidateCapAndLimit(t *testing.T) {
 	}
 }
 
+func TestRankRRFConstantBounds(t *testing.T) {
+	valid := []Candidate{candidate("id", 0.5, "text")}
+	if _, err := Rank("text", valid, Options{RRFConstant: MaxRRFConstant, Limit: 1}); err != nil {
+		t.Fatalf("Rank() rejected MaxRRFConstant: %v", err)
+	}
+	if _, err := Rank("text", valid, Options{RRFConstant: MaxRRFConstant + 1, Limit: 1}); err == nil {
+		t.Fatal("Rank() accepted RRF constant above maximum")
+	} else if strings.Contains(err.Error(), "text") {
+		t.Fatalf("safe error echoed input: %v", err)
+	}
+}
+
+func TestRankResultsOwnCandidateFields(t *testing.T) {
+	input := []Candidate{candidate("id", 0.5, "original", Field{Name: "path", Value: "docs/original"})}
+	got := rank(t, "original", input, 1)
+
+	input[0].Fields[0].Name = "changed-input-name"
+	input[0].Fields[0].Value = "changed input"
+	if got[0].Candidate.Fields[0].Name != "text" || got[0].Candidate.Fields[0].Value != "original" {
+		t.Fatalf("caller mutation changed result fields: %+v", got[0].Candidate.Fields)
+	}
+
+	got[0].Candidate.Fields[1].Name = "changed-result-name"
+	got[0].Candidate.Fields[1].Value = "changed result"
+	if input[0].Fields[1].Name != "path" || input[0].Fields[1].Value != "docs/original" {
+		t.Fatalf("result mutation changed caller fields: %+v", input[0].Fields)
+	}
+}
+
 func TestRankTreatsIDsAsOpaqueAndAllowsNamedFieldCase(t *testing.T) {
 	got := rank(t, "title", []Candidate{
 		candidate("ABC-123", 0.5, "body", Field{Name: "Heading", Value: "TITLE"}),
