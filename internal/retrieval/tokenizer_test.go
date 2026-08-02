@@ -43,6 +43,10 @@ func TestExactPhraseRejectsIdentifierAndPathSubstringBoundaries(t *testing.T) {
 		{name: "kebab suffix", query: "personal-memory", field: "my-personal-memory"},
 		{name: "uuid prefix", query: "550e8400-e29b-41d4-a716-446655440000", field: "550e8400-e29b-41d4-a716-446655440000-extra"},
 		{name: "path prefix", query: "docs/project", field: "docs/project/readme"},
+		{name: "dotted right continuation", query: "config", field: "config.prod"},
+		{name: "dotted left continuation", query: "config", field: "prod.config"},
+		{name: "connector run right continuation", query: "config", field: "config.-_prod"},
+		{name: "connector run left continuation", query: "config", field: "prod_-.config"},
 		{name: "dotted name", query: "config.prod", field: "config.prod.json"},
 		{name: "underscore suffix", query: "memory", field: "memory_store"},
 		{name: "colon suffix", query: "memory", field: "memory:service"},
@@ -78,12 +82,24 @@ func TestExactPhraseAcceptsProseBoundaries(t *testing.T) {
 		{name: "whitespace", query: "personal-memory", field: "Use personal-memory here"},
 		{name: "parentheses", query: "personal-memory", field: "(personal-memory)"},
 		{name: "unicode prose punctuation", query: "память", field: "«память» — важна"},
+		{name: "trailing period", query: "release checklist", field: "Release checklist."},
+		{name: "colon before whitespace", query: "release checklist", field: "Release checklist: done"},
+		{name: "leading period", query: "release checklist", field: ".Release checklist"},
+		{name: "leading colon", query: "release checklist", field: ":Release checklist"},
+		{name: "leading colon after whitespace", query: "release checklist", field: "done: Release checklist"},
+		{name: "connector run at end", query: "release checklist", field: "Release checklist..."},
+		{name: "connector next to prose punctuation", query: "release checklist", field: "Release checklist., then continue"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if !containsExactPhrase(Normalize(tt.field), Normalize(tt.query)) {
 				t.Fatalf("containsExactPhrase() rejected prose-bounded phrase")
+			}
+
+			got := rank(t, tt.query, []Candidate{candidate("id", 0.5, tt.field)}, 1)
+			if !got[0].Lexical.ExactPhrase {
+				t.Fatal("Rank() did not diagnose prose-bounded exact phrase")
 			}
 		})
 	}

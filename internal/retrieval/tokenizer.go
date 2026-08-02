@@ -124,17 +124,51 @@ func phraseBoundary(value string, byteIndex int, before bool) bool {
 		return true
 	}
 	if before {
-		current, _ := runeBefore(value, byteIndex)
-		return isPhraseBoundary(current)
+		return !hasIdentifierContinuation(value, byteIndex, scanLeft)
 	}
-	current, _ := runeAt(value, byteIndex)
-	return isPhraseBoundary(current)
+	return !hasIdentifierContinuation(value, byteIndex, scanRight)
 }
 
-func isPhraseBoundary(current rune) bool {
-	return !unicode.IsLetter(current) &&
-		!unicode.IsDigit(current) &&
-		!isIdentifierConnector(current)
+type scanDirection int
+
+const (
+	scanLeft  scanDirection = -1
+	scanRight scanDirection = 1
+)
+
+// hasIdentifierContinuation scans outward from a phrase edge. A letter or
+// digit directly adjacent to the phrase always continues the identifier.
+// Connector runs do so only when they lead to an outer letter or digit;
+// reaching whitespace, prose punctuation, or the string edge is a boundary.
+func hasIdentifierContinuation(value string, byteIndex int, direction scanDirection) bool {
+	cursor := byteIndex
+	for cursor >= 0 && cursor <= len(value) {
+		var (
+			current rune
+			size    int
+		)
+		if direction == scanLeft {
+			if cursor == 0 {
+				return false
+			}
+			current, size = runeBefore(value, cursor)
+			cursor -= size
+		} else {
+			if cursor == len(value) {
+				return false
+			}
+			current, size = runeAt(value, cursor)
+			cursor += size
+		}
+
+		if unicode.IsLetter(current) || unicode.IsDigit(current) {
+			return true
+		}
+		if !isIdentifierConnector(current) {
+			return false
+		}
+	}
+	return false
 }
 
 func runeBefore(value string, byteIndex int) (rune, int) {
