@@ -118,8 +118,13 @@ func ensure(ctx context.Context, embed modelClient, collections []collectionClie
 			if err != nil {
 				return Record{}, fmt.Errorf("count collection %q before embedding identity adoption: %w", name, err)
 			}
-			if exactPoints > 0 && !adoptExisting {
-				return Record{}, fmt.Errorf("collection %q contains %d points but has no embedding identity; after a verified snapshot and model check, set ADOPT_EXISTING_EMBEDDING_IDENTITY=true for one startup", name, exactPoints)
+			if exactPoints > 0 {
+				if record.InputProfile != embeddings.LegacyRawV1 {
+					return Record{}, fmt.Errorf("collection %q contains points without embedding identity and cannot adopt non-legacy input profile %q; re-embed or migrate the vectors into a collection with explicit identity", name, record.InputProfile)
+				}
+				if !adoptExisting {
+					return Record{}, fmt.Errorf("collection %q contains %d points but has no embedding identity; after a verified snapshot and model check, set ADOPT_EXISTING_EMBEDDING_IDENTITY=true for one startup", name, exactPoints)
+				}
 			}
 			metadata := cloneMetadata(info.Metadata)
 			metadata[MetadataKey] = record
@@ -229,7 +234,20 @@ func decodeRecord(raw any) (Record, error) {
 	if err := json.Unmarshal(encoded, &record); err != nil {
 		return Record{}, err
 	}
-	record.InputProfile = embeddings.NormalizeInputProfile(record.InputProfile)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return Record{}, err
+	}
+	rawProfile, profilePresent := fields["input_profile"]
+	if !profilePresent {
+		record.InputProfile = embeddings.LegacyRawV1
+	} else {
+		var profile string
+		if err := json.Unmarshal(rawProfile, &profile); err != nil || profile == "" {
+			return Record{}, fmt.Errorf("input_profile must be a non-empty string when present")
+		}
+		record.InputProfile = embeddings.InputProfile(profile)
+	}
 	if record.SchemaVersion != identityVersion || record.Provider != identityProvider || record.ModelID == "" || record.ModelRevision == "" || record.ModelDType == "" || record.Pooling == "" || record.VectorSize < 1 {
 		return Record{}, fmt.Errorf("incomplete or unsupported identity record")
 	}

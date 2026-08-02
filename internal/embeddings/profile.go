@@ -60,8 +60,8 @@ func ValidateInputProfile(profile InputProfile, modelID string) error {
 }
 
 // TransformInput applies a profile to raw, literal user or document text.
-// Callers must not add model prefixes themselves. Prefix-looking text in the
-// raw value is content and is therefore preserved rather than stripped.
+// Callers must not add model prefixes themselves. MultilingualE5V1 rejects raw
+// text beginning with a reserved prefix rather than stripping or reapplying it.
 func TransformInput(rawText string, purpose Purpose, profile InputProfile, modelID string) (string, error) {
 	if err := validatePurpose(purpose); err != nil {
 		return "", err

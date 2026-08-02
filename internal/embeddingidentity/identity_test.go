@@ -148,6 +148,52 @@ func TestEnsureRequiresExplicitAdoptionForNonEmptyLegacyCollection(t *testing.T)
 	}
 }
 
+func TestEnsureRejectsNonLegacyAdoptionForNonEmptyMetadataFreeCollection(t *testing.T) {
+	collection := existingCollection("memory", 556, nil)
+	expected := expectedModel()
+	expected.InputProfile = embeddings.MultilingualE5V1
+
+	_, err := ensure(context.Background(), newFakeModel(), []collectionClient{collection}, expected, true)
+	if err == nil || !strings.Contains(err.Error(), "cannot adopt") || !strings.Contains(err.Error(), "re-embed") {
+		t.Fatalf("error = %v, want safe re-embedding requirement", err)
+	}
+	if collection.created != 0 || collection.updated != 0 {
+		t.Fatal("non-legacy identity was stamped onto existing raw vectors")
+	}
+}
+
+func TestEnsureInitializesEmptyMetadataFreeCollectionWithNonLegacyProfile(t *testing.T) {
+	collection := existingCollection("memory", 0, nil)
+	expected := expectedModel()
+	expected.InputProfile = embeddings.MultilingualE5V1
+
+	record, err := ensure(context.Background(), newFakeModel(), []collectionClient{collection}, expected, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.InputProfile != embeddings.MultilingualE5V1 || collection.updated != 1 {
+		t.Fatalf("record=%#v collection=%#v", record, collection)
+	}
+}
+
+func TestEnsureNonLegacyAdoptionFailurePerformsNoEarlierWrites(t *testing.T) {
+	first := existingCollection("memory", 0, nil)
+	second := existingCollection("doc_chunks", 10, nil)
+	expected := expectedModel()
+	expected.InputProfile = embeddings.MultilingualE5V1
+
+	_, err := ensure(context.Background(), newFakeModel(), []collectionClient{first, second}, expected, true)
+	if err == nil || !strings.Contains(err.Error(), "cannot adopt") {
+		t.Fatalf("error = %v, want non-legacy adoption error", err)
+	}
+	if first.updated != 0 || first.created != 0 {
+		t.Fatal("first collection was modified before full non-legacy adoption preflight succeeded")
+	}
+	if second.updated != 0 || second.created != 0 {
+		t.Fatal("non-legacy identity was stamped onto existing vectors")
+	}
+}
+
 func TestEnsureUsesExactCountForLegacyAdoptionDecision(t *testing.T) {
 	collection := existingCollection("memory", 9, nil)
 	collection.info.Points = 0
@@ -224,6 +270,44 @@ func TestEnsureNormalizesStoredIdentityWithoutProfileAsLegacy(t *testing.T) {
 	}
 	if collection.updated != 0 || collection.created != 0 {
 		t.Fatal("normalized legacy identity caused a write")
+	}
+}
+
+func TestEnsureRejectsPresentEmptyOrNullStoredInputProfile(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile any
+	}{
+		{name: "empty string", profile: ""},
+		{name: "null", profile: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stored := testRecord()
+			raw := map[string]any{
+				"schema_version": stored.SchemaVersion,
+				"provider":       stored.Provider,
+				"model_id":       stored.ModelID,
+				"model_revision": stored.ModelRevision,
+				"model_dtype":    stored.ModelDType,
+				"pooling":        stored.Pooling,
+				"vector_size":    stored.VectorSize,
+				"input_profile":  tt.profile,
+			}
+			collection := existingCollection("memory", 556, map[string]any{MetadataKey: raw})
+
+			_, err := ensure(context.Background(), newFakeModel(), []collectionClient{collection}, expectedModel(), true)
+			if err == nil || !strings.Contains(err.Error(), "invalid embedding identity metadata") || !strings.Contains(err.Error(), "input_profile") {
+				t.Fatalf("error = %v, want malformed input_profile error", err)
+			}
+			if strings.Contains(err.Error(), "556") {
+				t.Fatalf("error leaked unrelated collection content: %v", err)
+			}
+			if collection.updated != 0 || collection.created != 0 {
+				t.Fatal("malformed identity caused a write")
+			}
+		})
 	}
 }
 
