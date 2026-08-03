@@ -4,25 +4,34 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
 const (
-	publicV3DatasetSHA256  = "63e6329df9f4bf7a792338a4744765a8c9889933b34414671e5f00f0c3452e05"
-	publicV3BaselineSHA256 = "60bdd5a255f763fa78b611c722f97a5df6b745c27a89c84e4653689467f583e7"
-	publicV3DatasetVersion = "3.0.0"
-	publicV3ModelRevision  = "614241f622f53c4eeff9890bdc4f31cfecc418b3"
+	publicV3DatasetSHA256           = "717f3d5893c4fe400161d6e152acb1aa921fab279080e185008451ab28931b96"
+	publicV3BaselineSHA256          = "912a3cadba6cd19db90cc6de276bed05cd8a867d3d25dd55615895d60208054e"
+	publicV3HybridCandidateSHA256   = "61936f2695ddca385ff2872dadfd9e997b8f70f1d2a4be1564480dfb6970ad4a"
+	publicV3FailingComparisonSHA256 = "4449eb08f6676fb47ddef7111ae19166b7f1e0fa8311d65d4203a3f4604ceadd"
+	publicV3DatasetVersion          = "3.1.0"
+	publicV3ModelRevision           = "614241f622f53c4eeff9890bdc4f31cfecc418b3"
+	publicV3HybridCandidateName     = "public-v3-legacy-raw-hybrid-rrf60-candidate"
+	publicV3DenseCandidateLimit     = 40
+	publicV3RRFConstant             = 60
 )
 
 var publicV3TopK = []int{1, 3, 5, 20}
 
 func TestPublicV3DatasetPinnedContract(t *testing.T) {
-	datasetData, dataset := loadPublicDataset(t, "v3")
-	assertRawSHA256(t, "dataset", datasetData, publicV3DatasetSHA256)
+	datasetPath, datasetData, dataset := loadPublicDataset(t, "v3")
+	assertCanonicalDataset(t, datasetPath, datasetData, dataset)
 	if dataset.SchemaVersion != CurrentDatasetSchemaVersion ||
 		dataset.DatasetVersion != publicV3DatasetVersion {
 		t.Fatalf("dataset identity = %d/%q", dataset.SchemaVersion, dataset.DatasetVersion)
@@ -30,8 +39,8 @@ func TestPublicV3DatasetPinnedContract(t *testing.T) {
 	assertPublicV3Embedding(t, dataset.Embedding)
 	assertPublicV3Configuration(t, dataset.Configuration)
 	assertPublicV3Gates(t, dataset.Gates)
-	if len(dataset.Facts) != 26 || len(dataset.Chunks) != 11 ||
-		len(dataset.Folders) != 8 || len(dataset.Queries) != 21 ||
+	if len(dataset.Facts) != 48 || len(dataset.Chunks) != 41 ||
+		len(dataset.Folders) != 41 || len(dataset.Queries) != 21 ||
 		len(dataset.TransitionScenarios) != 20 {
 		t.Fatalf(
 			"dataset counts facts/chunks/folders/queries/transitions = %d/%d/%d/%d/%d",
@@ -41,6 +50,17 @@ func TestPublicV3DatasetPinnedContract(t *testing.T) {
 	}
 	if err := dataset.ValidateForSource("fixture"); err != nil {
 		t.Fatal(err)
+	}
+	if got := currentOrLegacyFactCount(dataset.Facts); got != 41 {
+		t.Fatalf("current/legacy fact candidate count = %d, want 41", got)
+	}
+	// These synthetic bounds prove that the candidate report really truncates
+	// facts, flat chunks, and folders at 40. They exercise the 40/60 choice on
+	// this bounded fixture only; they do not establish a universal optimum.
+	if currentOrLegacyFactCount(dataset.Facts) <= publicV3DenseCandidateLimit ||
+		len(dataset.Chunks) <= publicV3DenseCandidateLimit ||
+		len(dataset.Folders) <= publicV3DenseCandidateLimit {
+		t.Fatal("public v3 corpus does not activate every 40-candidate bound")
 	}
 
 	wantCohorts := map[QueryCohort][]string{
@@ -52,7 +72,7 @@ func TestPublicV3DatasetPinnedContract(t *testing.T) {
 			"document-flat",
 			"document-hierarchical",
 			"document-hierarchical-fallback",
-			"document-missing-text",
+			"document-materialized-record",
 			"exact-name-document",
 			"fact-ambiguous-en",
 			"fact-legacy-numeric-en",
@@ -111,11 +131,21 @@ func TestPublicV3DatasetPinnedContract(t *testing.T) {
 		}
 		assertQueryReferencesExist(t, query, dataset)
 	}
+	for _, query := range dataset.Queries {
+		for _, reference := range appendExpectedAndForbiddenIDs(query) {
+			if strings.HasPrefix(reference, "62000000-") ||
+				strings.HasPrefix(reference, "b1000000-") ||
+				strings.HasPrefix(reference, "c1000000-") {
+				t.Fatalf("query %q labels calibration point %q as relevant or forbidden", query.ID, reference)
+			}
+		}
+	}
+	assertRawSHA256(t, datasetPath, datasetData, publicV3DatasetSHA256)
 }
 
 func TestPublicV3CarriesPublicV2Contracts(t *testing.T) {
-	_, v2 := loadPublicDataset(t, "v2")
-	_, v3 := loadPublicDataset(t, "v3")
+	_, _, v2 := loadPublicDataset(t, "v2")
+	_, _, v3 := loadPublicDataset(t, "v3")
 
 	v3Facts := pointsByID(v3.Facts)
 	if len(v2.Facts) != 22 {
@@ -127,12 +157,15 @@ func TestPublicV3CarriesPublicV2Contracts(t *testing.T) {
 			t.Fatalf("carried fact %q changed or is missing", want.ID.String())
 		}
 	}
-	assertExtraPointIDs(t, "facts", v2.Facts, v3.Facts, []string{
+	wantExtraFactIDs := []string{
 		"61000000-0000-4000-8000-000000000001",
 		"61000000-0000-4000-8000-000000000002",
 		"61000000-0000-4000-8000-000000000003",
 		"61000000-0000-4000-8000-000000000004",
-	})
+	}
+	wantExtraFactIDs = append(wantExtraFactIDs,
+		sequentialPointIDs("62000000-0000-4000-8000-", 22)...)
+	assertExtraPointIDs(t, "facts", v2.Facts, v3.Facts, wantExtraFactIDs)
 
 	const materializedText = "An intentionally malformed synthetic chunk is retained as a public fixture record."
 	v3Chunks := pointsByID(v3.Chunks)
@@ -154,14 +187,17 @@ func TestPublicV3CarriesPublicV2Contracts(t *testing.T) {
 			t.Fatalf("carried chunk %q changed outside the pinned TEI text exception", want.ID.String())
 		}
 	}
-	assertExtraPointIDs(t, "chunks", v2.Chunks, v3.Chunks, []string{
+	wantExtraChunkIDs := []string{
 		"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa6",
 		"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa7",
 		"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa8",
 		"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9",
 		"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10",
 		"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
-	})
+	}
+	wantExtraChunkIDs = append(wantExtraChunkIDs,
+		sequentialPointIDs("b1000000-0000-4000-8000-", 30)...)
+	assertExtraPointIDs(t, "chunks", v2.Chunks, v3.Chunks, wantExtraChunkIDs)
 
 	v3Folders := pointsByID(v3.Folders)
 	for _, want := range v2.Folders {
@@ -170,25 +206,43 @@ func TestPublicV3CarriesPublicV2Contracts(t *testing.T) {
 			t.Fatalf("carried folder %q changed or is missing", want.ID.String())
 		}
 	}
-	assertExtraPointIDs(t, "folders", v2.Folders, v3.Folders, []string{
+	wantExtraFolderIDs := []string{
 		"f4444444-4444-4444-8444-444444444444",
 		"f5555555-5555-4555-8555-555555555555",
 		"f6666666-6666-4666-8666-666666666666",
 		"f7777777-7777-4777-8777-777777777777",
 		"f8888888-8888-4888-8888-888888888888",
-	})
+	}
+	wantExtraFolderIDs = append(wantExtraFolderIDs,
+		sequentialPointIDs("c1000000-0000-4000-8000-", 33)...)
+	assertExtraPointIDs(t, "folders", v2.Folders, v3.Folders, wantExtraFolderIDs)
 
 	if len(v2.Queries) != 16 {
 		t.Fatalf("public v2 query count = %d, want 16", len(v2.Queries))
 	}
 	v3Queries := queriesByID(v3.Queries)
 	for _, want := range v2.Queries {
-		got, exists := v3Queries[want.ID]
-		if !exists || !reflect.DeepEqual(carriedQueryContract(got), carriedQueryContract(want)) {
+		v3ID := want.ID
+		if want.ID == "document-missing-text" {
+			v3ID = "document-materialized-record"
+		}
+		got, exists := v3Queries[v3ID]
+		if !exists {
+			t.Fatalf("carried query contract %q is missing", want.ID)
+		}
+		if want.ID == "document-missing-text" {
+			if got.Text != "Find the retained synthetic fixture record." {
+				t.Fatalf("TEI-materialized query text = %q", got.Text)
+			}
+			got.ID = want.ID
+			got.Text = want.Text
+		}
+		if !reflect.DeepEqual(carriedQueryContract(got), carriedQueryContract(want)) {
 			t.Fatalf("carried query contract %q changed or is missing", want.ID)
 		}
 	}
 	assertExactExtraQueryIDs(t, v2.Queries, v3.Queries, []string{
+		"document-materialized-record",
 		"exact-name-document",
 		"exact-name-fact",
 		"identifier-adr-path-document",
@@ -209,16 +263,8 @@ func TestPublicV3CarriesPublicV2Contracts(t *testing.T) {
 }
 
 func TestPublicV3BaselinePinnedContract(t *testing.T) {
-	root := filepath.Join("..", "..", "evaldata", "public", "v3")
-	data, err := os.ReadFile(filepath.Join(root, "baseline.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertRawSHA256(t, "baseline", data, publicV3BaselineSHA256)
-	baseline, err := DecodeReport(data)
-	if err != nil {
-		t.Fatal(err)
-	}
+	path, data, baseline := loadPublicReport(t, "baseline.json")
+	assertCanonicalReport(t, path, data, baseline)
 	if baseline.SchemaVersion != CurrentReportSchemaVersion ||
 		baseline.DatasetVersion != publicV3DatasetVersion ||
 		baseline.Mode != "fixture" {
@@ -243,7 +289,7 @@ func TestPublicV3BaselinePinnedContract(t *testing.T) {
 		"document-flat",
 		"document-hierarchical",
 		"document-hierarchical-fallback",
-		"document-missing-text",
+		"document-materialized-record",
 		"exact-name-document",
 		"exact-name-fact",
 		"fact-ambiguous-en",
@@ -269,20 +315,131 @@ func TestPublicV3BaselinePinnedContract(t *testing.T) {
 	if !reflect.DeepEqual(gotQueryIDs, wantQueryIDs) {
 		t.Fatalf("baseline query IDs = %v, want %v", gotQueryIDs, wantQueryIDs)
 	}
+	assertRawSHA256(t, path, data, publicV3BaselineSHA256)
 }
 
-func loadPublicDataset(t *testing.T, version string) ([]byte, *Dataset) {
+func TestPublicV3HybridCandidateAndFailingComparisonPinnedContract(t *testing.T) {
+	baselinePath, _, baseline := loadPublicReport(t, "baseline.json")
+	candidatePath, candidateData, candidate := loadPublicReport(
+		t, "hybrid-rrf60-candidate.json",
+	)
+	assertCanonicalReport(t, candidatePath, candidateData, candidate)
+	if candidate.SchemaVersion != CurrentReportSchemaVersion ||
+		candidate.DatasetVersion != publicV3DatasetVersion ||
+		candidate.Mode != "fixture" {
+		t.Fatalf("candidate identity = %d/%q/%q",
+			candidate.SchemaVersion, candidate.DatasetVersion, candidate.Mode)
+	}
+	assertPublicV3Embedding(t, candidate.Embedding)
+	assertPublicV3HybridConfiguration(t, candidate.Configuration)
+	if !reflect.DeepEqual(candidate.TopK, publicV3TopK) ||
+		!candidate.GatesPassed || len(candidate.GateFailures) != 0 ||
+		candidate.Aggregate.InvariantViolations != 0 ||
+		candidate.Lifecycle == nil ||
+		candidate.Lifecycle.Aggregate.Violations != 0 {
+		t.Fatal("hybrid candidate query/gate contract changed")
+	}
+	maxK := publicV3TopK[len(publicV3TopK)-1]
+	for _, query := range candidate.Queries {
+		if len(query.Results) > maxK {
+			t.Fatalf("candidate query %q returned %d results, max top_k is %d",
+				query.ID, len(query.Results), maxK)
+		}
+	}
+	assertRawSHA256(t, candidatePath, candidateData, publicV3HybridCandidateSHA256)
+
+	comparisonPath := filepath.Join(
+		"..", "..", "evaldata", "public", "v3",
+		"hybrid-rrf60-failing-comparison.json",
+	)
+	comparisonData, err := os.ReadFile(comparisonPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", comparisonPath, err)
+	}
+	comparison := decodeComparison(t, comparisonPath, comparisonData)
+	recomputed, err := Compare(baseline, candidate, true)
+	if err != nil {
+		t.Fatalf("compare %s and %s: %v", baselinePath, candidatePath, err)
+	}
+	recomputedData, err := json.MarshalIndent(recomputed, "", "  ")
+	if err != nil {
+		t.Fatalf("render recomputed comparison: %v", err)
+	}
+	recomputedData = append(recomputedData, '\n')
+	if !bytes.Equal(comparisonData, recomputedData) {
+		t.Fatalf("%s is not the canonical offline comparison", comparisonPath)
+	}
+	if comparison.GatesPassed ||
+		!reflect.DeepEqual(comparison.GateFailures,
+			[]string{"protected cohorts require a ranking improvement"}) {
+		t.Fatalf("%s must preserve explicit no-winner evidence", comparisonPath)
+	}
+	assertRawSHA256(t, comparisonPath, comparisonData, publicV3FailingComparisonSHA256)
+}
+
+func loadPublicDataset(t *testing.T, version string) (string, []byte, *Dataset) {
 	t.Helper()
 	path := filepath.Join("..", "..", "evaldata", "public", version, "dataset.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("read %s: %v", path, err)
 	}
 	dataset, err := Load(bytes.NewReader(data))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("decode %s: %v", path, err)
 	}
-	return data, dataset
+	return path, data, dataset
+}
+
+func loadPublicReport(t *testing.T, name string) (string, []byte, Report) {
+	t.Helper()
+	path := filepath.Join("..", "..", "evaldata", "public", "v3", name)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	report, err := DecodeReport(data)
+	if err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+	return path, data, report
+}
+
+func assertCanonicalDataset(t *testing.T, path string, data []byte, dataset *Dataset) {
+	t.Helper()
+	rendered, err := RenderDatasetJSON(dataset)
+	if err != nil {
+		t.Fatalf("render %s: %v", path, err)
+	}
+	if !bytes.Equal(data, rendered) {
+		t.Fatalf("%s is not canonical RenderDatasetJSON output", path)
+	}
+}
+
+func assertCanonicalReport(t *testing.T, path string, data []byte, report Report) {
+	t.Helper()
+	rendered, err := RenderJSON(report)
+	if err != nil {
+		t.Fatalf("render %s: %v", path, err)
+	}
+	if !bytes.Equal(data, rendered) {
+		t.Fatalf("%s is not canonical RenderJSON output", path)
+	}
+}
+
+func decodeComparison(t *testing.T, path string, data []byte) Comparison {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var comparison Comparison
+	if err := decoder.Decode(&comparison); err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		t.Fatalf("decode trailing data in %s: %v", path, err)
+	}
+	return comparison
 }
 
 func assertRawSHA256(t *testing.T, label string, data []byte, want string) {
@@ -319,6 +476,22 @@ func assertPublicV3Configuration(t *testing.T, got Configuration) {
 		got.DenseCandidateLimit != 0 ||
 		got.RRFConstant != 0 {
 		t.Fatalf("public v3 retrieval configuration changed: %#v", got)
+	}
+}
+
+func assertPublicV3HybridConfiguration(t *testing.T, got Configuration) {
+	t.Helper()
+	if got.Name != publicV3HybridCandidateName ||
+		got.FactCollection != "memory" ||
+		got.ChunkCollection != "doc_chunks" ||
+		got.FolderCollection != "doc_folders" ||
+		got.FolderTopK != 3 ||
+		got.FolderThreshold != 0.5 ||
+		!reflect.DeepEqual(got.TopK, publicV3TopK) ||
+		got.RetrievalStrategy != RetrievalHybridRRF ||
+		got.DenseCandidateLimit != publicV3DenseCandidateLimit ||
+		got.RRFConstant != publicV3RRFConstant {
+		t.Fatalf("public v3 hybrid candidate configuration changed: %#v", got)
 	}
 }
 
@@ -371,11 +544,38 @@ func cohortQueryIDs(queries []Query) map[QueryCohort][]string {
 	return result
 }
 
+func currentOrLegacyFactCount(points []FixturePoint) int {
+	count := 0
+	for _, point := range points {
+		state, exists := point.Payload["lifecycle_state"]
+		if !exists || state == string("current") {
+			count++
+		}
+	}
+	return count
+}
+
+func appendExpectedAndForbiddenIDs(query Query) []string {
+	result := make([]string, 0, len(query.Expected)+len(query.ForbiddenIDs))
+	for _, expected := range query.Expected {
+		result = append(result, expected.ID)
+	}
+	return append(result, query.ForbiddenIDs...)
+}
+
 func carriedQueryContract(query Query) Query {
 	query.Vector = nil
 	query.Cohorts = nil
 	query.cohortsPresent = false
 	return query
+}
+
+func sequentialPointIDs(prefix string, count int) []string {
+	result := make([]string, count)
+	for i := range result {
+		result[i] = fmt.Sprintf("%s%012d", prefix, i+1)
+	}
+	return result
 }
 
 func assertExtraPointIDs(
