@@ -434,15 +434,11 @@ func TestLoadEmbeddingIdentityDefaults(t *testing.T) {
 }
 
 func TestLoadEmbeddingInputProfile(t *testing.T) {
-	t.Run("supported", func(t *testing.T) {
+	t.Run("non-legacy profile is eval-only", func(t *testing.T) {
 		setSecureTestEnv(t)
 		t.Setenv("EMBED_INPUT_PROFILE", string(embeddings.MultilingualE5V1))
-		cfg, err := Load()
-		if err != nil {
-			t.Fatalf("Load() error = %v", err)
-		}
-		if cfg.EmbedInputProfile != embeddings.MultilingualE5V1 {
-			t.Fatalf("EmbedInputProfile = %q", cfg.EmbedInputProfile)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "production runtime supports only") {
+			t.Fatalf("Load() error = %v, want production profile rejection", err)
 		}
 	})
 
@@ -519,6 +515,12 @@ func TestLoadIndexerIncludesEmbeddingIdentityContract(t *testing.T) {
 	t.Setenv("EMBED_INPUT_PROFILE", "future-v9")
 	if _, err := LoadIndexer(); err == nil || !strings.Contains(err.Error(), "EMBED_INPUT_PROFILE") {
 		t.Fatalf("LoadIndexer() error = %v, want EMBED_INPUT_PROFILE validation error", err)
+	}
+
+	t.Setenv("EMBED_MODEL", defaultEmbedModelID)
+	t.Setenv("EMBED_INPUT_PROFILE", string(embeddings.MultilingualE5V1))
+	if _, err := LoadIndexer(); err == nil || !strings.Contains(err.Error(), "production runtime supports only") {
+		t.Fatalf("LoadIndexer() error = %v, want production profile rejection", err)
 	}
 }
 

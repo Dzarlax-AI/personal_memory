@@ -29,6 +29,10 @@ text without role prefixes. `multilingual-e5-v1` applies the model-specific
 query/passage roles and is valid only for
 `intfloat/multilingual-e5-small`. Changing the profile requires re-embedding
 the corpus and queries; a profile flag must never relabel existing vectors.
+The evaluator and materializer support both profiles. The production server
+and standalone indexer currently reject non-legacy profiles during
+configuration validation because their memory and RAG embedding calls remain
+raw-text paths.
 
 Queries can belong to more than one cohort. Public v3 reports these stable
 cohorts:
@@ -243,7 +247,9 @@ The decision is therefore no rollout: production remains
 `legacy-raw-v1` with vector-only retrieval. Hybrid RRF remains evaluator
 experiment machinery, not an enabled production retrieval feature. There is
 no embedding migration, deploy change, or production reindex associated with
-this benchmark.
+this benchmark. Server and standalone-indexer startup also fail closed if a
+non-legacy input profile is configured, preventing experimental identity
+metadata from being attached to raw runtime vectors.
 
 ## Private live evaluation
 

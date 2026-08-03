@@ -494,7 +494,7 @@ Configuration is read from environment variables and validated at startup. Inval
 | `EMBED_URL` | `http://memory-embeddings:80` | TEI base URL. |
 | `EMBED_MODEL` | `intfloat/multilingual-e5-small` | Expected TEI model ID; passed to both TEI and the application by Compose. |
 | `EMBED_MODEL_REVISION` | pinned commit | Expected immutable 40-character Hub commit; mutable branches such as `main` are rejected. |
-| `EMBED_INPUT_PROFILE` | `legacy-raw-v1` | Versioned text transformation applied before embedding. `multilingual-e5-v1` requires the multilingual E5 model and a controlled re-embedding; it is not the production default. |
+| `EMBED_INPUT_PROFILE` | `legacy-raw-v1` | Versioned text transformation applied before embedding. The server and standalone indexer currently reject non-legacy profiles; `multilingual-e5-v1` is eval/materialization-only. |
 | `ADOPT_EXISTING_EMBEDDING_IDENTITY` | `false` | One-start bootstrap for verified non-empty collections that predate identity metadata. Never overrides a mismatch. |
 
 ### Memory behavior

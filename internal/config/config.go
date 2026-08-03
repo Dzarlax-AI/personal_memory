@@ -392,6 +392,12 @@ func (c *Config) validateIndexerSettings(requireEnabled bool) error {
 	if err := embeddings.ValidateInputProfile(c.EmbedInputProfile, c.EmbedModelID); err != nil {
 		return fmt.Errorf("EMBED_INPUT_PROFILE: %w", err)
 	}
+	if c.EmbedInputProfile != embeddings.LegacyRawV1 {
+		return fmt.Errorf(
+			"EMBED_INPUT_PROFILE: production runtime supports only %q until purpose-aware embedding is wired through every memory and RAG path",
+			embeddings.LegacyRawV1,
+		)
+	}
 	if requireEnabled && !c.EnableRAG {
 		return fmt.Errorf("ENABLE_RAG must be true for the standalone indexer")
 	}

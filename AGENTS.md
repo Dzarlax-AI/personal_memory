@@ -143,7 +143,7 @@ The Qdrant client unmarshals `id` into `interface{}` and converts to string with
 | `EMBED_URL` | `http://memory-embeddings:80` | TEI endpoint |
 | `EMBED_MODEL` | `intfloat/multilingual-e5-small` | Expected TEI model ID |
 | `EMBED_MODEL_REVISION` | pinned commit | Immutable 40-character model commit |
-| `EMBED_INPUT_PROFILE` | `legacy-raw-v1` | Versioned embedding input transformation. `multilingual-e5-v1` requires the multilingual E5 model and re-embedding; it is not the production default. |
+| `EMBED_INPUT_PROFILE` | `legacy-raw-v1` | Versioned embedding input transformation. The server and standalone indexer currently reject non-legacy profiles; `multilingual-e5-v1` is eval/materialization-only. |
 | `ADOPT_EXISTING_EMBEDDING_IDENTITY` | `false` | One-start binding for verified legacy collections without identity metadata; never overrides mismatch |
 | `ENABLE_TODOIST` | `false` | Enable Todoist MCP server |
 | `ENABLE_VIZ` | `false` | Enable visualization dashboard |
@@ -203,7 +203,7 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - Verifies configured model ID/revision against TEI `/info`, including dtype, pooling, and probe vector size
 - Preflights every active collection before any metadata write; non-empty legacy collections require one-shot explicit adoption
 - Stored mismatches always fail startup and cannot be overridden by the adoption flag
-- Embedding identity includes the versioned input profile. Production remains `legacy-raw-v1`; changing to `multilingual-e5-v1` requires a controlled re-embedding and a separately approved rollout.
+- Embedding identity includes the versioned input profile. The server and standalone indexer fail configuration validation for non-legacy profiles until purpose-aware embedding is wired through every runtime memory/RAG path; `multilingual-e5-v1` remains available to eval/materialization only.
 
 ### eval and retrieval
 - `cmd/eval-memory` supports deterministic precomputed `fixture`, TEI-backed `tei-fixture`, and read-only `live` sources, plus strict schema-v3 materialization with mode-`0600` output.
