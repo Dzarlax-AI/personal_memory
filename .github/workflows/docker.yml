@@ -106,47 +106,43 @@ jobs:
         run: make eval-public
         env:
           QDRANT_TEST_URL: http://127.0.0.1:6333
-      - name: Publish lifecycle evaluation summary
+      - name: Publish public retrieval evaluation summary
         if: always()
         shell: bash
         run: |
           {
-            echo "## Public lifecycle evaluation"
+            echo "## Public retrieval evaluation"
             echo
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if ! jq -e '
-            type == "object" and
-            .schema_version == 2 and
-            (.gates_passed | type == "boolean") and
-            (.lifecycle | type == "object") and
-            (.lifecycle.aggregate | type == "object") and
-            (.lifecycle.transitions | type == "array")
-          ' eval-results/public.json >/dev/null 2>&1; then
-            {
-              echo "The lifecycle report is missing or invalid. See the evaluation step and uploaded artifacts."
-              echo
-              echo "| Gates | Checks | Violations | Canonical checks | Canonical violations | Transitions | Transition failures |"
-              echo "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"
-              echo "| unavailable | — | — | — | — | — | — |"
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
+          {
+            echo "| Replay | Dataset gates | Lifecycle checks | Lifecycle violations | Canonical violations |"
+            echo "| --- | --- | ---: | ---: | ---: |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-          gates=$(jq -r 'if .gates_passed == true then "passed" elif .gates_passed == false then "failed" else "unavailable" end' eval-results/public.json)
-          checks=$(jq -r '.lifecycle.aggregate.checks // "—"' eval-results/public.json)
-          violations=$(jq -r '.lifecycle.aggregate.violations // "—"' eval-results/public.json)
-          canonical_checks=$(jq -r '.lifecycle.aggregate.canonical_preference_checks // "—"' eval-results/public.json)
-          canonical_violations=$(jq -r '.lifecycle.aggregate.canonical_preference_violations // "—"' eval-results/public.json)
-          transitions=$(jq -r '(.lifecycle.transitions // []) | length' eval-results/public.json)
-          transition_failures=$(jq -r '[.lifecycle.transitions[]? | select(.passed != true)] | length' eval-results/public.json)
+          for replay in baseline hybrid-rrf60; do
+            report="eval-results/public-v3-${replay}.json"
+            if ! jq -e '
+              type == "object" and
+              .schema_version == 3 and
+              (.gates_passed | type == "boolean") and
+              (.lifecycle | type == "object") and
+              (.lifecycle.aggregate | type == "object") and
+              (.lifecycle.transitions | type == "array")
+            ' "$report" >/dev/null 2>&1; then
+              echo "| ${replay} | unavailable | — | — | — |" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            gates=$(jq -r 'if .gates_passed == true then "passed" elif .gates_passed == false then "failed" else "unavailable" end' "$report")
+            checks=$(jq -r '.lifecycle.aggregate.checks // "—"' "$report")
+            violations=$(jq -r '.lifecycle.aggregate.violations // "—"' "$report")
+            canonical_violations=$(jq -r '.lifecycle.aggregate.canonical_preference_violations // "—"' "$report")
+            echo "| ${replay} | ${gates} | ${checks} | ${violations} | ${canonical_violations} |" >> "$GITHUB_STEP_SUMMARY"
+          done
 
           {
-            echo "| Gates | Checks | Violations | Canonical checks | Canonical violations | Transitions | Transition failures |"
-            echo "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"
-            echo "| ${gates} | ${checks} | ${violations} | ${canonical_checks} | ${canonical_violations} | ${transitions} | ${transition_failures} |"
             echo
-            echo "The complete JSON, Markdown, and baseline comparison reports are attached as the \`retrieval-evaluation\` artifact."
+            echo "The evaluation step byte-compares both JSON replays with pinned evidence. Generated JSON and Markdown, plus the pinned no-winner comparison, are attached as the \`retrieval-evaluation\` artifact."
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload retrieval evaluation report
         if: always()
@@ -154,9 +150,11 @@ jobs:
         with:
           name: retrieval-evaluation
           path: |
-            eval-results/public.json
-            eval-results/public.md
-            eval-results/comparison.json
+            eval-results/public-v3-baseline.json
+            eval-results/public-v3-baseline.md
+            eval-results/public-v3-hybrid-rrf60.json
+            eval-results/public-v3-hybrid-rrf60.md
+            evaldata/public/v3/hybrid-rrf60-failing-comparison.json
           if-no-files-found: warn
           retention-days: 14
 

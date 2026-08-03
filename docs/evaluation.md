@@ -1,170 +1,291 @@
 # Memory evaluation
 
-`cmd/eval-memory` answers two different questions:
+`cmd/eval-memory` evaluates retrieval ranking and lifecycle presentation as
+separate concerns. A semantically relevant obsolete fact can rank highly and
+still need to be suppressed for current context. Canonical preference is also
+reported separately from MRR and nDCG so authority is not mistaken for
+semantic relevance.
 
-1. Did retrieval return the semantically relevant facts or document chunks?
-2. Did lifecycle policy present each fact safely for the requested intent?
+The current public contract is `evaldata/public/v3/`. Public v1 and v2 remain
+checked in as historical compatibility artifacts; CI does not use them as the
+current baseline.
 
-The evaluator keeps those answers separate. A relevant obsolete fact can have a
-high vector score and still be correctly suppressed for current context.
-Likewise, canonical preference is reported independently from MRR and nDCG so
-an authority decision is not disguised as semantic relevance.
+## Schema v3 experiment identity
 
-## Choose an intent
+A schema-v3 dataset and report identify an experiment with all of the
+following:
 
-Schema-v2 fact queries declare one of four intents:
+- `schema_version` and `dataset_version`;
+- the complete embedding identity: provider, model ID, immutable revision,
+  dtype, pooling, vector size, and input profile;
+- the named retrieval configuration: logical collection names, folder
+  settings, evaluated `top_k`, retrieval strategy, dense candidate limit, and
+  RRF constant;
+- the run mode: `fixture`, `tei-fixture`, or `live`;
+- per-query cohort membership and deterministic cohort aggregates.
+
+The input profile is part of vector identity. `legacy-raw-v1` sends the stored
+text without role prefixes. `multilingual-e5-v1` applies the model-specific
+query/passage roles and is valid only for
+`intfloat/multilingual-e5-small`. Changing the profile requires re-embedding
+the corpus and queries; a profile flag must never relabel existing vectors.
+
+Queries can belong to more than one cohort. Public v3 reports these stable
+cohorts:
+
+| Cohort | Purpose |
+| --- | --- |
+| `exact-name` | Exact names and filenames that lexical retrieval should protect. |
+| `identifier-path` | UUIDs, cluster names, and path-like identifiers. |
+| `general-semantic` | Ordinary semantic retrieval coverage. |
+| `lifecycle` | Retrieval cases with lifecycle presentation expectations. |
+| `multilingual` | Cross-language and non-English retrieval. |
+
+`exact-name` and `identifier-path` are protected comparison cohorts.
+`general-semantic`, `lifecycle`, and `multilingual` remain visible for
+diagnosis and aggregate scoring.
+
+## Lifecycle intents
+
+Fact queries declare one of four intents:
 
 | Intent | Use it when | Lifecycle presentation |
 | --- | --- | --- |
-| `current` | Building current model context | Include valid, unexpired current facts; suppress historical, superseded, disputed, invalid, and expired facts. An ordinary current fact is demoted when a valid canonical current candidate is present. |
-| `history` | Inspecting how facts changed | Include valid, unexpired current, historical, and superseded facts with their state visible. Disputed candidates remain uncertain. |
-| `as_of` | Inspecting state at a fixed date | Apply history-style presentation and evaluate `valid_until` at the query's required `as_of` date. |
-| `uncertainty` | Reviewing unresolved alternatives | Keep each valid, unexpired disputed candidate visible as uncertain; do not choose a winner. |
+| `current` | Building current model context | Include valid, unexpired current facts; suppress historical, superseded, disputed, invalid, and expired facts. Demote an ordinary current fact when a valid canonical current candidate is present. |
+| `history` | Inspecting how facts changed | Include valid, unexpired current, historical, and superseded facts with their state visible. Keep disputed candidates uncertain. |
+| `as_of` | Inspecting state at a fixed date | Apply history-style presentation and evaluate `valid_until` at the required `as_of` date. |
+| `uncertainty` | Reviewing unresolved alternatives | Keep each valid, unexpired disputed candidate visible without choosing a winner. |
 
-There is currently no `valid_from` field. `as_of` can therefore prove that a
-fact had expired by the query date, but it cannot prove that the fact already
-existed on that date. `verified_at` records verification time; it is not a
-validity start and the evaluator never treats it as one.
+There is no `valid_from` field. `as_of` can prove that a fact had expired by
+the query date, but cannot prove that it already existed then. `verified_at`
+records verification time and is not treated as a validity start.
 
 Document queries support current intent only and do not use lifecycle
 expectations.
 
-## Read lifecycle results
-
-Each fact candidate reports its normalized state, whether it is canonical,
-whether it is expired at the reference date, its presentation decision, stable
-reason codes, and whether its explicit lifecycle metadata is valid.
-
-The decisions are:
-
-- `include`: present normally;
-- `suppress`: exclude from the requested view;
-- `demote`: retain, but below a stronger current authority;
-- `uncertain`: retain without selecting a winner.
-
-Presentation reason codes are deliberately closed and non-sensitive:
-`current_truth`, `canonical_preference`, `current_context`, `historical`,
-`historical_context`, `superseded`, `superseded_context`, `disputed`,
-`invalid_lifecycle`, and `expired`.
+Each fact candidate reports its normalized state, canonical flag, expiry,
+presentation decision, stable reason codes, and explicit-metadata validity.
+The decisions are `include`, `suppress`, `demote`, and `uncertain`.
 
 Transition scenarios report `transition_valid`, `source_invalid`,
-`target_invalid`, or `transition_invalid`. Public v2 covers the complete
-16-case source→target matrix across `current`, `historical`, `superseded`, and
-`disputed`, including all four idempotent cases. Four additional cases reject
-canonical historical metadata, superseded metadata without `superseded_by`,
-current metadata with `superseded_by`, and self-references.
+`target_invalid`, or `transition_invalid`. Public v3 retains the complete
+16-case source-to-target matrix across `current`, `historical`, `superseded`,
+and `disputed`, plus invalid-metadata cases.
 
-## Metrics and the blocking gate
+## Conservative gates
 
-Reports keep four metric groups distinct:
+Dataset gates independently enforce minimum Hit@K, MRR, nDCG@K, retrieval
+invariants, lifecycle decisions, canonical preference, and transition
+expectations.
 
-- relevance: Hit@K, MRR, and nDCG@K;
-- lifecycle: declared candidate checks and violations;
-- canonical preference: ordinary-current demotion checks and violations;
-- transitions: expected validity and reason-code checks for each scenario.
+Schema-v3 comparisons add a conservative candidate gate:
 
-`forbid_invariant_violations` blocks forbidden result IDs and other retrieval
-invariant failures. `forbid_lifecycle_violations` blocks mismatched lifecycle
-decisions, states, reason codes, canonical preference behavior, and transition
-expectations. Minimum Hit@K, MRR, and nDCG@K gates continue to apply
-independently. `make eval-public` compares the candidate with the checked-in
-baseline and uses `--enforce-gates`, so any blocking gate makes the command
-fail.
+- the candidate must pass its dataset gates;
+- aggregate ranking metrics must not regress;
+- aggregate invariant violations and lifecycle violations must remain zero and
+  must not regress;
+- neither protected cohort may regress on MRR, Hit@K, nDCG@K, or invariant
+  violations;
+- at least one ranking metric must improve in at least one protected cohort.
 
-## Run the public evaluation
+This gate deliberately rejects a candidate that improves only an aggregate or
+an exploratory cohort. `--enforce-gates` returns a failing exit for that
+result; it must not be disabled to manufacture a winner.
 
-The checked-in v2 dataset is fully synthetic: payload text, paths, point IDs,
-vectors, and embedding identity are constructed for evaluation. The vectors
-are not TEI output, so the public lifecycle gate needs Qdrant but no TEI
-service.
+## Run modes
 
-Start a dedicated local Qdrant, then run:
+| Source | Corpus and query vectors | Qdrant behavior | Intended use |
+| --- | --- | --- | --- |
+| `fixture` | Uses vectors already in the dataset. | Creates uniquely named temporary `eval_*` collections, seeds them, evaluates them, and deletes only those collections. | Deterministic replay without TEI. |
+| `tei-fixture` | Re-embeds the synthetic corpus and queries with the declared profile. | Uses the same isolated temporary-collection lifecycle as fixture mode. | Model/profile experiments and diagnostic timing. |
+| `live` | Uses stored collection vectors and embeds only queries that omit vectors. | Read-only access to the logical collections named in the dataset. It does not create, upsert, delete, or increment recall counters. | Private supplementary evaluation against an existing service. |
+
+Use a dedicated local Qdrant for both fixture modes. Never point them at
+production or a shared memory service. A hard kill can leave a uniquely named
+`eval_*` collection; inspect the collection list and remove only the exact
+leaked evaluation collection.
+
+Store private datasets and generated reports under `evaldata/private/` and
+`eval-results/`. Both are ignored by Git. Production facts, paths, point IDs,
+credentials, and private vectors must never enter public fixtures, baselines,
+CI artifacts, or commits.
+
+## Deterministic public v3 CI replay
+
+Start an isolated Qdrant and run:
 
 ```bash
-make eval-public
+make eval-public QDRANT_TEST_URL=http://127.0.0.1:6333
 ```
 
-Equivalent direct invocation:
+The target runs two `source=fixture` rankings:
+
+1. `public-v3-legacy-raw-vector-only`, byte-compared with
+   `evaldata/public/v3/baseline.json`;
+2. `public-v3-legacy-raw-hybrid-rrf60-candidate`, with a dense candidate limit
+   of 40 and RRF constant 60, byte-compared with
+   `evaldata/public/v3/hybrid-rrf60-candidate.json`.
+
+Generated JSON and Markdown are written under `eval-results/`. Fixture reports
+omit timestamps, temporary collection names, and timing, so canonical JSON is
+byte reproducible. CI starts only Qdrant; it does not start TEI, download a
+model, or require a GPU.
+
+The pinned
+`evaldata/public/v3/hybrid-rrf60-failing-comparison.json` is the separately
+verified cross-configuration comparison. It records the expected conservative
+gate failure and is not used as a passing ranking target.
+
+Equivalent direct commands are:
 
 ```bash
 go run ./cmd/eval-memory run \
   --source fixture \
-  --dataset evaldata/public/v2/dataset.json \
+  --dataset evaldata/public/v3/dataset.json \
   --qdrant-url http://127.0.0.1:6333 \
-  --json eval-results/public.json \
-  --markdown eval-results/public.md
+  --json eval-results/public-v3-baseline.json \
+  --markdown eval-results/public-v3-baseline.md
+cmp evaldata/public/v3/baseline.json \
+  eval-results/public-v3-baseline.json
 
-go run ./cmd/eval-memory compare \
-  --baseline evaldata/public/v2/baseline.json \
-  --candidate eval-results/public.json \
-  --json eval-results/comparison.json \
-  --enforce-gates
+go run ./cmd/eval-memory run \
+  --source fixture \
+  --dataset evaldata/public/v3/dataset.json \
+  --qdrant-url http://127.0.0.1:6333 \
+  --configuration-name public-v3-legacy-raw-hybrid-rrf60-candidate \
+  --retrieval-strategy hybrid-rrf \
+  --dense-candidate-limit 40 \
+  --rrf-constant 60 \
+  --json eval-results/public-v3-hybrid-rrf60.json \
+  --markdown eval-results/public-v3-hybrid-rrf60.md
+cmp evaldata/public/v3/hybrid-rrf60-candidate.json \
+  eval-results/public-v3-hybrid-rrf60.json
 ```
 
-Fixture mode validates the complete dataset before contacting Qdrant. It
-creates three unique collections whose names begin with `eval_`, seeds the
-synthetic points, evaluates every query, and deletes only collections created
-by that run. It never mutates the logical `memory`, `doc_chunks`, or
-`doc_folders` collections.
+## Materialize vectors with TEI
 
-Use a local test Qdrant for fixture mode. Never point it at production or a
-shared memory service. A hard kill can leave a uniquely named `eval_*`
-collection behind; inspect the collection list and remove only the exact leaked
-test collection.
+`materialize` creates a reusable schema-v3 fixture by replacing every fact,
+chunk, folder, and query vector with output from a verified TEI instance:
 
-## Run private supplementary cases
+```bash
+go run ./cmd/eval-memory materialize \
+  --dataset evaldata/public/v3/dataset.json \
+  --embed-url http://127.0.0.1:8080 \
+  --embed-model intfloat/multilingual-e5-small \
+  --input-profile multilingual-e5-v1 \
+  --output evaldata/private/public-v3-e5-materialized.json
+```
 
-Private v2 datasets can supplement the public synthetic scenarios with
-user-specific phrasing and expected IDs. Store them under
-`evaldata/private/`; that directory and `eval-results/` are ignored by Git.
-Production facts, document paths, point IDs, and credentials must never enter
-public fixtures, baselines, CI artifacts, or commits.
+The command verifies TEI model ID, immutable revision, dtype, and pooling
+before embedding. It writes atomically with mode `0600`, refuses to overwrite
+the input path, validates the result, and does not echo provider response
+bodies. Keep the output private even when its source text is synthetic: it is
+large, environment-specific benchmark material and is not a public baseline
+until it completes the rebaseline review.
 
-Live mode is read-only and searches the logical collection names declared by
-the dataset. It does not create collections, upsert points, delete data, or
-increment recall counters:
+Run a materialized dataset with `source=fixture`; `tei-fixture` would embed it
+again. For one-off model/profile experiments, use `tei-fixture` directly:
+
+```bash
+go run ./cmd/eval-memory run \
+  --source tei-fixture \
+  --dataset evaldata/public/v3/dataset.json \
+  --qdrant-url http://127.0.0.1:6333 \
+  --embed-url http://127.0.0.1:8080 \
+  --input-profile multilingual-e5-v1 \
+  --configuration-name v3-c-multilingual-e5-vector-only \
+  --json eval-results/v3-c.json \
+  --markdown eval-results/v3-c.md
+```
+
+## Four-configuration experiment
+
+Use one pinned TEI instance, one isolated Qdrant, the same dataset revision,
+and these four configurations:
+
+| ID | Input profile | Strategy | Candidate settings |
+| --- | --- | --- | --- |
+| A | `legacy-raw-v1` | `vector-only` | Dataset defaults. |
+| B | `legacy-raw-v1` | `hybrid-rrf` | `dense-candidate-limit=40`, `rrf-constant=60`. |
+| C | `multilingual-e5-v1` | `vector-only` | Re-embed corpus and queries. |
+| D | `multilingual-e5-v1` | `hybrid-rrf` | Re-embed corpus and queries; limit 40, RRF 60. |
+
+Run A through D with `source=tei-fixture`, distinct stable
+`--configuration-name` values, and matching output paths. B changes only the
+retrieval flags. C changes `--input-profile` and therefore re-embeds. D applies
+both sets of overrides. Compare B, C, and D against A with
+`--enforce-gates`. Do not compare different dataset versions, model
+identities, or run modes.
+
+For latency diagnosis, run each relevant configuration repeatedly on the same
+idle host and report the per-run distributions. Timing is informational:
+environment load, Qdrant placement, TEI placement, and corpus size all affect
+it. There is no automatic latency threshold and ranking gates never infer one.
+
+## Bounded public v3 decision
+
+Public v3.1.0 contains 48 facts, including 41 current or legacy retrieval
+candidates, plus 41 chunks and 41 folder summaries. This makes each retrieval
+pool exceed the candidate limit of 40 while keeping the fixture bounded.
+
+The four-configuration benchmark found no qualifying candidate:
+
+- legacy raw plus hybrid RRF produced a small aggregate improvement, but
+  exact-name and identifier-path protected cohorts had zero ranking
+  improvement, so the conservative comparison gate failed;
+- both `multilingual-e5-v1` configurations regressed aggregate ranking against
+  the legacy raw baseline;
+- in the same-host five-run diagnostic, hybrid search p95 was roughly twice
+  vector-only search p95. This is evidence for that emulated host and fixture,
+  not a universal production latency claim.
+
+The decision is therefore no rollout: production remains
+`legacy-raw-v1` with vector-only retrieval. Hybrid RRF remains evaluator
+experiment machinery, not an enabled production retrieval feature. There is
+no embedding migration, deploy change, or production reindex associated with
+this benchmark.
+
+## Private live evaluation
+
+Live mode is for private supplementary cases:
 
 ```bash
 go run ./cmd/eval-memory run \
   --source live \
-  --dataset evaldata/private/my-v2-live-set.json \
+  --dataset evaldata/private/my-v3-live-set.json \
   --qdrant-url http://127.0.0.1:6333 \
+  --embed-url http://127.0.0.1:8080 \
+  --documents-root /root/documents/personal \
   --json eval-results/private.json \
   --markdown eval-results/private.md
 ```
 
-Private live queries may omit vectors when `--embed-url` is supplied. The CLI
-checks TEI `/info` and rejects model ID, revision, dtype, or pooling mismatches
-before embedding.
+The CLI checks TEI identity before embedding missing query vectors. Keep live
+reports private because result IDs and retrieval ordering can reveal details
+about the indexed corpus.
 
-## Schema and report compatibility
+## Version and rebaseline public v3
 
-Dataset schema v1 remains accepted and emits report schema v1 exactly as
-before. The immutable `evaldata/public/v1/dataset.json` and
-`evaldata/public/v1/baseline.json` files are retained as historical,
-byte-compatibility artifacts.
+Treat the dataset and all pinned evidence as one reviewed unit:
 
-Dataset schema v2 adds intents, fixed-date `as_of`, lifecycle expectations,
-transition scenarios, and the lifecycle gate. It emits report schema v2 with a
-required lifecycle section. Comparisons require compatible dataset/report
-identity; a v1 baseline is not a substitute for the v2 lifecycle baseline.
+1. Bump `dataset_version` for any semantic corpus, query, relevance, cohort,
+   gate, identity, or retrieval-configuration change.
+2. Keep public text, paths, point IDs, and vectors synthetic.
+3. Record the full embedding and configuration identity. Never label
+   constructed vectors as TEI output.
+4. Review every expected ID and grade, forbidden ID, cohort assignment,
+   lifecycle expectation, transition, and gate.
+5. If vectors change, materialize them privately with the pinned TEI, confirm
+   the output is mode `0600`, and review before copying any approved synthetic
+   artifact into the public version directory.
+6. Run each fixture configuration twice against an isolated Qdrant and
+   byte-compare JSON and Markdown between runs.
+7. Recompute cross-configuration comparisons with `--enforce-gates`; preserve
+   a failing comparison when the evidence says there is no winner.
+8. Verify Qdrant has no leaked `eval_*` collections.
+9. Replace pinned reports only after review, update their contract hashes and
+   tests, then run `make eval-public`, `go test ./...`, and `go vet ./...`.
 
-Canonical reports omit timestamps, physical temporary collection names, and
-latency so independent fixture runs are byte reproducible.
-
-## Update the public dataset
-
-Treat a public dataset and its baseline as one reviewed unit:
-
-1. Bump `dataset_version` for semantic corpus or relevance changes.
-2. Keep all public text, paths, IDs, and vectors synthetic.
-3. Record the complete embedding identity; never label constructed vectors as
-   model output.
-4. Review every expected ID, grade, forbidden ID, lifecycle decision, state,
-   reason code, transition result, and gate change.
-5. Run fixture mode twice against a dedicated local Qdrant into separate JSON
-   and Markdown files.
-6. Byte-compare both JSON files and both Markdown files.
-7. Verify the local Qdrant has no leaked `eval_*` collections.
-8. Replace the checked-in baseline with the freshly generated report.
-9. Run `make eval-public`, the Go test suite, and `go vet ./...`.
+Schema v1 and v2 remain accepted. Their immutable public datasets and
+baselines document historical behavior, but neither is a substitute for a
+schema-v3 baseline or candidate.

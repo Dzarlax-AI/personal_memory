@@ -49,17 +49,25 @@ test: dev-deps vet
 QDRANT_TEST_URL ?= http://127.0.0.1:6333
 
 eval-public:
+	mkdir -p eval-results
 	go run ./cmd/eval-memory run \
 		--source fixture \
-		--dataset evaldata/public/v2/dataset.json \
+		--dataset evaldata/public/v3/dataset.json \
 		--qdrant-url $(QDRANT_TEST_URL) \
-		--json eval-results/public.json \
-		--markdown eval-results/public.md
-	go run ./cmd/eval-memory compare \
-		--baseline evaldata/public/v2/baseline.json \
-		--candidate eval-results/public.json \
-		--json eval-results/comparison.json \
-		--enforce-gates
+		--json eval-results/public-v3-baseline.json \
+		--markdown eval-results/public-v3-baseline.md
+	cmp evaldata/public/v3/baseline.json eval-results/public-v3-baseline.json
+	go run ./cmd/eval-memory run \
+		--source fixture \
+		--dataset evaldata/public/v3/dataset.json \
+		--qdrant-url $(QDRANT_TEST_URL) \
+		--configuration-name public-v3-legacy-raw-hybrid-rrf60-candidate \
+		--retrieval-strategy hybrid-rrf \
+		--dense-candidate-limit 40 \
+		--rrf-constant 60 \
+		--json eval-results/public-v3-hybrid-rrf60.json \
+		--markdown eval-results/public-v3-hybrid-rrf60.md
+	cmp evaldata/public/v3/hybrid-rrf60-candidate.json eval-results/public-v3-hybrid-rrf60.json
 
 conformance-public:
 	go run ./cmd/conformance-memory run \

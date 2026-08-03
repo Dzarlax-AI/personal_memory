@@ -54,9 +54,10 @@ func TestPublicV3DatasetPinnedContract(t *testing.T) {
 	if got := currentOrLegacyFactCount(dataset.Facts); got != 41 {
 		t.Fatalf("current/legacy fact candidate count = %d, want 41", got)
 	}
-	// These synthetic bounds prove that the candidate report really truncates
-	// facts, flat chunks, and folders at 40. They exercise the 40/60 choice on
-	// this bounded fixture only; they do not establish a universal optimum.
+	// These synthetic bounds ensure the evaluator encounters pools above the
+	// candidate limit of 40 for facts, flat chunks, and folders. They exercise
+	// the 40/60 choice on this bounded fixture only; they do not establish a
+	// universal optimum.
 	if currentOrLegacyFactCount(dataset.Facts) <= publicV3DenseCandidateLimit ||
 		len(dataset.Chunks) <= publicV3DenseCandidateLimit ||
 		len(dataset.Folders) <= publicV3DenseCandidateLimit {
