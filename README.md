@@ -458,6 +458,7 @@ The manifest is lifecycle-only and mode `0600`, but it must still be stored as o
 cmd/
   server/                 HTTP and MCP server entrypoint
   indexer/                standalone RAG indexer
+  eval-memory/            retrieval evaluation, comparison, and materialization CLI
   migrate-memory-ids/     namespace-aware ID migration
   migrate-memory-lifecycle/ explicit lifecycle migration and rollback
 internal/
@@ -493,6 +494,7 @@ Configuration is read from environment variables and validated at startup. Inval
 | `EMBED_URL` | `http://memory-embeddings:80` | TEI base URL. |
 | `EMBED_MODEL` | `intfloat/multilingual-e5-small` | Expected TEI model ID; passed to both TEI and the application by Compose. |
 | `EMBED_MODEL_REVISION` | pinned commit | Expected immutable 40-character Hub commit; mutable branches such as `main` are rejected. |
+| `EMBED_INPUT_PROFILE` | `legacy-raw-v1` | Versioned text transformation applied before embedding. The server and standalone indexer currently reject non-legacy profiles; `multilingual-e5-v1` is eval/materialization-only. |
 | `ADOPT_EXISTING_EMBEDDING_IDENTITY` | `false` | One-start bootstrap for verified non-empty collections that predate identity metadata. Never overrides a mismatch. |
 
 ### Memory behavior
@@ -572,12 +574,25 @@ The dashboard is intended to sit behind Authentik ForwardAuth. After authenticat
 
 ### Retrieval evaluation
 
-The repository includes a versioned synthetic golden dataset and a Qdrant-based
-evaluation CLI for fact recall plus flat and hierarchical document search.
-Ordinary CI uses precomputed vectors and does not start TEI. Run
-`make eval-public` against a local Qdrant instance; see
-[`docs/evaluation.md`](docs/evaluation.md) for fixture, read-only live, privacy,
-baseline, and gate semantics.
+The repository includes the synthetic public v3 golden dataset and a
+Qdrant-based evaluation CLI for fact recall plus flat and hierarchical document
+search. Ordinary CI uses precomputed vectors, replays both the legacy raw
+vector-only baseline and the bounded hybrid RRF60 candidate, and byte-compares
+the generated JSON with pinned evidence. It does not start TEI or download a
+model.
+
+```bash
+make eval-public QDRANT_TEST_URL=http://127.0.0.1:6333
+```
+
+The bounded four-configuration experiment found no candidate that passed the
+conservative comparison gate. The raw hybrid candidate made a small aggregate
+improvement but did not improve either protected cohort; both multilingual E5
+role-profile candidates regressed aggregate ranking. Production therefore
+remains `legacy-raw-v1` with vector-only retrieval. Hybrid RRF is evaluation
+machinery only and is not an enabled production feature. See
+[`docs/evaluation.md`](docs/evaluation.md) for fixture, `tei-fixture`, read-only
+live, materialization, privacy, versioning, timing, and gate semantics.
 
 ### Model memory conformance
 

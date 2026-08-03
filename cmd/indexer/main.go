@@ -31,6 +31,7 @@ func main() {
 	if _, err := embeddingidentity.Ensure(ctx, ec, []*qdrant.Client{qcChunks, qcFolders}, embeddingidentity.Expected{
 		ModelID:       cfg.EmbedModelID,
 		ModelRevision: cfg.EmbedModelRevision,
+		InputProfile:  cfg.EmbedInputProfile,
 	}, cfg.AdoptExistingEmbeddingIdentity); err != nil {
 		slog.Error("embedding identity verification failed", "error", err)
 		os.Exit(1)

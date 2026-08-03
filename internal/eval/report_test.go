@@ -3,6 +3,7 @@ package eval
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -42,9 +43,62 @@ func TestRenderReportIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestRenderV3ReportCanonicalizesCrossPlatformScores(t *testing.T) {
+	left := validV3ComparisonReport()
+	right := validV3ComparisonReport()
+	left.Queries[0].Results = []RetrievedItem{
+		{ID: "candidate", Score: 0.9421525},
+		{ID: "zero", Score: -0.00000004},
+	}
+	right.Queries[0].Results = []RetrievedItem{
+		{ID: "candidate", Score: 0.94215244},
+		{ID: "zero", Score: 0.00000004},
+	}
+
+	leftJSON, err := RenderJSON(left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightJSON, err := RenderJSON(right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(leftJSON, rightJSON) {
+		t.Fatalf("cross-platform score noise changed canonical report bytes\nleft:\n%s\nright:\n%s", leftJSON, rightJSON)
+	}
+	if left.Queries[0].Results[0].Score != 0.9421525 {
+		t.Fatal("RenderJSON mutated the caller's report")
+	}
+}
+
+func TestDecodeReportRejectsDiagnosticsOnOldSchema(t *testing.T) {
+	data, err := os.ReadFile("../../evaldata/public/v1/baseline.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	document["diagnostics"] = map[string]any{
+		"query": map[string]any{
+			"total":  map[string]any{"count": 0, "min_us": 0, "p50_us": 0, "p95_us": 0, "max_us": 0},
+			"embed":  map[string]any{"count": 0, "min_us": 0, "p50_us": 0, "p95_us": 0, "max_us": 0},
+			"search": map[string]any{"count": 0, "min_us": 0, "p50_us": 0, "p95_us": 0, "max_us": 0},
+		},
+	}
+	tampered, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeReport(tampered); err == nil || !strings.Contains(err.Error(), "schema_version 3") {
+		t.Fatalf("DecodeReport() error = %v", err)
+	}
+}
+
 func TestRenderMarkdownEscapesLifecycleCandidateFields(t *testing.T) {
 	report := Report{
-		SchemaVersion: CurrentReportSchemaVersion,
+		SchemaVersion: LifecycleSchemaVersion,
 		Lifecycle:     &LifecycleReport{Aggregate: LifecycleAggregateMetrics{}, Transitions: []TransitionReport{}},
 		Queries: []QueryReport{{
 			ID: "query|id", Target: "facts", Mode: "flat",
@@ -82,7 +136,7 @@ func TestDecodeReportRejectsTrailingJSON(t *testing.T) {
 
 func TestRenderAndDecodeV2ReportAreDeterministic(t *testing.T) {
 	report := Report{
-		SchemaVersion: CurrentReportSchemaVersion, DatasetVersion: "2.0.0",
+		SchemaVersion: LifecycleSchemaVersion, DatasetVersion: "2.0.0",
 		TopK: []int{1},
 		Queries: []QueryReport{{
 			ID: "q", Target: "facts", Mode: "flat", Results: []RetrievedItem{},
@@ -119,7 +173,7 @@ func TestRenderAndDecodeV2ReportAreDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decoded.SchemaVersion != CurrentReportSchemaVersion || decoded.Lifecycle == nil {
+	if decoded.SchemaVersion != LifecycleSchemaVersion || decoded.Lifecycle == nil {
 		t.Fatalf("decoded report = %#v", decoded)
 	}
 	if bytes.Index(first, []byte(`"id": "1"`)) > bytes.Index(first, []byte(`"id": "99"`)) {
@@ -200,7 +254,7 @@ func TestDecodeReportEnforcesLifecycleSectionBySchema(t *testing.T) {
 
 func TestDecodeReportRejectsUnknownLifecycleReasonCode(t *testing.T) {
 	report := Report{
-		SchemaVersion: CurrentReportSchemaVersion, DatasetVersion: "2",
+		SchemaVersion: LifecycleSchemaVersion, DatasetVersion: "2",
 		Queries: []QueryReport{{
 			ID: "q", Target: "facts", Mode: "flat",
 			Lifecycle: &QueryLifecycleReport{
@@ -552,7 +606,7 @@ func assertReportDecodeFails(t *testing.T, document map[string]any, field string
 
 func validV2LifecycleReport() Report {
 	return Report{
-		SchemaVersion:  CurrentReportSchemaVersion,
+		SchemaVersion:  LifecycleSchemaVersion,
 		DatasetVersion: "2",
 		Queries: []QueryReport{{
 			ID: "q", Target: "facts", Mode: "flat",

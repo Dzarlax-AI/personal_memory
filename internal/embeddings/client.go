@@ -102,19 +102,40 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 	return vecs[0], nil
 }
 
+// EmbedWithPurpose embeds raw literal text using a versioned, purpose-aware
+// input profile. The profile owns all model-specific prefixes.
+func (c *Client) EmbedWithPurpose(ctx context.Context, rawText string, purpose Purpose, profile InputProfile, modelID string) ([]float32, error) {
+	transformed, err := TransformInput(rawText, purpose, profile, modelID)
+	if err != nil {
+		return nil, err
+	}
+	vecs, err := c.embed(ctx, []string{transformed})
+	if err != nil {
+		return nil, err
+	}
+	if len(vecs) == 0 {
+		return nil, fmt.Errorf("empty embed response")
+	}
+	return vecs[0], nil
+}
+
 // EmbedBatch embeds many texts in one or more HTTP calls (chunked by
 // defaultBatchSize). Preserves input order.
 func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
 	if len(texts) == 0 {
 		return nil, nil
 	}
-	result := make([][]float32, 0, len(texts))
-	for i := 0; i < len(texts); i += defaultBatchSize {
+	return c.embedChunked(ctx, texts)
+}
+
+func (c *Client) embedChunked(ctx context.Context, inputs []string) ([][]float32, error) {
+	result := make([][]float32, 0, len(inputs))
+	for i := 0; i < len(inputs); i += defaultBatchSize {
 		end := i + defaultBatchSize
-		if end > len(texts) {
-			end = len(texts)
+		if end > len(inputs) {
+			end = len(inputs)
 		}
-		vecs, err := c.embed(ctx, texts[i:end])
+		vecs, err := c.embed(ctx, inputs[i:end])
 		if err != nil {
 			return nil, err
 		}
@@ -124,6 +145,29 @@ func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, e
 		result = append(result, vecs...)
 	}
 	return result, nil
+}
+
+// EmbedBatchWithPurpose embeds raw literal texts with the same purpose and
+// input profile, preserving input order.
+func (c *Client) EmbedBatchWithPurpose(ctx context.Context, rawTexts []string, purpose Purpose, profile InputProfile, modelID string) ([][]float32, error) {
+	if err := validatePurpose(purpose); err != nil {
+		return nil, err
+	}
+	if err := ValidateInputProfile(profile, modelID); err != nil {
+		return nil, err
+	}
+	if len(rawTexts) == 0 {
+		return nil, nil
+	}
+	transformed := make([]string, len(rawTexts))
+	for i, rawText := range rawTexts {
+		input, err := TransformInput(rawText, purpose, profile, modelID)
+		if err != nil {
+			return nil, fmt.Errorf("embedding input at index %d: %w", i, err)
+		}
+		transformed[i] = input
+	}
+	return c.embedChunked(ctx, transformed)
 }
 
 // embed POSTs one batch to TEI and returns the resulting vectors.

@@ -40,6 +40,15 @@ func (m *fakeModel) Embed(_ context.Context, text string) ([]float32, error) {
 	return m.vector, m.embedErr
 }
 
+func (m *fakeModel) EmbedWithPurpose(_ context.Context, text string, purpose embeddings.Purpose, profile embeddings.InputProfile, modelID string) ([]float32, error) {
+	transformed, err := embeddings.TransformInput(text, purpose, profile, modelID)
+	if err != nil {
+		return nil, err
+	}
+	m.probe = transformed
+	return m.vector, m.embedErr
+}
+
 type fakeCollection struct {
 	name          string
 	info          qdrant.CollectionInfo
@@ -81,11 +90,11 @@ func (c *fakeCollection) UpdateCollectionMetadata(_ context.Context, metadata ma
 }
 
 func expectedModel() Expected {
-	return Expected{ModelID: "intfloat/multilingual-e5-small", ModelRevision: testRevision}
+	return Expected{ModelID: "intfloat/multilingual-e5-small", ModelRevision: testRevision, InputProfile: embeddings.LegacyRawV1}
 }
 
 func testRecord() Record {
-	return Record{SchemaVersion: 1, Provider: "tei", ModelID: expectedModel().ModelID, ModelRevision: testRevision, ModelDType: "float32", Pooling: "mean", VectorSize: 3}
+	return Record{SchemaVersion: 1, Provider: "tei", ModelID: expectedModel().ModelID, ModelRevision: testRevision, ModelDType: "float32", Pooling: "mean", VectorSize: 3, InputProfile: embeddings.LegacyRawV1}
 }
 
 func existingCollection(name string, points uint64, metadata map[string]any) *fakeCollection {
@@ -121,6 +130,56 @@ func TestEnsureBindsEmptyLegacyCollectionAndPreservesMetadata(t *testing.T) {
 	}
 }
 
+func TestVerifyCollectionNormalizesMissingProfileToLegacyWithoutWrites(t *testing.T) {
+	record := testRecord()
+	raw := map[string]any{
+		"schema_version": record.SchemaVersion, "provider": record.Provider,
+		"model_id": record.ModelID, "model_revision": record.ModelRevision,
+		"model_dtype": record.ModelDType, "pooling": record.Pooling,
+		"vector_size": record.VectorSize,
+	}
+	collection := existingCollection("memory", 1, map[string]any{MetadataKey: raw})
+	if err := verifyCollection(context.Background(), collection, record); err != nil {
+		t.Fatal(err)
+	}
+	if collection.created != 0 || collection.updated != 0 {
+		t.Fatalf("read-only verification wrote collection: %#v", collection)
+	}
+}
+
+func TestVerifyCollectionRejectsMismatchAndMalformedWithoutWrites(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		raw  any
+	}{
+		{"mismatch", func() any {
+			record := testRecord()
+			record.InputProfile = embeddings.MultilingualE5V1
+			return record
+		}()},
+		{"empty", map[string]any{
+			"schema_version": 1, "provider": "tei", "model_id": expectedModel().ModelID,
+			"model_revision": testRevision, "model_dtype": "float32", "pooling": "mean",
+			"vector_size": 3, "input_profile": "",
+		}},
+		{"null", map[string]any{
+			"schema_version": 1, "provider": "tei", "model_id": expectedModel().ModelID,
+			"model_revision": testRevision, "model_dtype": "float32", "pooling": "mean",
+			"vector_size": 3, "input_profile": nil,
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			collection := existingCollection("memory", 1, map[string]any{MetadataKey: tt.raw})
+			if err := verifyCollection(context.Background(), collection, testRecord()); err == nil {
+				t.Fatal("verification unexpectedly succeeded")
+			}
+			if collection.created != 0 || collection.updated != 0 {
+				t.Fatalf("read-only verification wrote collection: %#v", collection)
+			}
+		})
+	}
+}
+
 func TestEnsureRequiresExplicitAdoptionForNonEmptyLegacyCollection(t *testing.T) {
 	collection := existingCollection("memory", 556, nil)
 	_, err := ensure(context.Background(), newFakeModel(), []collectionClient{collection}, expectedModel(), false)
@@ -136,6 +195,52 @@ func TestEnsureRequiresExplicitAdoptionForNonEmptyLegacyCollection(t *testing.T)
 	}
 	if collection.updated != 1 {
 		t.Fatalf("updates = %d, want 1", collection.updated)
+	}
+}
+
+func TestEnsureRejectsNonLegacyAdoptionForNonEmptyMetadataFreeCollection(t *testing.T) {
+	collection := existingCollection("memory", 556, nil)
+	expected := expectedModel()
+	expected.InputProfile = embeddings.MultilingualE5V1
+
+	_, err := ensure(context.Background(), newFakeModel(), []collectionClient{collection}, expected, true)
+	if err == nil || !strings.Contains(err.Error(), "cannot adopt") || !strings.Contains(err.Error(), "re-embed") {
+		t.Fatalf("error = %v, want safe re-embedding requirement", err)
+	}
+	if collection.created != 0 || collection.updated != 0 {
+		t.Fatal("non-legacy identity was stamped onto existing raw vectors")
+	}
+}
+
+func TestEnsureInitializesEmptyMetadataFreeCollectionWithNonLegacyProfile(t *testing.T) {
+	collection := existingCollection("memory", 0, nil)
+	expected := expectedModel()
+	expected.InputProfile = embeddings.MultilingualE5V1
+
+	record, err := ensure(context.Background(), newFakeModel(), []collectionClient{collection}, expected, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.InputProfile != embeddings.MultilingualE5V1 || collection.updated != 1 {
+		t.Fatalf("record=%#v collection=%#v", record, collection)
+	}
+}
+
+func TestEnsureNonLegacyAdoptionFailurePerformsNoEarlierWrites(t *testing.T) {
+	first := existingCollection("memory", 0, nil)
+	second := existingCollection("doc_chunks", 10, nil)
+	expected := expectedModel()
+	expected.InputProfile = embeddings.MultilingualE5V1
+
+	_, err := ensure(context.Background(), newFakeModel(), []collectionClient{first, second}, expected, true)
+	if err == nil || !strings.Contains(err.Error(), "cannot adopt") {
+		t.Fatalf("error = %v, want non-legacy adoption error", err)
+	}
+	if first.updated != 0 || first.created != 0 {
+		t.Fatal("first collection was modified before full non-legacy adoption preflight succeeded")
+	}
+	if second.updated != 0 || second.created != 0 {
+		t.Fatal("non-legacy identity was stamped onto existing vectors")
 	}
 }
 
@@ -173,6 +278,7 @@ func TestEnsureRejectsEveryIdentityMismatchEvenWithAdoption(t *testing.T) {
 		{name: "dtype", mutate: func(r *Record) { r.ModelDType = "float16" }},
 		{name: "pooling", mutate: func(r *Record) { r.Pooling = "cls" }},
 		{name: "size", mutate: func(r *Record) { r.VectorSize = 4 }},
+		{name: "input profile", mutate: func(r *Record) { r.InputProfile = embeddings.MultilingualE5V1 }},
 	}
 	for _, tt := range mutations {
 		t.Run(tt.name, func(t *testing.T) {
@@ -190,6 +296,103 @@ func TestEnsureRejectsEveryIdentityMismatchEvenWithAdoption(t *testing.T) {
 	}
 }
 
+func TestEnsureNormalizesStoredIdentityWithoutProfileAsLegacy(t *testing.T) {
+	stored := testRecord()
+	legacyMetadata := map[string]any{
+		MetadataKey: map[string]any{
+			"schema_version": stored.SchemaVersion,
+			"provider":       stored.Provider,
+			"model_id":       stored.ModelID,
+			"model_revision": stored.ModelRevision,
+			"model_dtype":    stored.ModelDType,
+			"pooling":        stored.Pooling,
+			"vector_size":    stored.VectorSize,
+		},
+	}
+	collection := existingCollection("memory", 556, legacyMetadata)
+
+	record, err := ensure(context.Background(), newFakeModel(), []collectionClient{collection}, expectedModel(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.InputProfile != embeddings.LegacyRawV1 {
+		t.Fatalf("InputProfile = %q", record.InputProfile)
+	}
+	if collection.updated != 0 || collection.created != 0 {
+		t.Fatal("normalized legacy identity caused a write")
+	}
+}
+
+func TestEnsureRejectsPresentEmptyOrNullStoredInputProfile(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile any
+	}{
+		{name: "empty string", profile: ""},
+		{name: "null", profile: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stored := testRecord()
+			raw := map[string]any{
+				"schema_version": stored.SchemaVersion,
+				"provider":       stored.Provider,
+				"model_id":       stored.ModelID,
+				"model_revision": stored.ModelRevision,
+				"model_dtype":    stored.ModelDType,
+				"pooling":        stored.Pooling,
+				"vector_size":    stored.VectorSize,
+				"input_profile":  tt.profile,
+			}
+			collection := existingCollection("memory", 556, map[string]any{MetadataKey: raw})
+
+			_, err := ensure(context.Background(), newFakeModel(), []collectionClient{collection}, expectedModel(), true)
+			if err == nil || !strings.Contains(err.Error(), "invalid embedding identity metadata") || !strings.Contains(err.Error(), "input_profile") {
+				t.Fatalf("error = %v, want malformed input_profile error", err)
+			}
+			if strings.Contains(err.Error(), "556") {
+				t.Fatalf("error leaked unrelated collection content: %v", err)
+			}
+			if collection.updated != 0 || collection.created != 0 {
+				t.Fatal("malformed identity caused a write")
+			}
+		})
+	}
+}
+
+func TestEnsureProfilesIdentityProbeAndPersistsProfile(t *testing.T) {
+	model := newFakeModel()
+	collection := &fakeCollection{name: "memory"}
+	expected := expectedModel()
+	expected.InputProfile = embeddings.MultilingualE5V1
+
+	record, err := ensure(context.Background(), model, []collectionClient{collection}, expected, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.InputProfile != embeddings.MultilingualE5V1 {
+		t.Fatalf("InputProfile = %q", record.InputProfile)
+	}
+	if model.probe != "query: "+identityProbeText {
+		t.Fatalf("probe = %q", model.probe)
+	}
+}
+
+func TestEnsureRejectsUnsupportedInputProfileBeforeCollectionWrites(t *testing.T) {
+	first := existingCollection("memory", 0, nil)
+	expected := expectedModel()
+	expected.InputProfile = embeddings.InputProfile("future-v9")
+
+	_, err := ensure(context.Background(), newFakeModel(), []collectionClient{first}, expected, true)
+	if err == nil || !strings.Contains(err.Error(), "input profile") {
+		t.Fatalf("error = %v", err)
+	}
+	if first.updated != 0 || first.created != 0 {
+		t.Fatal("invalid profile caused a collection write")
+	}
+}
+
 func TestEnsureRejectsCollectionVectorSizeMismatch(t *testing.T) {
 	collection := existingCollection("memory", 0, nil)
 	collection.info.VectorSize = 384
@@ -201,7 +404,9 @@ func TestEnsureRejectsCollectionVectorSizeMismatch(t *testing.T) {
 
 func TestEnsurePreflightFailurePerformsNoEarlierWrites(t *testing.T) {
 	first := existingCollection("memory", 0, nil)
-	second := existingCollection("doc_chunks", 1, identityMetadata(Record{SchemaVersion: 2}))
+	mismatched := testRecord()
+	mismatched.InputProfile = embeddings.MultilingualE5V1
+	second := existingCollection("doc_chunks", 1, identityMetadata(mismatched))
 	_, err := ensure(context.Background(), newFakeModel(), []collectionClient{first, second}, expectedModel(), true)
 	if err == nil {
 		t.Fatal("expected preflight error")

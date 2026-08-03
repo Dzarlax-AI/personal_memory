@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
 )
 
 const (
@@ -34,6 +36,7 @@ type Config struct {
 	EmbedURL                       string
 	EmbedModelID                   string
 	EmbedModelRevision             string
+	EmbedInputProfile              embeddings.InputProfile
 	AdoptExistingEmbeddingIdentity bool
 
 	// Memory
@@ -160,6 +163,7 @@ func Load() (*Config, error) {
 		EmbedURL:                       envOrDefault("EMBED_URL", "http://memory-embeddings:80"),
 		EmbedModelID:                   envOrDefault("EMBED_MODEL", defaultEmbedModelID),
 		EmbedModelRevision:             envOrDefault("EMBED_MODEL_REVISION", defaultEmbedModelRevision),
+		EmbedInputProfile:              embeddings.InputProfile(envOrDefault("EMBED_INPUT_PROFILE", string(embeddings.LegacyRawV1))),
 		AdoptExistingEmbeddingIdentity: adoptExistingEmbeddingIdentity,
 
 		MemoryUser:             envOrDefault("MEMORY_USER", "claude"),
@@ -235,6 +239,7 @@ func LoadIndexer() (*Config, error) {
 		EmbedURL:                       envOrDefault("EMBED_URL", "http://memory-embeddings:80"),
 		EmbedModelID:                   envOrDefault("EMBED_MODEL", defaultEmbedModelID),
 		EmbedModelRevision:             envOrDefault("EMBED_MODEL_REVISION", defaultEmbedModelRevision),
+		EmbedInputProfile:              embeddings.InputProfile(envOrDefault("EMBED_INPUT_PROFILE", string(embeddings.LegacyRawV1))),
 		AdoptExistingEmbeddingIdentity: adoptExistingEmbeddingIdentity,
 		EnableRAG:                      enableRAG,
 		RAGDocumentsDir:                envOrDefault("RAG_DOCUMENTS_DIR", "/root/documents/personal"),
@@ -382,6 +387,16 @@ func (c *Config) validateIndexerSettings(requireEnabled bool) error {
 	}
 	if !immutableModelRevisionPattern.MatchString(c.EmbedModelRevision) {
 		return fmt.Errorf("EMBED_MODEL_REVISION must be an immutable 40-character hexadecimal commit")
+	}
+	c.EmbedInputProfile = embeddings.NormalizeInputProfile(c.EmbedInputProfile)
+	if err := embeddings.ValidateInputProfile(c.EmbedInputProfile, c.EmbedModelID); err != nil {
+		return fmt.Errorf("EMBED_INPUT_PROFILE: %w", err)
+	}
+	if c.EmbedInputProfile != embeddings.LegacyRawV1 {
+		return fmt.Errorf(
+			"EMBED_INPUT_PROFILE: production runtime supports only %q until purpose-aware embedding is wired through every memory and RAG path",
+			embeddings.LegacyRawV1,
+		)
 	}
 	if requireEnabled && !c.EnableRAG {
 		return fmt.Errorf("ENABLE_RAG must be true for the standalone indexer")

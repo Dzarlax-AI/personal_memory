@@ -45,6 +45,7 @@ Collection name is now a `qdrant.Client` field, not a constant — one client pe
 cmd/
   server/main.go           — entrypoint, Chi router, graceful shutdown
   indexer/main.go          — standalone RAG indexer binary (cron-friendly)
+  eval-memory/main.go      — schema-v3 retrieval runner, comparison gate, and TEI materializer
   migrate-memory-lifecycle/ — dry-run/apply/rollback lifecycle migration
 internal/
   config/                  — env vars → struct
@@ -62,6 +63,8 @@ internal/
     summarizer.go          — folder summaries (filenames + first H1/H2/H3)
     indexer.go             — walk + incremental upsert, stale cleanup, batched embeds
     server.go              — MCP tools: search_documents, reindex_documents
+  eval/                    — versioned fixture/live evaluation, cohort gates, reports, materialization
+  retrieval/               — evaluator-only lexical scoring and hybrid RRF fusion
   todoist/
     client.go              — Todoist REST API v1 client
     server.go              — 7 MCP tools
@@ -140,6 +143,7 @@ The Qdrant client unmarshals `id` into `interface{}` and converts to string with
 | `EMBED_URL` | `http://memory-embeddings:80` | TEI endpoint |
 | `EMBED_MODEL` | `intfloat/multilingual-e5-small` | Expected TEI model ID |
 | `EMBED_MODEL_REVISION` | pinned commit | Immutable 40-character model commit |
+| `EMBED_INPUT_PROFILE` | `legacy-raw-v1` | Versioned embedding input transformation. The server and standalone indexer currently reject non-legacy profiles; `multilingual-e5-v1` is eval/materialization-only. |
 | `ADOPT_EXISTING_EMBEDDING_IDENTITY` | `false` | One-start binding for verified legacy collections without identity metadata; never overrides mismatch |
 | `ENABLE_TODOIST` | `false` | Enable Todoist MCP server |
 | `ENABLE_VIZ` | `false` | Enable visualization dashboard |
@@ -199,6 +203,16 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - Verifies configured model ID/revision against TEI `/info`, including dtype, pooling, and probe vector size
 - Preflights every active collection before any metadata write; non-empty legacy collections require one-shot explicit adoption
 - Stored mismatches always fail startup and cannot be overridden by the adoption flag
+- Embedding identity includes the versioned input profile. The server and standalone indexer fail configuration validation for non-legacy profiles until purpose-aware embedding is wired through every runtime memory/RAG path; `multilingual-e5-v1` remains available to eval/materialization only.
+
+### eval and retrieval
+- `cmd/eval-memory` supports deterministic precomputed `fixture`, TEI-backed `tei-fixture`, and read-only `live` sources, plus strict schema-v3 materialization with mode-`0600` output.
+- Schema v3 binds dataset/report identity to embedding profile, retrieval configuration, source mode, and cohort aggregates. Exact-name and identifier-path cohorts are protected by conservative non-regression plus strict-improvement comparison gates.
+- Canonical schema-v3 reports round diagnostic result scores to five decimal places to absorb cross-architecture Qdrant float32 noise; ranking order and metrics are not rounded.
+- Current public evidence is `evaldata/public/v3/` (dataset version 3.1.0): 48 facts with 41 current/legacy candidates, 41 chunks, 41 folders, 21 queries, and 20 lifecycle transitions. Public v1/v2 artifacts are historical.
+- `make eval-public` requires only an isolated Qdrant. It replays the legacy-raw vector-only baseline and the legacy-raw hybrid RRF candidate (`dense_candidate_limit=40`, `rrf_constant=60`) and byte-compares both generated JSON reports with pinned evidence. CI must not add TEI, GPU, or model downloads for this target.
+- The bounded four-configuration benchmark produced no winner. Raw hybrid improved aggregate ranking slightly but did not improve a protected cohort and roughly doubled same-host five-run diagnostic search p95; both multilingual E5 role-profile configurations regressed aggregate ranking. Production remains legacy raw vector-only, with no hybrid enablement, migration, deploy change, or reindex from this experiment.
+- Timing diagnostics are informational and host-specific; no automatic latency threshold participates in evaluation gates.
 
 ### rag/indexer.go
 - Single `ScrollAll` at the start of `Run` snapshots every file's hash + expected chunk count; per-file hash checks are in-memory afterwards (no N+1 round-trips)
@@ -248,7 +262,11 @@ docker build -t personal-memory .
 Builder/runtime base images are digest-pinned. TEI, Qdrant, and the embedding model revision are immutable in repository compose. Browser assets are exact-version downloads checked against `build/browser-assets.sha256` before compilation.
 
 ### CI/CD
-`.github/workflows/docker.yml`: on push to `main`, runs `go test` then builds and pushes to `ghcr.io/dzarlax-ai/personal-memory:{latest,sha}`.
+`.github/workflows/docker.yml`: on push to `main`, runs Go tests and the
+deterministic public v3 retrieval replay against a Qdrant service, then builds
+and pushes `ghcr.io/dzarlax-ai/personal-memory:{latest,sha}`. Retrieval CI
+uploads both replay reports and the pinned no-winner comparison without
+starting TEI.
 
 ### Deploy
 Production deploy configs live in `personal_ai_stack/deploy/memory/`. Deploy skill (`deploy-personal`) handles syncing configs and pulling the latest image on the VPS.

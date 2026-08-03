@@ -25,23 +25,25 @@ const (
 type Expected struct {
 	ModelID       string
 	ModelRevision string
+	InputProfile  embeddings.InputProfile
 }
 
 // Record is the canonical vector-space identity persisted in collection
 // metadata. Every field participates in strict equality.
 type Record struct {
-	SchemaVersion int    `json:"schema_version"`
-	Provider      string `json:"provider"`
-	ModelID       string `json:"model_id"`
-	ModelRevision string `json:"model_revision"`
-	ModelDType    string `json:"model_dtype"`
-	Pooling       string `json:"pooling"`
-	VectorSize    int    `json:"vector_size"`
+	SchemaVersion int                     `json:"schema_version"`
+	Provider      string                  `json:"provider"`
+	ModelID       string                  `json:"model_id"`
+	ModelRevision string                  `json:"model_revision"`
+	ModelDType    string                  `json:"model_dtype"`
+	Pooling       string                  `json:"pooling"`
+	VectorSize    int                     `json:"vector_size"`
+	InputProfile  embeddings.InputProfile `json:"input_profile"`
 }
 
 type modelClient interface {
 	Info(context.Context) (embeddings.ModelInfo, error)
-	Embed(context.Context, string) ([]float32, error)
+	EmbedWithPurpose(context.Context, string, embeddings.Purpose, embeddings.InputProfile, string) ([]float32, error)
 }
 
 type collectionClient interface {
@@ -65,6 +67,59 @@ func Ensure(ctx context.Context, embed *embeddings.Client, collections []*qdrant
 		targets[i] = collection
 	}
 	return ensure(ctx, embed, targets, expected, adoptExisting)
+}
+
+// VerifyCollection performs the live-evaluation identity check without
+// creating a collection, adopting legacy vectors, or updating metadata.
+// Missing/empty collections are safe; a non-empty collection must have an
+// exact stored identity match.
+func VerifyCollection(ctx context.Context, collection *qdrant.Client, expected Record) error {
+	if collection == nil {
+		return fmt.Errorf("embedding identity collection is nil")
+	}
+	return verifyCollection(ctx, collection, expected)
+}
+
+type verificationCollection interface {
+	CollectionName() string
+	CollectionInfo(context.Context) (qdrant.CollectionInfo, error)
+	ExactCount(context.Context) (uint64, error)
+}
+
+func verifyCollection(ctx context.Context, collection verificationCollection, expected Record) error {
+	info, err := collection.CollectionInfo(ctx)
+	if err != nil {
+		return fmt.Errorf("inspect collection %q for embedding identity: %w", collection.CollectionName(), err)
+	}
+	if !info.Exists {
+		return nil
+	}
+	if info.VectorSize != expected.VectorSize {
+		return fmt.Errorf("embedding identity mismatch for collection %q: vector size is %d, expected %d",
+			collection.CollectionName(), info.VectorSize, expected.VectorSize)
+	}
+	if info.Points == 0 {
+		count, err := collection.ExactCount(ctx)
+		if err != nil {
+			return fmt.Errorf("count collection %q for embedding identity: %w", collection.CollectionName(), err)
+		}
+		if count == 0 {
+			return nil
+		}
+	}
+	raw, present := info.Metadata[MetadataKey]
+	if !present {
+		return fmt.Errorf("collection %q contains points but has no embedding identity", collection.CollectionName())
+	}
+	stored, err := decodeRecord(raw)
+	if err != nil {
+		return fmt.Errorf("collection %q has invalid embedding identity metadata: %w", collection.CollectionName(), err)
+	}
+	if !reflect.DeepEqual(stored, expected) {
+		return fmt.Errorf("embedding identity mismatch for collection %q: stored=%s expected=%s",
+			collection.CollectionName(), formatRecord(stored), formatRecord(expected))
+	}
+	return nil
 }
 
 type pendingAction struct {
@@ -116,8 +171,13 @@ func ensure(ctx context.Context, embed modelClient, collections []collectionClie
 			if err != nil {
 				return Record{}, fmt.Errorf("count collection %q before embedding identity adoption: %w", name, err)
 			}
-			if exactPoints > 0 && !adoptExisting {
-				return Record{}, fmt.Errorf("collection %q contains %d points but has no embedding identity; after a verified snapshot and model check, set ADOPT_EXISTING_EMBEDDING_IDENTITY=true for one startup", name, exactPoints)
+			if exactPoints > 0 {
+				if record.InputProfile != embeddings.LegacyRawV1 {
+					return Record{}, fmt.Errorf("collection %q contains points without embedding identity and cannot adopt non-legacy input profile %q; re-embed or migrate the vectors into a collection with explicit identity", name, record.InputProfile)
+				}
+				if !adoptExisting {
+					return Record{}, fmt.Errorf("collection %q contains %d points but has no embedding identity; after a verified snapshot and model check, set ADOPT_EXISTING_EMBEDDING_IDENTITY=true for one startup", name, exactPoints)
+				}
 			}
 			metadata := cloneMetadata(info.Metadata)
 			metadata[MetadataKey] = record
@@ -173,6 +233,10 @@ func activeRecord(ctx context.Context, embed modelClient, expected Expected) (Re
 	}
 	expected.ModelID = strings.TrimSpace(expected.ModelID)
 	expected.ModelRevision = strings.ToLower(strings.TrimSpace(expected.ModelRevision))
+	expected.InputProfile = embeddings.NormalizeInputProfile(expected.InputProfile)
+	if err := embeddings.ValidateInputProfile(expected.InputProfile, expected.ModelID); err != nil {
+		return Record{}, fmt.Errorf("validate embedding input profile: %w", err)
+	}
 
 	info, err := embed.Info(ctx)
 	if err != nil {
@@ -183,7 +247,7 @@ func activeRecord(ctx context.Context, embed modelClient, expected Expected) (Re
 		return Record{}, fmt.Errorf("TEI model identity mismatch: configured model=%q revision=%q, active model=%q revision=%q", expected.ModelID, expected.ModelRevision, info.ModelID, activeRevision)
 	}
 
-	probe, err := embed.Embed(ctx, identityProbeText)
+	probe, err := embed.EmbedWithPurpose(ctx, identityProbeText, embeddings.RetrievalQuery, expected.InputProfile, expected.ModelID)
 	if err != nil {
 		return Record{}, fmt.Errorf("embed identity probe: %w", err)
 	}
@@ -198,6 +262,7 @@ func activeRecord(ctx context.Context, embed modelClient, expected Expected) (Re
 		ModelDType:    strings.TrimSpace(info.ModelDType),
 		Pooling:       strings.TrimSpace(info.ModelType.Embedding.Pooling),
 		VectorSize:    len(probe),
+		InputProfile:  expected.InputProfile,
 	}, nil
 }
 
@@ -222,8 +287,25 @@ func decodeRecord(raw any) (Record, error) {
 	if err := json.Unmarshal(encoded, &record); err != nil {
 		return Record{}, err
 	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return Record{}, err
+	}
+	rawProfile, profilePresent := fields["input_profile"]
+	if !profilePresent {
+		record.InputProfile = embeddings.LegacyRawV1
+	} else {
+		var profile string
+		if err := json.Unmarshal(rawProfile, &profile); err != nil || profile == "" {
+			return Record{}, fmt.Errorf("input_profile must be a non-empty string when present")
+		}
+		record.InputProfile = embeddings.InputProfile(profile)
+	}
 	if record.SchemaVersion != identityVersion || record.Provider != identityProvider || record.ModelID == "" || record.ModelRevision == "" || record.ModelDType == "" || record.Pooling == "" || record.VectorSize < 1 {
 		return Record{}, fmt.Errorf("incomplete or unsupported identity record")
+	}
+	if err := embeddings.ValidateInputProfile(record.InputProfile, record.ModelID); err != nil {
+		return Record{}, fmt.Errorf("invalid embedding input profile: %w", err)
 	}
 	return record, nil
 }
@@ -236,6 +318,7 @@ func formatRecord(record Record) string {
 		"revision=" + record.ModelRevision,
 		"dtype=" + record.ModelDType,
 		"pooling=" + record.Pooling,
+		"input_profile=" + string(record.InputProfile),
 		fmt.Sprintf("size=%d", record.VectorSize),
 	}
 	sort.Strings(parts)

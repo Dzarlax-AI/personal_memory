@@ -234,6 +234,10 @@ type presentedFacts struct {
 }
 
 func presentFactCandidates(query Query, points []qdrant.Point, now time.Time) presentedFacts {
+	return presentFactCandidatesWithOrder(query, points, now, false)
+}
+
+func presentFactCandidatesWithOrder(query Query, points []qdrant.Point, now time.Time, preserveSemanticOrder bool) presentedFacts {
 	reference := now.UTC()
 	if query.EffectiveIntent() == QueryIntentAsOf {
 		if parsed, err := time.Parse("2006-01-02", query.AsOf); err == nil {
@@ -249,11 +253,15 @@ func presentFactCandidates(query Query, points []qdrant.Point, now time.Time) pr
 	parsed := make(map[string]parsedCandidate, len(points))
 	ordered := make([]lifecycle.Candidate, 0, len(points))
 	hasCanonicalCurrent := false
-	for _, point := range points {
+	for index, point := range points {
 		view, _ := lifecycle.Parse(point.Payload, point.ID)
 		expired := factExpiredAt(point.Payload, reference)
 		parsed[point.ID] = parsedCandidate{point: point, view: view, expired: expired}
-		ordered = append(ordered, lifecycle.Candidate{PointID: point.ID, Score: point.Score, View: view})
+		score := point.Score
+		if preserveSemanticOrder {
+			score = float64(len(points) - index)
+		}
+		ordered = append(ordered, lifecycle.Candidate{PointID: point.ID, Score: score, View: view})
 		if view.Valid && !expired && view.State == lifecycle.Current && view.Canonical {
 			hasCanonicalCurrent = true
 		}

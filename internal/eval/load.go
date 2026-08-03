@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Dzarlax-AI/personal-memory/internal/retrieval"
 	"github.com/google/uuid"
 )
 
@@ -17,8 +19,58 @@ const maxDatasetBytes int64 = 32 << 20
 
 // Load decodes and source-neutrally validates a bounded dataset document.
 func Load(reader io.Reader) (*Dataset, error) {
+	data, err := readDataset(reader)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateV3DatasetRaw(data); err != nil {
+		return nil, err
+	}
+	dataset, err := decodeDataset(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := dataset.Validate(); err != nil {
+		return nil, err
+	}
+	return dataset, nil
+}
+
+// LoadForMaterialization decodes a strict schema-v3 dataset whose corpus
+// vectors may be omitted or empty. Query vectors remain required even though
+// Materialize replaces every corpus and query vector.
+func LoadForMaterialization(reader io.Reader) (*Dataset, error) {
+	data, err := readDataset(reader)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateMaterializationDatasetRaw(data); err != nil {
+		return nil, err
+	}
+	dataset, err := decodeDataset(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := dataset.ValidateForMaterialization(); err != nil {
+		return nil, err
+	}
+	return dataset, nil
+}
+
+func readDataset(reader io.Reader) ([]byte, error) {
 	limited := &io.LimitedReader{R: reader, N: maxDatasetBytes + 1}
-	decoder := json.NewDecoder(limited)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("read fixture: %w", err)
+	}
+	if int64(len(data)) > maxDatasetBytes {
+		return nil, fmt.Errorf("fixture exceeds %d bytes", maxDatasetBytes)
+	}
+	return data, nil
+}
+
+func decodeDataset(data []byte) (*Dataset, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var dataset Dataset
 	if err := decoder.Decode(&dataset); err != nil {
@@ -31,40 +83,51 @@ func Load(reader io.Reader) (*Dataset, error) {
 		}
 		return nil, fmt.Errorf("decode trailing JSON: %w", err)
 	}
-	if limited.N <= 0 {
-		return nil, fmt.Errorf("fixture exceeds %d bytes", maxDatasetBytes)
-	}
-	if err := dataset.Validate(); err != nil {
-		return nil, err
-	}
 	return &dataset, nil
 }
 
 // Validate checks schema, vectors, IDs, queries, metrics, and gates without
 // requiring live query IDs to exist in fixture point arrays.
 func (d *Dataset) Validate() error {
-	if d.SchemaVersion != SchemaVersion && d.SchemaVersion != CurrentDatasetSchemaVersion {
-		return fmt.Errorf("schema_version must be %d or %d", SchemaVersion, CurrentDatasetSchemaVersion)
+	return d.validate(false, false)
+}
+
+func (d *Dataset) validate(allowEmptyCorpusVectors, requireQueryVectors bool) error {
+	if d.SchemaVersion != SchemaVersion &&
+		d.SchemaVersion != LifecycleSchemaVersion &&
+		d.SchemaVersion != CurrentDatasetSchemaVersion {
+		return fmt.Errorf("schema_version must be %d, %d, or %d",
+			SchemaVersion, LifecycleSchemaVersion, CurrentDatasetSchemaVersion)
 	}
 	if strings.TrimSpace(d.DatasetVersion) == "" {
 		return fmt.Errorf("dataset_version is required")
 	}
 	identity := d.Embedding
-	if strings.TrimSpace(identity.Provider) == "" || strings.TrimSpace(identity.ModelID) == "" ||
-		strings.TrimSpace(identity.ModelRevision) == "" || strings.TrimSpace(identity.DType) == "" ||
-		strings.TrimSpace(identity.Pooling) == "" || identity.VectorSize < 1 {
-		return fmt.Errorf("complete embedding identity with positive vector_size is required")
+	if err := validateEmbeddingIdentity(identity, d.SchemaVersion == CurrentDatasetSchemaVersion); err != nil {
+		return err
+	}
+	if d.SchemaVersion < CurrentDatasetSchemaVersion && identity.inputProfilePresent {
+		return fmt.Errorf("input_profile requires schema_version %d", CurrentDatasetSchemaVersion)
 	}
 	cfg := &d.Configuration
-	if strings.TrimSpace(cfg.Name) == "" || strings.TrimSpace(cfg.FactCollection) == "" ||
-		strings.TrimSpace(cfg.ChunkCollection) == "" || strings.TrimSpace(cfg.FolderCollection) == "" {
-		return fmt.Errorf("configuration name and logical collection names are required")
-	}
-	if cfg.FolderTopK < 1 || math.IsNaN(cfg.FolderThreshold) || math.IsInf(cfg.FolderThreshold, 0) {
-		return fmt.Errorf("folder_top_k must be positive and folder_threshold must be finite")
+	if err := validateBaseConfiguration(*cfg); err != nil {
+		return err
 	}
 	if err := normalizeTopK(&cfg.TopK); err != nil {
 		return err
+	}
+	if err := validateRetrievalConfiguration(*cfg, d.SchemaVersion == CurrentDatasetSchemaVersion); err != nil {
+		return err
+	}
+	if d.SchemaVersion < CurrentDatasetSchemaVersion &&
+		(cfg.present["retrieval_strategy"] ||
+			cfg.present["dense_candidate_limit"] ||
+			cfg.present["rrf_constant"]) {
+		return fmt.Errorf("retrieval strategy fields require schema_version %d", CurrentDatasetSchemaVersion)
+	}
+	if d.SchemaVersion == CurrentDatasetSchemaVersion && len(d.Queries) == 0 {
+		return fmt.Errorf("schema_version %d dataset requires at least one query",
+			CurrentDatasetSchemaVersion)
 	}
 
 	for name, points := range map[string][]FixturePoint{
@@ -79,6 +142,9 @@ func (d *Dataset) Validate() error {
 				return fmt.Errorf("duplicate %s point ID %q", name, point.ID.String())
 			}
 			ids[point.ID.String()] = struct{}{}
+			if allowEmptyCorpusVectors && len(point.Vector) == 0 {
+				continue
+			}
 			if err := validateVector(point.Vector, identity.VectorSize); err != nil {
 				return fmt.Errorf("%s point %q: %w", name, point.ID.String(), err)
 			}
@@ -91,7 +157,7 @@ func (d *Dataset) Validate() error {
 		if strings.TrimSpace(query.ID) == "" {
 			return fmt.Errorf("query ID is required")
 		}
-		if d.SchemaVersion == CurrentDatasetSchemaVersion && !safeReportIdentifier(query.ID) {
+		if d.SchemaVersion >= LifecycleSchemaVersion && !safeReportIdentifier(query.ID) {
 			return fmt.Errorf("query ID must use safe identifier characters")
 		}
 		if _, duplicate := queryIDs[query.ID]; duplicate {
@@ -112,7 +178,16 @@ func (d *Dataset) Validate() error {
 				query.Intent != "" ||
 				query.asOfPresent || query.AsOf != "" ||
 				query.lifecycleExpectationsPresent || len(query.LifecycleExpectations) != 0) {
-			return fmt.Errorf("query %q lifecycle fields require schema_version %d", query.ID, CurrentDatasetSchemaVersion)
+			return fmt.Errorf("query %q lifecycle fields require schema_version %d", query.ID, LifecycleSchemaVersion)
+		}
+		if d.SchemaVersion < CurrentDatasetSchemaVersion &&
+			(query.cohortsPresent || query.Cohorts != nil) {
+			return fmt.Errorf("query %q cohorts require schema_version %d", query.ID, CurrentDatasetSchemaVersion)
+		}
+		if d.SchemaVersion == CurrentDatasetSchemaVersion {
+			if err := validateQueryCohorts(query.ID, query.Cohorts, query.cohortsPresent); err != nil {
+				return err
+			}
 		}
 		intent := query.Intent
 		if !query.intentPresent {
@@ -138,6 +213,9 @@ func (d *Dataset) Validate() error {
 		}
 		if strings.TrimSpace(query.Text) == "" {
 			return fmt.Errorf("query %q text is required", query.ID)
+		}
+		if requireQueryVectors && len(query.Vector) == 0 {
+			return fmt.Errorf("query %q vector must not be empty", query.ID)
 		}
 		if len(query.Vector) > 0 {
 			if err := validateVector(query.Vector, identity.VectorSize); err != nil {
@@ -242,11 +320,11 @@ func (d *Dataset) Validate() error {
 	}
 	if d.SchemaVersion == SchemaVersion &&
 		(d.transitionScenariosPresent || len(d.TransitionScenarios) != 0) {
-		return fmt.Errorf("transition_scenarios require schema_version %d", CurrentDatasetSchemaVersion)
+		return fmt.Errorf("transition_scenarios require schema_version %d", LifecycleSchemaVersion)
 	}
 	if d.SchemaVersion == SchemaVersion &&
 		(d.Gates.forbidLifecycleViolationsPresent || d.Gates.ForbidLifecycleViolations) {
-		return fmt.Errorf("forbid_lifecycle_violations requires schema_version %d", CurrentDatasetSchemaVersion)
+		return fmt.Errorf("forbid_lifecycle_violations requires schema_version %d", LifecycleSchemaVersion)
 	}
 	if err := validateGateMap("minimum_hit_at", d.Gates.MinimumHitAt, cfg.TopK); err != nil {
 		return err
@@ -260,6 +338,152 @@ func (d *Dataset) Validate() error {
 	return nil
 }
 
+// ValidateForMaterialization retains the strict schema-v3 contract while
+// permitting only corpus vectors that Materialize will replace to be empty.
+func (d *Dataset) ValidateForMaterialization() error {
+	if d == nil {
+		return fmt.Errorf("dataset is required")
+	}
+	if d.SchemaVersion != CurrentDatasetSchemaVersion {
+		return fmt.Errorf("materialization requires schema_version %d", CurrentDatasetSchemaVersion)
+	}
+	if err := d.validate(true, true); err != nil {
+		return err
+	}
+	for _, group := range []struct {
+		name   string
+		points []FixturePoint
+	}{
+		{name: "facts", points: d.Facts},
+		{name: "chunks", points: d.Chunks},
+		{name: "folders", points: d.Folders},
+	} {
+		for _, point := range group.points {
+			if _, ok := corpusText(point.Payload, group.name); !ok {
+				return fmt.Errorf("%s point %q has no usable corpus text",
+					group.name, point.ID.String())
+			}
+		}
+	}
+	return nil
+}
+
+func validateBaseConfiguration(configuration Configuration) error {
+	if strings.TrimSpace(configuration.Name) == "" ||
+		strings.TrimSpace(configuration.FactCollection) == "" ||
+		strings.TrimSpace(configuration.ChunkCollection) == "" ||
+		strings.TrimSpace(configuration.FolderCollection) == "" {
+		return fmt.Errorf("configuration name and logical collection names are required")
+	}
+	if configuration.FolderTopK < 1 ||
+		math.IsNaN(configuration.FolderThreshold) ||
+		math.IsInf(configuration.FolderThreshold, 0) {
+		return fmt.Errorf("folder_top_k must be positive and folder_threshold must be finite")
+	}
+	return nil
+}
+
+func validateEmbeddingIdentity(identity EmbeddingIdentity, requireProfile bool) error {
+	if strings.TrimSpace(identity.Provider) == "" || strings.TrimSpace(identity.ModelID) == "" ||
+		strings.TrimSpace(identity.ModelRevision) == "" || strings.TrimSpace(identity.DType) == "" ||
+		strings.TrimSpace(identity.Pooling) == "" || identity.VectorSize < 1 {
+		return fmt.Errorf("complete embedding identity with positive vector_size is required")
+	}
+	if !requireProfile {
+		return nil
+	}
+	if !identity.inputProfilePresent && identity.InputProfile == "" {
+		return fmt.Errorf("embedding input_profile is required")
+	}
+	switch identity.InputProfile {
+	case LegacyRawV1:
+		return nil
+	case MultilingualE5V1:
+		if strings.TrimSpace(identity.ModelID) != multilingualE5SmallModelID {
+			return fmt.Errorf("embedding input profile %q does not support model %q",
+				identity.InputProfile, identity.ModelID)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown embedding input profile %q", identity.InputProfile)
+	}
+}
+
+func validateRetrievalConfiguration(configuration Configuration, requireStrategy bool) error {
+	if !requireStrategy {
+		return nil
+	}
+	for _, field := range []string{"retrieval_strategy", "dense_candidate_limit", "rrf_constant"} {
+		if configuration.present != nil && !configuration.present[field] {
+			return fmt.Errorf("configuration field %s is required", field)
+		}
+	}
+	switch configuration.RetrievalStrategy {
+	case RetrievalVectorOnly:
+		// Vector-only is canonicalized with explicit zero values so inactive
+		// hybrid tuning cannot silently participate in report identity.
+		if configuration.DenseCandidateLimit != 0 || configuration.RRFConstant != 0 {
+			return fmt.Errorf("vector-only requires dense_candidate_limit=0 and rrf_constant=0")
+		}
+	case RetrievalHybridRRF:
+		maxK := configuration.TopK[len(configuration.TopK)-1]
+		if configuration.DenseCandidateLimit < maxK {
+			return fmt.Errorf("hybrid-rrf dense_candidate_limit must be at least max(top_k)")
+		}
+		if configuration.DenseCandidateLimit > retrieval.MaxCandidates {
+			return fmt.Errorf("hybrid-rrf dense_candidate_limit must be at most %d", retrieval.MaxCandidates)
+		}
+		if configuration.RRFConstant < 1 {
+			return fmt.Errorf("hybrid-rrf rrf_constant must be positive")
+		}
+		if configuration.RRFConstant > retrieval.MaxRRFConstant {
+			return fmt.Errorf("hybrid-rrf rrf_constant must be at most %d", retrieval.MaxRRFConstant)
+		}
+	default:
+		return fmt.Errorf("retrieval_strategy must be vector-only or hybrid-rrf")
+	}
+	return nil
+}
+
+func validateQueryCohorts(queryID string, cohorts []QueryCohort, present bool) error {
+	if !present && cohorts == nil {
+		return fmt.Errorf("query %q cohorts are required", queryID)
+	}
+	if len(cohorts) == 0 {
+		return fmt.Errorf("query %q cohorts must be a non-empty array", queryID)
+	}
+	var previous QueryCohort
+	for i, cohort := range cohorts {
+		value := string(cohort)
+		if !safeCohortIdentifier(value) {
+			return fmt.Errorf("query %q cohort must use safe identifier characters", queryID)
+		}
+		if i > 0 {
+			if cohort == previous {
+				return fmt.Errorf("query %q contains duplicate cohort %q", queryID, cohort)
+			}
+			if cohort < previous {
+				return fmt.Errorf("query %q cohorts must be sorted", queryID)
+			}
+		}
+		previous = cohort
+	}
+	return nil
+}
+
+func safeCohortIdentifier(value string) bool {
+	if len(value) < 1 || len(value) > 64 || value[0] == '-' || value[len(value)-1] == '-' {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // ValidateForSource adds execution-mode constraints to the source-neutral
 // validation performed while loading a dataset.
 func (d *Dataset) ValidateForSource(source string) error {
@@ -269,9 +493,13 @@ func (d *Dataset) ValidateForSource(source string) error {
 	switch source {
 	case "live":
 		return nil
+	case "tei-fixture":
+		if d.SchemaVersion != CurrentDatasetSchemaVersion {
+			return fmt.Errorf("tei-fixture requires schema_version %d", CurrentDatasetSchemaVersion)
+		}
 	case "fixture":
 	default:
-		return fmt.Errorf("source must be fixture or live")
+		return fmt.Errorf("source must be fixture, live, or tei-fixture")
 	}
 
 	sets := map[string]map[string]struct{}{
@@ -280,7 +508,7 @@ func (d *Dataset) ValidateForSource(source string) error {
 		"folders": pointIDSet(d.Folders),
 	}
 	for _, query := range d.Queries {
-		if len(query.Vector) == 0 {
+		if source == "fixture" && len(query.Vector) == 0 {
 			return fmt.Errorf("fixture query %q must include a precomputed vector", query.ID)
 		}
 		targetSet := sets["facts"]
