@@ -218,8 +218,11 @@ func TestCreateAndUpdateCollectionMetadataContracts(t *testing.T) {
 	if err := client.UpdateCollectionMetadata(context.Background(), metadata); err != nil {
 		t.Fatal(err)
 	}
-	if len(requests) != 2 {
-		t.Fatalf("requests = %d, want 2", len(requests))
+	if err := client.UpdateCollectionMetadata(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 3 {
+		t.Fatalf("requests = %d, want 3", len(requests))
 	}
 	if requests[0].method != http.MethodPut {
 		t.Fatalf("create method = %s, want PUT", requests[0].method)
@@ -236,6 +239,10 @@ func TestCreateAndUpdateCollectionMetadataContracts(t *testing.T) {
 	}
 	if len(requests[1].body) != 1 || !reflect.DeepEqual(requests[1].body["metadata"], metadata) {
 		t.Fatalf("metadata update body = %#v", requests[1].body)
+	}
+	emptyMetadata, ok := requests[2].body["metadata"].(map[string]any)
+	if len(requests[2].body) != 1 || !ok || len(emptyMetadata) != 0 {
+		t.Fatalf("nil metadata update body = %#v, want empty metadata object", requests[2].body)
 	}
 }
 

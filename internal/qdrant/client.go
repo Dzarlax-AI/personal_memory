@@ -283,6 +283,9 @@ func (c *Client) DeleteCollection(ctx context.Context, requiredPrefix string) er
 // UpdateCollectionMetadata merges collection-level metadata. Qdrant treats an
 // empty object as a request to clear the metadata.
 func (c *Client) UpdateCollectionMetadata(ctx context.Context, metadata map[string]any) error {
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
 	requestURL := fmt.Sprintf("%s/collections/%s", c.url, c.collection)
 	body := map[string]interface{}{"metadata": metadata}
 	return c.mutate(ctx, http.MethodPatch, requestURL, body, false, false)
