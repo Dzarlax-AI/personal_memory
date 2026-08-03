@@ -233,6 +233,22 @@ func TestMaterializeCLIRejectsSameInputAndOutputPath(t *testing.T) {
 	}
 }
 
+func TestMaterializeCLIReportsInvalidInputProfileCause(t *testing.T) {
+	dir := t.TempDir()
+	input := writeMaterializationDataset(t, dir)
+	err := runCLI([]string{
+		"materialize", "--dataset", input,
+		"--output", filepath.Join(dir, "output.json"),
+		"--embed-url", "http://127.0.0.1:1",
+		"--input-profile", "future-v9",
+	}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil ||
+		!strings.Contains(err.Error(), "invalid --input-profile") ||
+		!strings.Contains(err.Error(), "unknown embedding input profile") {
+		t.Fatalf("error = %v, want safe validation cause", err)
+	}
+}
+
 func TestMaterializeCLIRejectsV1AndV2BeforeTEI(t *testing.T) {
 	for _, version := range []string{"v1", "v2"} {
 		t.Run(version, func(t *testing.T) {
@@ -258,7 +274,9 @@ func TestMaterializeCLIValidatesTEIIdentityAndModelAssertion(t *testing.T) {
 	infoCalls := 0
 	tei := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/info" {
-			t.Fatalf("unexpected external request %s", r.URL.Path)
+			t.Errorf("unexpected external request %s", r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusInternalServerError)
+			return
 		}
 		infoCalls++
 		revision := "other-revision"
@@ -317,7 +335,9 @@ func TestMaterializeCLIProfileOverrideWritesStrictDeterministicFixture(t *testin
 				Inputs []string `json:"inputs"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatal(err)
+				t.Errorf("decode TEI input: %v", err)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
 			}
 			inputs = append(inputs, append([]string(nil), body.Inputs...))
 			vectors := make([][]float32, len(body.Inputs))
@@ -325,7 +345,8 @@ func TestMaterializeCLIProfileOverrideWritesStrictDeterministicFixture(t *testin
 				vectors[i] = []float32{1, 0}
 			}
 			if err := json.NewEncoder(w).Encode(vectors); err != nil {
-				t.Fatal(err)
+				t.Errorf("encode TEI response: %v", err)
+				return
 			}
 		default:
 			http.Error(w, "unexpected", http.StatusInternalServerError)

@@ -145,6 +145,17 @@ func TestCompareV3RejectsCompatibilityDrift(t *testing.T) {
 	}
 }
 
+func TestValidateMatchedQueryContractsTreatsCohortsAsASet(t *testing.T) {
+	baseline := validV3ComparisonReport()
+	candidate := validV3ComparisonReport()
+	baseline.Queries[0].Cohorts = []QueryCohort{CohortExactName, CohortMultilingual}
+	candidate.Queries[0].Cohorts = []QueryCohort{CohortMultilingual, CohortExactName}
+
+	if err := validateMatchedQueryContracts(baseline, candidate); err != nil {
+		t.Fatalf("cohort order changed the query contract: %v", err)
+	}
+}
+
 func TestCompareV3DiagnosticsSnapshotsOwnTheirData(t *testing.T) {
 	baseline := validV3ComparisonReport()
 	candidate := validV3ComparisonReport()

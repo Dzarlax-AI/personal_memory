@@ -69,6 +69,9 @@ func (fake *fixtureQdrant) handler(w http.ResponseWriter, r *http.Request) {
 		case http.MethodDelete:
 			fake.deleteAttempts++
 			if fake.blockDeleteKind != "" && strings.Contains(name, fake.blockDeleteKind) {
+				// Cleanup is intentionally sequential. Holding fake.mu while
+				// waiting proves each collection gets its own deadline, but
+				// would block concurrent cleanup requests.
 				<-r.Context().Done()
 				return
 			}
@@ -594,6 +597,12 @@ func TestFixtureCleanupCoversSuccessFailureAndAmbiguousCreate(t *testing.T) {
 	}
 }
 
+func (fake *fixtureQdrant) cleanupSnapshot() (attempts int, deleted []string, existing int) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	return fake.deleteAttempts, append([]string(nil), fake.deleted...), len(fake.exists)
+}
+
 func TestFixtureCleanupUsesIndependentDeadlinePerCollection(t *testing.T) {
 	fake := &fixtureQdrant{
 		exists: make(map[string]bool), blockDeleteKind: "folders",
@@ -610,11 +619,12 @@ func TestFixtureCleanupUsesIndependentDeadlinePerCollection(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "clean up") {
 		t.Fatalf("cleanup error = %v", err)
 	}
-	if fake.deleteAttempts != 3 {
-		t.Fatalf("delete attempts = %d, want all 3", fake.deleteAttempts)
+	attempts, deleted, _ := fake.cleanupSnapshot()
+	if attempts != 3 {
+		t.Fatalf("delete attempts = %d, want all 3", attempts)
 	}
-	if len(fake.deleted) != 2 {
-		t.Fatalf("later cleanup attempts did not succeed: deleted=%v", fake.deleted)
+	if len(deleted) != 2 {
+		t.Fatalf("later cleanup attempts did not succeed: deleted=%v", deleted)
 	}
 }
 

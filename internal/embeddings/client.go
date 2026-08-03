@@ -125,13 +125,17 @@ func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, e
 	if len(texts) == 0 {
 		return nil, nil
 	}
-	result := make([][]float32, 0, len(texts))
-	for i := 0; i < len(texts); i += defaultBatchSize {
+	return c.embedChunked(ctx, texts)
+}
+
+func (c *Client) embedChunked(ctx context.Context, inputs []string) ([][]float32, error) {
+	result := make([][]float32, 0, len(inputs))
+	for i := 0; i < len(inputs); i += defaultBatchSize {
 		end := i + defaultBatchSize
-		if end > len(texts) {
-			end = len(texts)
+		if end > len(inputs) {
+			end = len(inputs)
 		}
-		vecs, err := c.embed(ctx, texts[i:end])
+		vecs, err := c.embed(ctx, inputs[i:end])
 		if err != nil {
 			return nil, err
 		}
@@ -163,23 +167,7 @@ func (c *Client) EmbedBatchWithPurpose(ctx context.Context, rawTexts []string, p
 		}
 		transformed[i] = input
 	}
-
-	result := make([][]float32, 0, len(rawTexts))
-	for i := 0; i < len(transformed); i += defaultBatchSize {
-		end := i + defaultBatchSize
-		if end > len(transformed) {
-			end = len(transformed)
-		}
-		vecs, err := c.embed(ctx, transformed[i:end])
-		if err != nil {
-			return nil, err
-		}
-		if len(vecs) != end-i {
-			return nil, fmt.Errorf("embed batch size mismatch: asked %d, got %d", end-i, len(vecs))
-		}
-		result = append(result, vecs...)
-	}
-	return result, nil
+	return c.embedChunked(ctx, transformed)
 }
 
 // embed POSTs one batch to TEI and returns the resulting vectors.

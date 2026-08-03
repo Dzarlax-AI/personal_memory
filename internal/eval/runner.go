@@ -140,7 +140,7 @@ func runFixtureTimedWithEmbedder(ctx context.Context, dataset *Dataset, qdrantUR
 			return Report{}, fmt.Errorf("temporary collection %q already exists", client.CollectionName())
 		}
 		if createErr := client.CreateCollection(ctx, dataset.Embedding.VectorSize, metadata); createErr != nil {
-			resolveCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			resolveCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 			postCreateInfo, inspectErr := client.CollectionInfo(resolveCtx)
 			cancel()
 			if inspectErr != nil {
@@ -193,8 +193,6 @@ func runLive(ctx context.Context, dataset *Dataset, options RunOptions) (Report,
 	var timings *timingCollector
 	if dataset.SchemaVersion == CurrentDatasetSchemaVersion {
 		timings = newTimingCollector(options.Now)
-	}
-	if dataset.SchemaVersion == CurrentDatasetSchemaVersion {
 		expected := embeddingidentity.Record{
 			SchemaVersion: 1, Provider: dataset.Embedding.Provider,
 			ModelID: dataset.Embedding.ModelID, ModelRevision: dataset.Embedding.ModelRevision,
@@ -338,14 +336,19 @@ func executeQueriesTimed(ctx context.Context, dataset *Dataset, clients collecti
 			if queryEmbedder == nil {
 				return Report{}, fmt.Errorf("query %q has no vector and no purpose-aware embedder was configured", query.ID)
 			}
-			embedStart := timings.now()
+			var embedStart time.Time
+			if timings != nil {
+				embedStart = timings.now()
+			}
 			vectors, embedErr := embedQueryPurpose(
 				ctx, []string{query.Text}, dataset.Embedding, queryEmbedder, false,
 			)
 			if embedErr != nil {
 				return Report{}, fmt.Errorf("embed query %q: %w", query.ID, embedErr)
 			}
-			timings.embed = append(timings.embed, elapsedUS(embedStart, timings.now()))
+			if timings != nil {
+				timings.embed = append(timings.embed, elapsedUS(embedStart, timings.now()))
+			}
 			query.Vector = append(Vector(nil), vectors[0]...)
 		}
 		searchLimit := maxK
@@ -404,11 +407,12 @@ func executeQueriesTimed(ctx context.Context, dataset *Dataset, clients collecti
 		if err != nil {
 			return Report{}, fmt.Errorf("execute query %q: %w", query.ID, err)
 		}
-		items := []RetrievedItem{}
+		var items []RetrievedItem
 		var queryLifecycle *QueryLifecycleReport
 		if query.Target == "facts" && dataset.SchemaVersion >= LifecycleSchemaVersion {
 			evidencePoints := points
-			if requiresBroadLifecycleSearch(query) {
+			broadLifecycleSearch := requiresBroadLifecycleSearch(query)
+			if broadLifecycleSearch {
 				evidencePoints, err = fetchLifecycleEvidence(ctx, clients.facts, query, points)
 				if err != nil {
 					return Report{}, fmt.Errorf("fetch lifecycle evidence for query %q: %w", query.ID, err)
@@ -416,7 +420,11 @@ func executeQueriesTimed(ctx context.Context, dataset *Dataset, clients collecti
 			}
 			hybridOrder := dataset.Configuration.RetrievalStrategy == RetrievalHybridRRF
 			presentation := presentFactCandidatesWithOrder(query, evidencePoints, now, hybridOrder)
-			items = presentFactCandidatesWithOrder(query, points, now, hybridOrder).results
+			if broadLifecycleSearch {
+				items = presentFactCandidatesWithOrder(query, points, now, hybridOrder).results
+			} else {
+				items = presentation.results
+			}
 			queryLifecycle = &presentation.report
 			lifecycleReport.Aggregate.Checks += presentation.canonical.Checks
 			lifecycleReport.Aggregate.Violations += presentation.canonical.Violations

@@ -211,7 +211,7 @@ func materializeCommand(args []string, stdout, stderr io.Writer) error {
 		if err := embeddings.ValidateInputProfile(
 			embeddings.InputProfile(*inputProfile), dataset.Embedding.ModelID,
 		); err != nil {
-			return fmt.Errorf("invalid --input-profile")
+			return fmt.Errorf("invalid --input-profile: %w", err)
 		}
 	}
 

@@ -17,7 +17,10 @@ func Normalize(value string) string {
 }
 
 func tokenize(value string) []string {
-	normalized := Normalize(value)
+	return tokenizeNormalized(Normalize(value))
+}
+
+func tokenizeNormalized(normalized string) []string {
 	tokens := make([]string, 0)
 	var token strings.Builder
 	flush := func() {
@@ -43,15 +46,22 @@ func tokenize(value string) []string {
 }
 
 func tokenSet(value string) map[string]struct{} {
+	return tokenSetNormalized(Normalize(value))
+}
+
+func tokenSetNormalized(normalized string) map[string]struct{} {
 	result := make(map[string]struct{})
-	for _, token := range tokenize(value) {
+	for _, token := range tokenizeNormalized(normalized) {
 		result[token] = struct{}{}
 	}
 	return result
 }
 
 func identifierLexemes(value string) map[string]struct{} {
-	normalized := Normalize(value)
+	return identifierLexemesNormalized(Normalize(value))
+}
+
+func identifierLexemesNormalized(normalized string) map[string]struct{} {
 	result := make(map[string]struct{})
 	var lexeme strings.Builder
 	canAttachMark := false
@@ -135,6 +145,8 @@ func containsExactPhrase(normalizedField, normalizedQuery string) bool {
 		if phraseBoundary(normalizedField, offset, true) && phraseBoundary(normalizedField, end, false) {
 			return true
 		}
+		// Both inputs are Normalize outputs, so they are valid UTF-8 and a
+		// successful match can only start at a rune boundary.
 		start = offset + 1
 	}
 }

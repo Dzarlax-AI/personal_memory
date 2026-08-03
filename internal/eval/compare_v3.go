@@ -136,6 +136,9 @@ func cohortMap(cohorts []CohortAggregateMetrics) map[QueryCohort]CohortAggregate
 	return result
 }
 
+// uniqueSorted sorts and deduplicates values in place while reusing the
+// supplied slice's backing array. Callers must not rely on its prior order or
+// contents after this call.
 func uniqueSorted(values []string) []string {
 	sort.Strings(values)
 	result := values[:0]

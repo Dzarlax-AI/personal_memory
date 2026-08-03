@@ -92,8 +92,8 @@ func RankAll(rawQuery string, candidates []Candidate, rrfConstant int) ([]Result
 	if normalizedQuery == "" {
 		return nil, errInvalidQuery
 	}
-	if rrfConstant <= 0 || rrfConstant > MaxRRFConstant {
-		return nil, errInvalidOptions
+	if err := validateRRFConstant(rrfConstant); err != nil {
+		return nil, err
 	}
 	if err := validateCandidates(candidates); err != nil {
 		return nil, err
@@ -123,8 +123,8 @@ func rankValidated(normalizedQuery string, candidates []Candidate, rrfConstant, 
 		ranked[index].denseRank = ranked[index-1].denseRank
 	}
 
-	queryTokens := tokenSet(normalizedQuery)
-	queryIdentifiers := identifierLexemes(normalizedQuery)
+	queryTokens := tokenSetNormalized(normalizedQuery)
+	queryIdentifiers := identifierLexemesNormalized(normalizedQuery)
 	for index := range ranked {
 		ranked[index].lexical = scoreLexical(
 			normalizedQuery,
@@ -157,10 +157,16 @@ func rankValidated(normalizedQuery string, candidates []Candidate, rrfConstant, 
 }
 
 func validateOptions(options Options) error {
-	if options.RRFConstant <= 0 ||
-		options.RRFConstant > MaxRRFConstant ||
+	if validateRRFConstant(options.RRFConstant) != nil ||
 		options.Limit <= 0 ||
 		options.Limit > MaxResults {
+		return errInvalidOptions
+	}
+	return nil
+}
+
+func validateRRFConstant(rrfConstant int) error {
+	if rrfConstant <= 0 || rrfConstant > MaxRRFConstant {
 		return errInvalidOptions
 	}
 	return nil
@@ -214,7 +220,7 @@ func validateFields(fields []Field) error {
 		}
 		names[field.Name] = struct{}{}
 		if field.Name == "text" {
-			hasText = Normalize(field.Value) != ""
+			hasText = hasText || Normalize(field.Value) != ""
 		}
 	}
 	if !hasText {

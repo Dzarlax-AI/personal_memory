@@ -27,7 +27,9 @@ func TestReadLimitedBodyRejectsOversizedResponse(t *testing.T) {
 func TestInfoReturnsModelIdentity(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/info" {
-			t.Fatalf("request = %s %s, want GET /info", r.Method, r.URL.Path)
+			t.Errorf("request = %s %s, want GET /info", r.Method, r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"model_id":" intfloat/multilingual-e5-small ","model_sha":" 614241f ","model_dtype":" float32 ","model_type":{"embedding":{"pooling":" mean "}},"version":" 1.8.3 "}`))
@@ -183,7 +185,9 @@ func TestEmbedWithPurposeAppliesInputProfile(t *testing.T) {
 					Inputs []string `json:"inputs"`
 				}
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-					t.Fatalf("decode request: %v", err)
+					t.Errorf("decode request: %v", err)
+					http.Error(w, "bad request", http.StatusBadRequest)
+					return
 				}
 				gotInputs = body.Inputs
 				_, _ = w.Write([]byte(`[[1,2,3]]`))
@@ -217,7 +221,9 @@ func TestEmbedBatchWithPurposeTransformsEveryRawInput(t *testing.T) {
 			Inputs []string `json:"inputs"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("decode request: %v", err)
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
 		}
 		gotInputs = append(gotInputs, body.Inputs...)
 		_, _ = w.Write([]byte(`[[1],[2]]`))
@@ -368,7 +374,9 @@ func TestLegacyEmbedWrappersSendRawInputs(t *testing.T) {
 			Inputs []string `json:"inputs"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("decode request: %v", err)
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
 		}
 		gotInputs = append(gotInputs, body.Inputs...)
 		if len(body.Inputs) == 1 {

@@ -2,7 +2,6 @@ package eval
 
 import (
 	"fmt"
-	"reflect"
 	"sort"
 	"strconv"
 )
@@ -239,7 +238,7 @@ func validateMatchedQueryContracts(baseline, candidate Report) error {
 			}
 		}
 		if baseline.SchemaVersion == CurrentReportSchemaVersion &&
-			!reflect.DeepEqual(baselineQuery.Cohorts, candidateQuery.Cohorts) {
+			!equalCohortSets(baselineQuery.Cohorts, candidateQuery.Cohorts) {
 			return queryContractMismatch(candidateQuery.ID, "cohorts")
 		}
 		delete(baselineQueries, candidateQuery.ID)
@@ -248,6 +247,26 @@ func validateMatchedQueryContracts(baseline, candidate Report) error {
 		return fmt.Errorf("candidate report is missing %d baseline queries", len(baselineQueries))
 	}
 	return nil
+}
+
+func equalCohortSets(left, right []QueryCohort) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	leftSet := make(map[QueryCohort]struct{}, len(left))
+	for _, cohort := range left {
+		leftSet[cohort] = struct{}{}
+	}
+	if len(leftSet) != len(left) {
+		return false
+	}
+	for _, cohort := range right {
+		if _, exists := leftSet[cohort]; !exists {
+			return false
+		}
+		delete(leftSet, cohort)
+	}
+	return len(leftSet) == 0
 }
 
 func baseEmbeddingIdentityEqual(left, right EmbeddingIdentity) bool {

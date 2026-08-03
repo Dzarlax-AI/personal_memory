@@ -44,8 +44,8 @@ func scoreLexical(normalizedQuery string, queryTokens, queryIdentifiers map[stri
 
 	for _, field := range fields {
 		normalizedField := Normalize(field.Value)
-		fieldTokens := tokenSet(normalizedField)
-		fieldIdentifiers := identifierLexemes(normalizedField)
+		fieldTokens := tokenSetNormalized(normalizedField)
+		fieldIdentifiers := identifierLexemesNormalized(normalizedField)
 		fieldDiagnostics := LexicalFieldDiagnostics{
 			Name: field.Name,
 		}

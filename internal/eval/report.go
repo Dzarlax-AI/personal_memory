@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strings"
 
 	"github.com/Dzarlax-AI/personal-memory/internal/memory/lifecycle"
 )
+
+const canonicalScoreScale = 100000
 
 func normalizeReport(report Report) Report {
 	report.TopK = append([]int(nil), report.TopK...)
@@ -49,6 +52,15 @@ func normalizeReport(report Report) Report {
 		} else {
 			report.Queries[i].Results = append([]RetrievedItem(nil), report.Queries[i].Results...)
 		}
+		if report.SchemaVersion == CurrentReportSchemaVersion {
+			for j := range report.Queries[i].Results {
+				// Qdrant can differ by a few float32 ULPs across CPU
+				// architectures. Five decimal places preserve useful score
+				// diagnostics while keeping canonical fixture bytes portable.
+				report.Queries[i].Results[j].Score =
+					canonicalResultScore(report.Queries[i].Results[j].Score)
+			}
+		}
 		if report.Queries[i].Lifecycle != nil {
 			lifecycleReport := report.Queries[i].Lifecycle
 			lifecycleReport.Candidates = append([]LifecycleCandidateReport{}, lifecycleReport.Candidates...)
@@ -79,6 +91,14 @@ func normalizeReport(report Report) Report {
 		}
 	}
 	return report
+}
+
+func canonicalResultScore(score float64) float64 {
+	rounded := math.Round(score*canonicalScoreScale) / canonicalScoreScale
+	if rounded == 0 {
+		return 0
+	}
+	return rounded
 }
 
 func cloneMetricMap(source map[int]float64) map[int]float64 {

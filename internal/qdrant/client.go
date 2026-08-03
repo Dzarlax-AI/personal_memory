@@ -260,7 +260,7 @@ func (c *Client) CreateCollection(ctx context.Context, vectorSize int, metadata 
 	if metadata != nil {
 		body["metadata"] = metadata
 	}
-	return c.mutate(ctx, http.MethodPut, requestURL, body, false)
+	return c.mutate(ctx, http.MethodPut, requestURL, body, false, false)
 }
 
 // DeleteCollection removes the target collection only when its name has the
@@ -277,29 +277,7 @@ func (c *Client) DeleteCollection(ctx context.Context, requiredPrefix string) er
 	query := parsed.Query()
 	query.Set("timeout", "15")
 	parsed.RawQuery = query.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, parsed.String(), nil)
-	if err != nil {
-		return err
-	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("DELETE %s: %w", parsed.String(), err)
-	}
-	defer resp.Body.Close()
-	body, err := readLimitedBody(resp.Body, maxResponseBodyBytes)
-	if err != nil {
-		return fmt.Errorf("read DELETE %s response: %w", parsed.String(), err)
-	}
-	if resp.StatusCode == http.StatusNotFound {
-		return nil
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("DELETE %s failed (status %d): %s", parsed.String(), resp.StatusCode, string(body))
-	}
-	if err := validateMutationResponse(body, false); err != nil {
-		return fmt.Errorf("DELETE %s: %w", parsed.String(), err)
-	}
-	return nil
+	return c.mutate(ctx, http.MethodDelete, parsed.String(), nil, false, true)
 }
 
 // UpdateCollectionMetadata merges collection-level metadata. Qdrant treats an
@@ -307,7 +285,7 @@ func (c *Client) DeleteCollection(ctx context.Context, requiredPrefix string) er
 func (c *Client) UpdateCollectionMetadata(ctx context.Context, metadata map[string]any) error {
 	requestURL := fmt.Sprintf("%s/collections/%s", c.url, c.collection)
 	body := map[string]interface{}{"metadata": metadata}
-	return c.mutate(ctx, http.MethodPatch, requestURL, body, false)
+	return c.mutate(ctx, http.MethodPatch, requestURL, body, false, false)
 }
 
 // EnsureCollection creates the collection if it doesn't exist.
@@ -352,7 +330,7 @@ func (c *Client) upsert(ctx context.Context, point Point, id any) error {
 			},
 		},
 	}
-	return c.mutate(ctx, http.MethodPut, url, body, true)
+	return c.mutate(ctx, http.MethodPut, url, body, true, false)
 }
 
 // Search performs a vector similarity search with optional filters.
@@ -513,7 +491,7 @@ func (c *Client) Delete(ctx context.Context, ids []string) error {
 	body := map[string]interface{}{
 		"points": points,
 	}
-	return c.mutate(ctx, http.MethodPost, url, body, true)
+	return c.mutate(ctx, http.MethodPost, url, body, true, false)
 }
 
 // DeleteByFilter removes all points matching the filter in a single request.
@@ -522,7 +500,7 @@ func (c *Client) DeleteByFilter(ctx context.Context, filter map[string]interface
 	body := map[string]interface{}{
 		"filter": filter,
 	}
-	return c.mutate(ctx, http.MethodPost, url, body, true)
+	return c.mutate(ctx, http.MethodPost, url, body, true, false)
 }
 
 // CreateFieldIndex creates a payload field index for fast filtering.
@@ -532,7 +510,7 @@ func (c *Client) CreateFieldIndex(ctx context.Context, fieldName, fieldSchema st
 		"field_name":   fieldName,
 		"field_schema": fieldSchema,
 	}
-	return c.mutate(ctx, http.MethodPut, url, body, true)
+	return c.mutate(ctx, http.MethodPut, url, body, true, false)
 }
 
 // SetPayload updates payload fields on a point without re-embedding.
@@ -542,7 +520,7 @@ func (c *Client) SetPayload(ctx context.Context, id string, payload map[string]i
 		"payload": payload,
 		"points":  []interface{}{qdrantPointID(id)},
 	}
-	return c.mutate(ctx, http.MethodPost, url, body, true)
+	return c.mutate(ctx, http.MethodPost, url, body, true, false)
 }
 
 var lifecyclePayloadKeys = map[string]struct{}{
@@ -602,7 +580,7 @@ func (c *Client) ReplaceLifecyclePayload(ctx context.Context, id string, set map
 	query := parsed.Query()
 	query.Set("ordering", "strong")
 	parsed.RawQuery = query.Encode()
-	return c.mutate(ctx, http.MethodPost, parsed.String(), map[string]interface{}{"operations": operations}, true)
+	return c.mutate(ctx, http.MethodPost, parsed.String(), map[string]interface{}{"operations": operations}, true, false)
 }
 
 // CreateSnapshot triggers a snapshot creation.
@@ -670,12 +648,12 @@ func (c *Client) ListSnapshots(ctx context.Context) ([]string, error) {
 // DeleteSnapshot removes a snapshot by name.
 func (c *Client) DeleteSnapshot(ctx context.Context, name string) error {
 	requestURL := fmt.Sprintf("%s/collections/%s/snapshots/%s", c.url, c.collection, url.PathEscape(name))
-	return c.mutate(ctx, http.MethodDelete, requestURL, nil, false)
+	return c.mutate(ctx, http.MethodDelete, requestURL, nil, false, false)
 }
 
 // --- HTTP helpers ---
 
-func (c *Client) mutate(ctx context.Context, method, requestURL string, body interface{}, wait bool) error {
+func (c *Client) mutate(ctx context.Context, method, requestURL string, body interface{}, wait, allowNotFound bool) error {
 	if wait {
 		parsed, err := url.Parse(requestURL)
 		if err != nil {
@@ -710,6 +688,9 @@ func (c *Client) mutate(ctx context.Context, method, requestURL string, body int
 	respBody, err := readLimitedBody(resp.Body, maxResponseBodyBytes)
 	if err != nil {
 		return fmt.Errorf("read %s %s response: %w", method, requestURL, err)
+	}
+	if allowNotFound && resp.StatusCode == http.StatusNotFound {
+		return nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("%s %s failed (status %d): %s", method, requestURL, resp.StatusCode, string(respBody))

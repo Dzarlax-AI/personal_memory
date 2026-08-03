@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -144,5 +145,43 @@ func TestRenderDatasetJSONAlwaysEmitsStrictV3LifecycleGate(t *testing.T) {
 					decoded.Gates.ForbidLifecycleViolations, value)
 			}
 		})
+	}
+}
+
+func TestConfigurationMarshalJSONCoversEveryExportedWireField(t *testing.T) {
+	configuration := Configuration{
+		Name: "full", FactCollection: "facts", ChunkCollection: "chunks",
+		FolderCollection: "folders", FolderTopK: 3, FolderThreshold: 0.5,
+		TopK: []int{1, 3}, RetrievalStrategy: RetrievalHybridRRF,
+		DenseCandidateLimit: 40, RRFConstant: 60,
+	}
+	data, err := json.Marshal(configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var actual map[string]json.RawMessage
+	if err := json.Unmarshal(data, &actual); err != nil {
+		t.Fatal(err)
+	}
+
+	expected := make(map[string]struct{})
+	configurationType := reflect.TypeOf(configuration)
+	for i := 0; i < configurationType.NumField(); i++ {
+		field := configurationType.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		if name != "" && name != "-" {
+			expected[name] = struct{}{}
+		}
+	}
+	if len(actual) != len(expected) {
+		t.Fatalf("configuration JSON keys = %v, want %v", actual, expected)
+	}
+	for name := range expected {
+		if _, exists := actual[name]; !exists {
+			t.Fatalf("Configuration.MarshalJSON omitted exported field %q", name)
+		}
 	}
 }

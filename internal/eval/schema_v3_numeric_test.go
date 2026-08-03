@@ -79,6 +79,39 @@ func TestDecodeReportV3RejectsInvalidMetricNumbers(t *testing.T) {
 	}
 }
 
+func TestDecodeReportV3RejectsInvalidCorpusDiagnosticNumbers(t *testing.T) {
+	for _, field := range []string{"embedding_duration_us", "embedding_count"} {
+		t.Run(field, func(t *testing.T) {
+			report := validV3ComparisonReport()
+			queryCount := len(report.Queries)
+			report.Diagnostics = &Diagnostics{
+				Query: QueryDiagnostics{
+					Total:  DurationSummary{Count: queryCount},
+					Embed:  DurationSummary{Count: queryCount},
+					Search: DurationSummary{Count: queryCount},
+				},
+				Corpus: &CorpusDiagnostics{EmbeddingDurationUS: 1, EmbeddingCount: 1},
+			}
+			data, err := RenderJSON(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			document := decodeTestDocument(t, data)
+			setNestedTestValue(
+				t, document, json.Number("1e999"), "diagnostics", "corpus", field,
+			)
+			encoded, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeReport(encoded); err == nil ||
+				!strings.Contains(err.Error(), field) {
+				t.Fatalf("DecodeReport() error = %v, want %q numeric rejection", err, field)
+			}
+		})
+	}
+}
+
 func setNestedTestValue(t *testing.T, root map[string]any, value any, path ...any) {
 	t.Helper()
 	if len(path) == 0 {

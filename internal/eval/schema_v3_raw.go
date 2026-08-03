@@ -278,6 +278,13 @@ func validateV3ReportRaw(data []byte) error {
 				"embedding_duration_us", "embedding_count"); err != nil {
 				return err
 			}
+			for _, field := range []string{"embedding_duration_us", "embedding_count"} {
+				if err := validateRawFiniteNumber(
+					corpus[field], "report.diagnostics.corpus."+field,
+				); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	embedding, err := rawObjectField(root, "embedding", "report")

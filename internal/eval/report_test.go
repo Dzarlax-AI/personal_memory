@@ -43,6 +43,34 @@ func TestRenderReportIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestRenderV3ReportCanonicalizesCrossPlatformScores(t *testing.T) {
+	left := validV3ComparisonReport()
+	right := validV3ComparisonReport()
+	left.Queries[0].Results = []RetrievedItem{
+		{ID: "candidate", Score: 0.9421525},
+		{ID: "zero", Score: -0.00000004},
+	}
+	right.Queries[0].Results = []RetrievedItem{
+		{ID: "candidate", Score: 0.94215244},
+		{ID: "zero", Score: 0.00000004},
+	}
+
+	leftJSON, err := RenderJSON(left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightJSON, err := RenderJSON(right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(leftJSON, rightJSON) {
+		t.Fatalf("cross-platform score noise changed canonical report bytes\nleft:\n%s\nright:\n%s", leftJSON, rightJSON)
+	}
+	if left.Queries[0].Results[0].Score != 0.9421525 {
+		t.Fatal("RenderJSON mutated the caller's report")
+	}
+}
+
 func TestDecodeReportRejectsDiagnosticsOnOldSchema(t *testing.T) {
 	data, err := os.ReadFile("../../evaldata/public/v1/baseline.json")
 	if err != nil {

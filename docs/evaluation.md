@@ -132,8 +132,11 @@ The target runs two `source=fixture` rankings:
 
 Generated JSON and Markdown are written under `eval-results/`. Fixture reports
 omit timestamps, temporary collection names, and timing, so canonical JSON is
-byte reproducible. CI starts only Qdrant; it does not start TEI, download a
-model, or require a GPU.
+byte reproducible. Schema-v3 rendering rounds diagnostic result scores to five
+decimal places so insignificant Qdrant float32 differences across CPU
+architectures do not change evidence bytes; ranking order and all metrics
+remain unrounded. CI starts only Qdrant; it does not start TEI, download a model,
+or require a GPU.
 
 The pinned
 `evaldata/public/v3/hybrid-rrf60-failing-comparison.json` is the separately

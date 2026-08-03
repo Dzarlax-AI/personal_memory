@@ -228,8 +228,10 @@ func TestConnectorOnlyQueryUsesDenseOnlyFallback(t *testing.T) {
 }
 
 func TestLongConnectorRunsRemainContextSensitive(t *testing.T) {
-	const connectorCount = 1 << 20
-	connectors := strings.Repeat("-._/:@\\", connectorCount/7)
+	// Long enough to exercise the outward scan without megabyte-scale
+	// normalization work in every assertion.
+	const connectorRepeats = 1 << 12
+	connectors := strings.Repeat("-._/:@\\", connectorRepeats)
 
 	if containsExactPhrase(Normalize("x"+connectors+"y"), Normalize("x")) {
 		t.Fatal("connector run leading to identifier continuation was accepted")

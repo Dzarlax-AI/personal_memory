@@ -1,9 +1,11 @@
 package retrieval
 
 import (
+	"errors"
 	"math"
 	"math/rand"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -274,7 +276,7 @@ func TestRankValidation(t *testing.T) {
 func TestRankCandidateCapAndLimit(t *testing.T) {
 	candidates := make([]Candidate, MaxCandidates)
 	for i := range candidates {
-		candidates[i] = candidate(normalizedNumericID(i), 1-float64(i)/MaxCandidates, "text")
+		candidates[i] = candidate(strconv.Itoa(i), 1-float64(i)/MaxCandidates, "text")
 	}
 	if got := rank(t, "text", candidates, MaxResults); len(got) != MaxResults {
 		t.Fatalf("result count = %d, want %d", len(got), MaxResults)
@@ -344,7 +346,7 @@ func TestRankKeepsExplicitDenseOnlyCandidate(t *testing.T) {
 func TestRankAllReturnsEntireBoundedPoolWithoutChangingRankLimit(t *testing.T) {
 	candidates := make([]Candidate, MaxCandidates)
 	for i := range candidates {
-		candidates[i] = candidate(normalizedNumericID(i), 1-float64(i)/MaxCandidates, "text")
+		candidates[i] = candidate(strconv.Itoa(i), 1-float64(i)/MaxCandidates, "text")
 	}
 	all, err := RankAll("text", candidates, 60)
 	if err != nil {
@@ -372,23 +374,10 @@ func TestRankAllReturnsEntireBoundedPoolWithoutChangingRankLimit(t *testing.T) {
 	if _, err := RankAll("text", tooMany, 60); err == nil {
 		t.Fatal("RankAll() accepted candidates above MaxCandidates")
 	}
-}
-
-func normalizedNumericID(i int) string {
-	const digits = "0123456789"
-	if i == 0 {
-		return "0"
+	if _, err := RankAll(" \t ", candidates, 60); !errors.Is(err, errInvalidQuery) {
+		t.Fatalf("RankAll() empty query error = %v, want %v", err, errInvalidQuery)
 	}
-	var reversed [20]byte
-	n := 0
-	for i > 0 {
-		reversed[n] = digits[i%10]
-		i /= 10
-		n++
+	if _, err := RankAll("text", candidates, MaxRRFConstant+1); !errors.Is(err, errInvalidOptions) {
+		t.Fatalf("RankAll() RRF error = %v, want %v", err, errInvalidOptions)
 	}
-	result := make([]byte, n)
-	for j := range result {
-		result[j] = reversed[n-1-j]
-	}
-	return string(result)
 }

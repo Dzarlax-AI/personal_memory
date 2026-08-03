@@ -17,8 +17,8 @@ import (
 
 const (
 	publicV3DatasetSHA256           = "717f3d5893c4fe400161d6e152acb1aa921fab279080e185008451ab28931b96"
-	publicV3BaselineSHA256          = "912a3cadba6cd19db90cc6de276bed05cd8a867d3d25dd55615895d60208054e"
-	publicV3HybridCandidateSHA256   = "61936f2695ddca385ff2872dadfd9e997b8f70f1d2a4be1564480dfb6970ad4a"
+	publicV3BaselineSHA256          = "7a461d7273fa4bb074b049b427607a7f65ec8f02b43859f66f356d1902d6c2f4"
+	publicV3HybridCandidateSHA256   = "58819e8dbf0df0daa0b380ece30df7de8b00e8e60f0fa881337cf7e35493c2e9"
 	publicV3FailingComparisonSHA256 = "4449eb08f6676fb47ddef7111ae19166b7f1e0fa8311d65d4203a3f4604ceadd"
 	publicV3DatasetVersion          = "3.1.0"
 	publicV3ModelRevision           = "614241f622f53c4eeff9890bdc4f31cfecc418b3"
@@ -63,6 +63,7 @@ func TestPublicV3DatasetPinnedContract(t *testing.T) {
 		len(dataset.Folders) <= publicV3DenseCandidateLimit {
 		t.Fatal("public v3 corpus does not activate every 40-candidate bound")
 	}
+	assertIntentionalFolderOnlyCalibrationCandidates(t, dataset)
 
 	wantCohorts := map[QueryCohort][]string{
 		CohortExactName: {
@@ -142,6 +143,35 @@ func TestPublicV3DatasetPinnedContract(t *testing.T) {
 		}
 	}
 	assertRawSHA256(t, datasetPath, datasetData, publicV3DatasetSHA256)
+}
+
+func assertIntentionalFolderOnlyCalibrationCandidates(t *testing.T, dataset *Dataset) {
+	t.Helper()
+	chunkPaths := make(map[string]struct{}, len(dataset.Chunks))
+	for _, chunk := range dataset.Chunks {
+		if path, ok := chunk.Payload["folder_path"].(string); ok {
+			chunkPaths[path] = struct{}{}
+		}
+	}
+	var folderOnly []string
+	for _, folder := range dataset.Folders {
+		path, ok := folder.Payload["folder_path"].(string)
+		if !ok {
+			continue
+		}
+		if _, exists := chunkPaths[path]; !exists {
+			folderOnly = append(folderOnly, path)
+		}
+	}
+	sort.Strings(folderOnly)
+	want := []string{
+		"calibration/set-000000000031/terrariums",
+		"calibration/set-000000000032/calligraphy",
+		"calibration/set-000000000033/sailboats",
+	}
+	if !reflect.DeepEqual(folderOnly, want) {
+		t.Fatalf("folder-only calibration candidates = %v, want intentional decoys %v", folderOnly, want)
+	}
 }
 
 func TestPublicV3CarriesPublicV2Contracts(t *testing.T) {
