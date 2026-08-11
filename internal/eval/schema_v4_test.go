@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -60,8 +61,49 @@ func TestSchemaV4CanonicalReportNormalizesScoresAndEmptySlices(t *testing.T) {
 	if report.Queries == nil || report.Cohorts == nil || report.Queries[0].Results == nil {
 		t.Fatal("schema v4 canonical empty slices must encode as arrays")
 	}
-	if got := report.Queries[1].Results[0].Score; got != 0.12346 {
-		t.Fatalf("canonical score = %v, want 0.12346", got)
+	if got := report.Queries[1].Results[0].Score; got != 0.1235 {
+		t.Fatalf("canonical score = %v, want 0.1235", got)
+	}
+}
+
+func TestDecodeReportV4RejectsFreeFormRoutingTraceValues(t *testing.T) {
+	path := "../../evaldata/public/v4/blended-rrf.json"
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(map[string]any)
+		want   string
+	}{
+		{name: "reason code", want: "reason code", mutate: func(query map[string]any) {
+			query["routing"].(map[string]any)["reason_codes"] = []any{"private query text"}
+		}},
+		{name: "reranker reason", want: "reranker reason", mutate: func(query map[string]any) {
+			query["routing"].(map[string]any)["reranker_reason"] = "private document text"
+		}},
+		{name: "source", want: "routing source", mutate: func(query map[string]any) {
+			routing := query["routing"].(map[string]any)
+			results := routing["results"].([]any)
+			results[0].(map[string]any)["sources"] = []any{map[string]any{"source": "private folder", "rank": float64(1)}}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var document map[string]any
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			queries := document["queries"].([]any)
+			test.mutate(queries[0].(map[string]any))
+			tampered, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeReport(tampered); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("DecodeReport error = %v, want containing %q", err, test.want)
+			}
+		})
 	}
 }
 

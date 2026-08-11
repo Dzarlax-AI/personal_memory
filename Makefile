@@ -48,6 +48,9 @@ test: dev-deps vet
 	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory ./cmd/conformance-memory
 
 QDRANT_TEST_URL ?= http://127.0.0.1:6333
+# eval-memory compare uses this distinct status for an expected gate rejection;
+# status 1 remains reserved for usage, input, output, and other errors.
+EVAL_GATE_FAILURE_EXIT := 3
 
 eval-public:
 	mkdir -p eval-results
@@ -102,7 +105,7 @@ eval-public-v4:
 			--baseline eval-results/public-v4-hierarchical-only.json \
 			--candidate "eval-results/public-v4-$$report.json" --enforce-gates \
 			--json "eval-results/public-v4-$$candidate-comparison.json"; status=$$?; set -e; \
-		test $$status -eq 3; \
+		test $$status -eq $(EVAL_GATE_FAILURE_EXIT); \
 		cmp "evaldata/public/v4/$$candidate-failing-comparison.json" \
 			"eval-results/public-v4-$$candidate-comparison.json"; \
 	done

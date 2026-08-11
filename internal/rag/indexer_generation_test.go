@@ -295,6 +295,31 @@ func TestRunRefreshesLegacyFolderSummaryWithoutRewritingChunks(t *testing.T) {
 	}
 }
 
+func TestRunRemovesLegacyHiddenFolderSummaryWithoutRefreshingIt(t *testing.T) {
+	h := newGenerationHarness(t, 100)
+	hiddenDir := filepath.Join(h.idx.docsDir, ".sync")
+	if err := os.Mkdir(hiddenDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hiddenDir, "private.md"), []byte("hidden"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	folderID := folderPointID(hiddenDir)
+	h.points[folderID] = qdrant.Point{ID: folderID, Payload: map[string]interface{}{
+		"folder_path": hiddenDir, "summary": "legacy hidden summary",
+	}}
+
+	if err := h.idx.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, exists := h.points[folderID]; exists {
+		t.Fatal("legacy hidden-folder summary remains indexed")
+	}
+	if h.embeds != 0 || h.upserts != 0 || h.deletes != 1 {
+		t.Fatalf("hidden cleanup calls embeds=%d upserts=%d deletes=%d", h.embeds, h.upserts, h.deletes)
+	}
+}
+
 func TestIndexFile_LegacyUnversionedChunksAreUpgraded(t *testing.T) {
 	h := newGenerationHarness(t, 100)
 	content := "same content"

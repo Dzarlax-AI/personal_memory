@@ -271,6 +271,11 @@ type routingMetadata struct {
 }
 
 func (s *Server) blendedSearch(ctx context.Context, query string, vec []float32, limit int) ([]qdrant.Point, map[string]routingMetadata, error) {
+	resultLimit := min(limit, retrieval.MaxResults)
+	poolLimit := resultLimit
+	if s.reranker != nil {
+		poolLimit = min(max(resultLimit, s.rerankerCap), retrieval.MaxResults)
+	}
 	folderLimit := min(s.cfg.RAGFolderTopK, retrieval.MaxCandidates)
 	threshold := s.cfg.RAGFolderThreshold
 	folderPoints, err := s.searchFolders.Search(ctx, vec, folderLimit, nil, &threshold)
@@ -298,7 +303,7 @@ func (s *Server) blendedSearch(ctx context.Context, query string, vec []float32,
 		}
 	}
 
-	candidateLimit := min(limit*blendedCandidateFactor, retrieval.MaxCandidates/2)
+	candidateLimit := min(poolLimit*blendedCandidateFactor, retrieval.MaxCandidates/2)
 	var filtered []qdrant.Point
 	if len(conditions) > 0 {
 		filtered, err = s.searchChunks.Search(ctx, vec, candidateLimit, map[string]interface{}{"should": conditions}, nil)
@@ -333,7 +338,7 @@ func (s *Server) blendedSearch(ctx context.Context, query string, vec []float32,
 		return nil, nil, nil
 	}
 
-	options := retrieval.MultiListOptions{RRFConstant: blendedRRFConstant, Limit: limit}
+	options := retrieval.MultiListOptions{RRFConstant: blendedRRFConstant, Limit: poolLimit}
 	if len(flat) > 0 {
 		options.FlatSource = blendedFlatSource
 	}
@@ -349,28 +354,31 @@ func (s *Server) blendedSearch(ctx context.Context, query string, vec []float32,
 		routing[result.ID] = routingForFusedResult(result, selectedFolders)
 	}
 	if s.reranker != nil && len(points) > 0 {
-		cap := min(len(points), s.rerankerCap)
-		candidates := make([]rerank.Candidate, cap)
-		for i := 0; i < cap; i++ {
+		candidateCount := min(len(points), s.rerankerCap)
+		candidates := make([]rerank.Candidate, candidateCount)
+		for i := 0; i < candidateCount; i++ {
 			text, _ := points[i].Payload["text"].(string)
 			candidates[i] = rerank.Candidate{ID: points[i].ID, Text: text}
 		}
 		reranked, reason := rerank.ApplyFailOpen(ctx, s.reranker, query, candidates)
-		if reason == "reranker_applied" {
-			byID := make(map[string]qdrant.Point, cap)
-			for _, point := range points[:cap] {
+		if reason == rerank.ReasonApplied {
+			byID := make(map[string]qdrant.Point, candidateCount)
+			for _, point := range points[:candidateCount] {
 				byID[point.ID] = point
 			}
-			for i, candidate := range reranked {
-				points[i] = byID[candidate.ID]
+			for i := 0; i < len(reranked) && i < candidateCount; i++ {
+				if point, ok := byID[reranked[i].ID]; ok {
+					points[i] = point
+				}
 			}
 		}
-		for _, point := range points[:cap] {
+		for _, point := range points[:candidateCount] {
 			metadata := routing[point.ID]
 			metadata.ReasonCodes = append(metadata.ReasonCodes, reason)
 			routing[point.ID] = metadata
 		}
 	}
+	points = points[:min(len(points), resultLimit)]
 	return points, routing, nil
 }
 

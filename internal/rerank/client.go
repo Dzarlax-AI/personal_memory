@@ -15,6 +15,12 @@ import (
 
 const MaxCandidates = 100
 
+const (
+	ReasonApplied  = "reranker_applied"
+	ReasonFallback = "reranker_fallback"
+	ReasonDisabled = "reranker_disabled"
+)
+
 type Candidate struct {
 	ID   string
 	Text string
@@ -89,7 +95,7 @@ func (c *Client) Rerank(ctx context.Context, query string, candidates []Candidat
 	if err != nil {
 		return nil, fmt.Errorf("rerank request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		return nil, fmt.Errorf("rerank returned HTTP %d", resp.StatusCode)
@@ -123,15 +129,20 @@ func (c *Client) Rerank(ctx context.Context, query string, candidates []Candidat
 // fails. The reason is a bounded stable code suitable for privacy-safe traces.
 func ApplyFailOpen(ctx context.Context, service Reranker, query string, candidates []Candidate) ([]Candidate, string) {
 	if service == nil || len(candidates) == 0 {
-		return append([]Candidate(nil), candidates...), "reranker_disabled"
+		return append([]Candidate(nil), candidates...), ReasonDisabled
 	}
 	ranked, err := service.Rerank(ctx, query, candidates)
-	if err != nil {
-		return append([]Candidate(nil), candidates...), "reranker_fallback"
+	if err != nil || len(ranked) != len(candidates) {
+		return append([]Candidate(nil), candidates...), ReasonFallback
 	}
+	seen := make(map[int]bool, len(ranked))
 	result := make([]Candidate, len(ranked))
 	for i, item := range ranked {
+		if item.Index < 0 || item.Index >= len(candidates) || seen[item.Index] {
+			return append([]Candidate(nil), candidates...), ReasonFallback
+		}
+		seen[item.Index] = true
 		result[i] = candidates[item.Index]
 	}
-	return result, "reranker_applied"
+	return result, ReasonApplied
 }

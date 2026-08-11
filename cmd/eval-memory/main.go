@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -24,16 +23,20 @@ func (unavailableReranker) Rerank(context.Context, string, []rerank.Candidate) (
 	return nil, fmt.Errorf("reranker endpoint unavailable in offline replay")
 }
 
-const defaultTimeout = 2 * time.Minute
+const (
+	defaultTimeout  = 2 * time.Minute
+	exitError       = 1
+	exitGateFailure = 3
+)
 
 func main() {
 	if err := runCLI(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		var gateErr *gateFailureError
 		if errors.As(err, &gateErr) {
-			os.Exit(3)
+			os.Exit(exitGateFailure)
 		}
-		os.Exit(1)
+		os.Exit(exitError)
 	}
 }
 
@@ -354,11 +357,10 @@ func compareCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(comparison, "", "  ")
+	data, err := memoryeval.RenderComparisonJSON(comparison)
 	if err != nil {
-		return fmt.Errorf("encode comparison: %w", err)
+		return err
 	}
-	data = append(data, '\n')
 	if *outputPath != "" {
 		if err := writeAtomic(*outputPath, data, 0o644); err != nil {
 			return fmt.Errorf("write comparison: %w", err)

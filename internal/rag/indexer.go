@@ -303,8 +303,9 @@ func (idx *Indexer) indexFolder(ctx context.Context, dir string) error {
 	return idx.folders.Upsert(ctx, qdrant.Point{ID: id, Vector: vec, Payload: payload})
 }
 
-// foldersNeedingRefresh returns only stored, in-root folder paths whose
-// summary payload predates the current deterministic contract.
+// foldersNeedingRefresh returns stored, in-root folder paths whose summary
+// predates the current contract, plus legacy hidden paths that need guarded
+// removal rather than refresh.
 func (idx *Indexer) foldersNeedingRefresh(ctx context.Context) (map[string]bool, error) {
 	points, err := idx.folders.ScrollAllWithPayload(ctx, nil,
 		[]string{"folder_path", "summary_version", "relative_folder_path"}, false)
@@ -315,6 +316,10 @@ func (idx *Indexer) foldersNeedingRefresh(ctx context.Context) (map[string]bool,
 	for _, point := range points {
 		dir, _ := point.Payload["folder_path"].(string)
 		if dir == "" || !pathWithinRoot(idx.docsDir, dir) {
+			continue
+		}
+		if pathContainsHiddenComponent(idx.docsDir, dir) {
+			refresh[dir] = true
 			continue
 		}
 		version, _ := point.Payload["summary_version"].(string)
@@ -331,11 +336,35 @@ func pathWithinRoot(root, candidate string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+func pathContainsHiddenComponent(root, candidate string) bool {
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil || relative == "." || relative == "" {
+		return false
+	}
+	for _, component := range strings.Split(filepath.ToSlash(relative), "/") {
+		if strings.HasPrefix(component, ".") {
+			return true
+		}
+	}
+	return false
+}
+
 // reconcileFolder refreshes a live folder summary or removes its point once
 // the folder has disappeared (or no longer contains indexable files). Deletes
 // are allowed only after a healthy filesystem walk; an incomplete walk must
 // never turn missing observations into destructive cleanup.
 func (idx *Indexer) reconcileFolder(ctx context.Context, dir string, allowDelete bool) error {
+	if pathContainsHiddenComponent(idx.docsDir, dir) {
+		if !allowDelete {
+			slog.Warn("skipping hidden folder summary cleanup after unhealthy walk", "dir", dir)
+			return nil
+		}
+		if err := idx.folders.Delete(ctx, []string{folderPointID(dir)}); err != nil {
+			return fmt.Errorf("delete hidden folder point: %w", err)
+		}
+		slog.Info("removed hidden folder point", "dir", dir)
+		return nil
+	}
 	hasFiles, err := folderHasIndexableFiles(dir)
 	if err != nil && !os.IsNotExist(err) {
 		return err

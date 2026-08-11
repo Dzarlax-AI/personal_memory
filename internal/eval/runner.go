@@ -551,15 +551,15 @@ func searchDocumentsWithRouting(ctx context.Context, clients collections, query 
 			}
 		}
 		if len(conditions) == 0 {
-			trace.ReasonCodes = append(trace.ReasonCodes, "no_folder_match", "flat_fallback")
+			trace.ReasonCodes = append(trace.ReasonCodes, RoutingReasonNoFolderMatch, RoutingReasonFlatFallback)
 		} else {
 			filtered, err := clients.chunks.Search(ctx, query.Vector, candidateLimit, map[string]any{"should": conditions}, nil)
 			if err != nil {
 				return nil, nil, err
 			}
-			add("folder_filtered", filtered)
+			add(RoutingSourceFolderFiltered, filtered)
 			if len(filtered) == 0 {
-				trace.ReasonCodes = append(trace.ReasonCodes, "empty_folder_results", "flat_fallback")
+				trace.ReasonCodes = append(trace.ReasonCodes, RoutingReasonEmptyFolderResult, RoutingReasonFlatFallback)
 			}
 		}
 	}
@@ -569,22 +569,27 @@ func searchDocumentsWithRouting(ctx context.Context, clients collections, query 
 		if err != nil {
 			return nil, nil, err
 		}
-		add("flat", flat)
+		add(RoutingSourceFlat, flat)
 	}
 	if len(lists) == 0 {
-		trace.ReasonCodes = append(trace.ReasonCodes, "empty_results")
+		trace.ReasonCodes = append(trace.ReasonCodes, RoutingReasonEmptyResults)
 		return []qdrant.Point{}, trace, nil
 	}
-	options := retrieval.MultiListOptions{RRFConstant: cfg.RoutingRRFConstant, Limit: limit}
+	resultLimit := min(limit, retrieval.MaxResults)
+	poolLimit := resultLimit
+	if service != nil && cfg.RerankerModelID != "" {
+		poolLimit = min(max(resultLimit, cfg.RerankerCandidateCap), retrieval.MaxResults)
+	}
+	options := retrieval.MultiListOptions{RRFConstant: cfg.RoutingRRFConstant, Limit: poolLimit}
 	if cfg.DocumentRoutingStrategy == DocumentRoutingBlendedRRF && len(flat) > 0 {
-		options.FlatSource = "flat"
+		options.FlatSource = RoutingSourceFlat
 	}
 	fused, diagnostics, err := retrieval.FuseRankedLists(lists, options)
 	if err != nil {
 		return nil, nil, err
 	}
 	if diagnostics.FlatRescueApplied {
-		trace.ReasonCodes = append(trace.ReasonCodes, "flat_rescue")
+		trace.ReasonCodes = append(trace.ReasonCodes, RoutingReasonFlatRescue)
 	}
 	points := make([]qdrant.Point, len(fused))
 	for i, item := range fused {
@@ -596,21 +601,47 @@ func searchDocumentsWithRouting(ctx context.Context, clients collections, query 
 		trace.Results = append(trace.Results, RoutingResultTrace{ID: item.ID, Sources: sources})
 	}
 	if service != nil && cfg.RerankerModelID != "" && len(points) > 0 {
-		cap := min(len(points), cfg.RerankerCandidateCap)
-		candidates := make([]rerank.Candidate, cap)
-		for i := range candidates {
-			text, _ := points[i].Payload["text"].(string)
-			candidates[i] = rerank.Candidate{ID: points[i].ID, Text: text}
-		}
-		reranked, reason := rerank.ApplyFailOpen(ctx, service, query.Text, candidates)
-		trace.RerankerReason = reason
-		if reason == "reranker_applied" {
-			for i, candidate := range reranked {
-				points[i] = byID[candidate.ID]
-			}
+		points = applyDocumentReranker(ctx, service, query.Text,
+			time.Duration(cfg.RerankerTimeoutMS)*time.Millisecond,
+			cfg.RerankerCandidateCap, points, trace)
+	}
+	points = points[:min(len(points), resultLimit)]
+	trace.Results = trace.Results[:min(len(trace.Results), resultLimit)]
+	return points, trace, nil
+}
+
+func applyDocumentReranker(ctx context.Context, service rerank.Reranker, query string, timeout time.Duration,
+	candidateCap int, points []qdrant.Point, trace *RoutingTrace) []qdrant.Point {
+	candidateCount := min(len(points), candidateCap)
+	candidates := make([]rerank.Candidate, candidateCount)
+	for i := range candidates {
+		text, _ := points[i].Payload["text"].(string)
+		candidates[i] = rerank.Candidate{ID: points[i].ID, Text: text}
+	}
+	rerankCtx, cancel := context.WithTimeout(ctx, timeout)
+	reranked, reason := rerank.ApplyFailOpen(rerankCtx, service, query, candidates)
+	cancel()
+	trace.RerankerReason = reason
+	if reason != rerank.ReasonApplied {
+		return points
+	}
+	pointsByID := make(map[string]qdrant.Point, candidateCount)
+	traceByID := make(map[string]RoutingResultTrace, candidateCount)
+	for i := 0; i < candidateCount; i++ {
+		pointsByID[points[i].ID] = points[i]
+		if i < len(trace.Results) {
+			traceByID[trace.Results[i].ID] = trace.Results[i]
 		}
 	}
-	return points, trace, nil
+	for i := 0; i < len(reranked) && i < candidateCount; i++ {
+		if point, ok := pointsByID[reranked[i].ID]; ok {
+			points[i] = point
+		}
+		if result, ok := traceByID[reranked[i].ID]; ok && i < len(trace.Results) {
+			trace.Results[i] = result
+		}
+	}
+	return points
 }
 
 func pointIDsForEval(points []qdrant.Point) []string {

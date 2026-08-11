@@ -10,9 +10,28 @@ import (
 	"strings"
 
 	"github.com/Dzarlax-AI/personal-memory/internal/memory/lifecycle"
+	"github.com/Dzarlax-AI/personal-memory/internal/rerank"
 )
 
-const canonicalScoreScale = 100000
+const (
+	canonicalV3ScoreScale  = 100000
+	canonicalV4ScoreScale  = 10000
+	maxRoutingReasonCodes  = 8
+	maxRoutingTraceResults = 100
+)
+
+var allowedRoutingReasonCodes = map[string]struct{}{
+	RoutingReasonNoFolderMatch: {}, RoutingReasonFlatFallback: {},
+	RoutingReasonEmptyFolderResult: {}, RoutingReasonEmptyResults: {}, RoutingReasonFlatRescue: {},
+}
+
+var allowedRoutingSources = map[string]struct{}{
+	RoutingSourceFlat: {}, RoutingSourceFolderFiltered: {},
+}
+
+var allowedRerankerReasons = map[string]struct{}{
+	rerank.ReasonApplied: {}, rerank.ReasonFallback: {}, rerank.ReasonDisabled: {},
+}
 
 func normalizeReport(report Report) Report {
 	report.TopK = append([]int(nil), report.TopK...)
@@ -55,10 +74,14 @@ func normalizeReport(report Report) Report {
 		if report.SchemaVersion >= CurrentReportSchemaVersion {
 			for j := range report.Queries[i].Results {
 				// Qdrant can differ by a few float32 ULPs across CPU
-				// architectures. Five decimal places preserve useful score
-				// diagnostics while keeping canonical fixture bytes portable.
+				// architectures. V3 remains immutable at five decimal places;
+				// v4 uses four after Linux/macOS crossed a five-decimal boundary.
+				scale := canonicalV3ScoreScale
+				if report.SchemaVersion >= DocumentRoutingSchemaVersion {
+					scale = canonicalV4ScoreScale
+				}
 				report.Queries[i].Results[j].Score =
-					canonicalResultScore(report.Queries[i].Results[j].Score)
+					canonicalResultScore(report.Queries[i].Results[j].Score, scale)
 			}
 		}
 		if report.Queries[i].Lifecycle != nil {
@@ -93,8 +116,8 @@ func normalizeReport(report Report) Report {
 	return report
 }
 
-func canonicalResultScore(score float64) float64 {
-	rounded := math.Round(score*canonicalScoreScale) / canonicalScoreScale
+func canonicalResultScore(score float64, scale int) float64 {
+	rounded := math.Round(score*float64(scale)) / float64(scale)
 	if rounded == 0 {
 		return 0
 	}
@@ -433,8 +456,25 @@ func validateDocumentRoutingReport(report Report) error {
 		if query.Routing == nil || query.Routing.Strategy != report.Configuration.DocumentRoutingStrategy {
 			return fmt.Errorf("document query %q requires matching routing trace", query.ID)
 		}
-		if len(query.Routing.ReasonCodes) > 8 || len(query.Routing.SelectedFolders) > report.Configuration.FolderTopK || len(query.Routing.Results) > 100 {
+		if len(query.Routing.ReasonCodes) > maxRoutingReasonCodes || len(query.Routing.SelectedFolders) > report.Configuration.FolderTopK || len(query.Routing.Results) > maxRoutingTraceResults {
 			return fmt.Errorf("document query %q routing trace exceeds bounds", query.ID)
+		}
+		for _, code := range query.Routing.ReasonCodes {
+			if _, ok := allowedRoutingReasonCodes[code]; !ok {
+				return fmt.Errorf("document query %q routing reason code %q is not allowed", query.ID, code)
+			}
+		}
+		if query.Routing.RerankerReason != "" {
+			if _, ok := allowedRerankerReasons[query.Routing.RerankerReason]; !ok {
+				return fmt.Errorf("document query %q reranker reason %q is not allowed", query.ID, query.Routing.RerankerReason)
+			}
+		}
+		for _, result := range query.Routing.Results {
+			for _, source := range result.Sources {
+				if _, ok := allowedRoutingSources[source.Source]; !ok {
+					return fmt.Errorf("document query %q routing source %q is not allowed", query.ID, source.Source)
+				}
+			}
 		}
 		for _, folder := range query.Routing.SelectedFolders {
 			if folder == "" || strings.HasPrefix(folder, "/") || strings.Contains(folder, "..") || strings.Contains(folder, `\`) {

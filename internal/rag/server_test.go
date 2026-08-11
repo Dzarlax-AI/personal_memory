@@ -3,12 +3,14 @@ package rag
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/Dzarlax-AI/personal-memory/internal/config"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
+	"github.com/Dzarlax-AI/personal-memory/internal/rerank"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -172,6 +174,68 @@ func TestSearchDocumentsDefaultDoesNotBecomeBlended(t *testing.T) {
 	}
 	if strings.Contains(text, `"routing"`) {
 		t.Fatalf("default response unexpectedly gained blended routing: %s", text)
+	}
+}
+
+type fakeReranker struct {
+	ranked []rerank.Ranked
+	err    error
+}
+
+func (r fakeReranker) Rerank(context.Context, string, []rerank.Candidate) ([]rerank.Ranked, error) {
+	return r.ranked, r.err
+}
+
+func TestBlendedSearchReranksCandidatePoolBeforeFinalLimit(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		reranker   rerank.Reranker
+		wantIDs    []string
+		wantReason string
+	}{
+		{
+			name: "applied",
+			reranker: fakeReranker{ranked: []rerank.Ranked{
+				{Index: 2, Score: .9}, {Index: 0, Score: .8}, {Index: 1, Score: .7},
+			}},
+			wantIDs: []string{"c", "a"}, wantReason: rerank.ReasonApplied,
+		},
+		{
+			name:     "fallback",
+			reranker: fakeReranker{err: fmt.Errorf("unavailable")},
+			wantIDs:  []string{"a", "b"}, wantReason: rerank.ReasonFallback,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls []searchCall
+			srv := &Server{
+				searchFolders: fakePointSearcher{name: "folders", calls: &calls, search: func(map[string]any) []qdrant.Point { return nil }},
+				searchChunks: fakePointSearcher{name: "chunks", calls: &calls, search: func(map[string]any) []qdrant.Point {
+					return []qdrant.Point{
+						{ID: "a", Payload: map[string]any{"text": "A"}},
+						{ID: "b", Payload: map[string]any{"text": "B"}},
+						{ID: "c", Payload: map[string]any{"text": "C"}},
+					}
+				}},
+				reranker: test.reranker, rerankerCap: 3,
+				cfg: &config.Config{RAGDocumentsDir: "/documents", RAGFolderTopK: 3, RAGFolderThreshold: .5},
+			}
+			points, routing, err := srv.blendedSearch(context.Background(), "query", []float32{1}, 2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := pointIDs(points); !reflect.DeepEqual(got, test.wantIDs) {
+				t.Fatalf("point IDs = %v, want %v", got, test.wantIDs)
+			}
+			for _, point := range points {
+				if reasons := routing[point.ID].ReasonCodes; len(reasons) == 0 || reasons[len(reasons)-1] != test.wantReason {
+					t.Fatalf("routing reasons for %s = %v", point.ID, reasons)
+				}
+			}
+			if got := calls[len(calls)-1].Limit; got != 6 {
+				t.Fatalf("chunk candidate limit = %d, want 6", got)
+			}
+		})
 	}
 }
 

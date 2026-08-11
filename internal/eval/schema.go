@@ -57,6 +57,16 @@ const (
 	DocumentRoutingBlendedRRF   DocumentRoutingStrategy = "blended-rrf"
 )
 
+const (
+	RoutingReasonNoFolderMatch     = "no_folder_match"
+	RoutingReasonFlatFallback      = "flat_fallback"
+	RoutingReasonEmptyFolderResult = "empty_folder_results"
+	RoutingReasonEmptyResults      = "empty_results"
+	RoutingReasonFlatRescue        = "flat_rescue"
+	RoutingSourceFlat              = "flat"
+	RoutingSourceFolderFiltered    = "folder_filtered"
+)
+
 // PointID preserves whether a fixture ID was encoded as a JSON number or
 // string while exposing one normalized string form for relevance scoring.
 type PointID struct {
@@ -705,6 +715,8 @@ type RoutingResultTrace struct {
 }
 
 // RoutingTrace intentionally contains no query/document text or storage paths.
+// ReasonCodes describe routing decisions only; RerankerReason separately
+// records the bounded reranker outcome.
 type RoutingTrace struct {
 	Strategy        DocumentRoutingStrategy `json:"strategy"`
 	ReasonCodes     []string                `json:"reason_codes"`

@@ -1,10 +1,21 @@
 package eval
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
 )
+
+// RenderComparisonJSON encodes comparison evidence with the canonical
+// indentation and trailing newline shared by the CLI and pinned fixtures.
+func RenderComparisonJSON(comparison Comparison) ([]byte, error) {
+	data, err := json.MarshalIndent(comparison, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode comparison: %w", err)
+	}
+	return append(data, '\n'), nil
+}
 
 // ComparisonEpsilon absorbs insignificant floating-point representation noise
 // while keeping evaluation gates conservative.

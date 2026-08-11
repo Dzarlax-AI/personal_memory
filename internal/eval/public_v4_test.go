@@ -2,7 +2,6 @@ package eval
 
 import (
 	"bytes"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -42,11 +41,10 @@ func TestPublicV4DocumentRoutingEvidenceIsCanonical(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		canonical, err := json.MarshalIndent(recomputed, "", "  ")
+		canonical, err := RenderComparisonJSON(recomputed)
 		if err != nil {
 			t.Fatal(err)
 		}
-		canonical = append(canonical, '\n')
 		if !bytes.Equal(pinned, canonical) {
 			t.Fatalf("%s is not canonical", comparisonPath)
 		}

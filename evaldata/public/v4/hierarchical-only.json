@@ -138,15 +138,15 @@
       "results": [
         {
           "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
-          "score": 0.94215
+          "score": 0.9422
         },
         {
           "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5",
-          "score": 0.80028
+          "score": 0.8003
         },
         {
           "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
-          "score": 0.79711
+          "score": 0.7971
         }
       ],
       "metrics": {
@@ -209,19 +209,19 @@
       "results": [
         {
           "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
-          "score": 0.91564
+          "score": 0.9156
         },
         {
           "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
-          "score": 0.81354
+          "score": 0.8135
         },
         {
           "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10",
-          "score": 0.78887
+          "score": 0.7889
         },
         {
           "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
-          "score": 0.74761
+          "score": 0.7476
         }
       ],
       "metrics": {
@@ -295,15 +295,15 @@
       "results": [
         {
           "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5",
-          "score": 0.87578
+          "score": 0.8758
         },
         {
           "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
-          "score": 0.87319
+          "score": 0.8732
         },
         {
           "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
-          "score": 0.84949
+          "score": 0.8495
         }
       ],
       "metrics": {
@@ -366,19 +366,19 @@
       "results": [
         {
           "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
-          "score": 0.85121
+          "score": 0.8512
         },
         {
           "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
-          "score": 0.84556
+          "score": 0.8456
         },
         {
           "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10",
-          "score": 0.82571
+          "score": 0.8257
         },
         {
           "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
-          "score": 0.80759
+          "score": 0.8076
         }
       ],
       "metrics": {
@@ -453,15 +453,15 @@
       "results": [
         {
           "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa6",
-          "score": 0.81356
+          "score": 0.8136
         },
         {
           "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa7",
-          "score": 0.80838
+          "score": 0.8084
         },
         {
           "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9",
-          "score": 0.78996
+          "score": 0.79
         }
       ],
       "metrics": {
@@ -529,7 +529,7 @@
       "results": [
         {
           "id": "22222222-2222-4222-8222-222222222222",
-          "score": 0.92137
+          "score": 0.9214
         }
       ],
       "metrics": {
@@ -576,19 +576,19 @@
       "results": [
         {
           "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
-          "score": 0.86433
+          "score": 0.8643
         },
         {
           "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
-          "score": 0.81761
+          "score": 0.8176
         },
         {
           "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
-          "score": 0.81315
+          "score": 0.8131
         },
         {
           "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10",
-          "score": 0.79314
+          "score": 0.7931
         }
       ],
       "metrics": {
@@ -662,19 +662,19 @@
       "results": [
         {
           "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9",
-          "score": 0.86227
+          "score": 0.8623
         },
         {
           "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa8",
-          "score": 0.84907
+          "score": 0.8491
         },
         {
           "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10",
-          "score": 0.81784
+          "score": 0.8178
         },
         {
           "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
-          "score": 0.79062
+          "score": 0.7906
         }
       ],
       "metrics": {
