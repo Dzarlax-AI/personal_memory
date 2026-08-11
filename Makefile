@@ -1,4 +1,4 @@
-.PHONY: help dev-deps verify-assets build test vet eval-public conformance-public tidy clean
+.PHONY: help dev-deps verify-assets build test vet eval-public eval-public-v4 conformance-public tidy clean
 
 DS_VERSION ?= v1.4.0
 DS_DIR := internal/viz/static/assets/vendor
@@ -13,6 +13,7 @@ help:
 	@echo "  make build     — build all five binaries (runs dev-deps first)"
 	@echo "  make test      — verify assets + vet + test + build all binaries"
 	@echo "  make eval-public — run the public retrieval dataset against Qdrant"
+	@echo "  make eval-public-v4 — replay public document-routing evidence"
 	@echo "  make conformance-public — run the public model-memory conformance suite"
 	@echo "  make clean     — remove built binaries and the vendored browser bundles"
 
@@ -47,6 +48,9 @@ test: dev-deps vet
 	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory ./cmd/conformance-memory
 
 QDRANT_TEST_URL ?= http://127.0.0.1:6333
+# eval-memory compare uses this distinct status for an expected gate rejection;
+# status 1 remains reserved for usage, input, output, and other errors.
+EVAL_GATE_FAILURE_EXIT := 3
 
 eval-public:
 	mkdir -p eval-results
@@ -68,6 +72,43 @@ eval-public:
 		--json eval-results/public-v3-hybrid-rrf60.json \
 		--markdown eval-results/public-v3-hybrid-rrf60.md
 	cmp evaldata/public/v3/hybrid-rrf60-candidate.json eval-results/public-v3-hybrid-rrf60.json
+
+eval-public-v4:
+	mkdir -p eval-results
+	rm -f eval-results/public-v4-*.json eval-results/public-v4-*.md eval-results/eval-memory-v4
+	go build -o eval-results/eval-memory-v4 ./cmd/eval-memory
+	@set -e; for strategy in hierarchical-only flat-only blended-rrf; do \
+		eval-results/eval-memory-v4 run --source fixture \
+			--dataset evaldata/public/v4/dataset.json --qdrant-url $(QDRANT_TEST_URL) \
+			--configuration-name "public-v4-$$strategy" --document-routing-strategy "$$strategy" \
+			--json "eval-results/public-v4-$$strategy.json" \
+			--markdown "eval-results/public-v4-$$strategy.md"; \
+		cmp "evaldata/public/v4/$$strategy.json" "eval-results/public-v4-$$strategy.json"; \
+	done
+	eval-results/eval-memory-v4 run --source fixture \
+		--dataset evaldata/public/v4/dataset.json --qdrant-url $(QDRANT_TEST_URL) \
+		--configuration-name public-v4-blended-rrf-reranker-unavailable-fail-open \
+		--document-routing-strategy blended-rrf \
+		--reranker-model-id Alibaba-NLP/gte-multilingual-reranker-base@unavailable \
+		--reranker-candidate-cap 20 --reranker-timeout-ms 500 \
+		--offline-reranker-unavailable \
+		--json eval-results/public-v4-reranker-unavailable-fail-open.json \
+		--markdown eval-results/public-v4-reranker-unavailable-fail-open.md
+	cmp evaldata/public/v4/reranker-unavailable-fail-open.json eval-results/public-v4-reranker-unavailable-fail-open.json
+	@set -e; for candidate in flat-only blended-rrf reranker-unavailable; do \
+		case "$$candidate" in \
+			flat-only) report=flat-only ;; \
+			blended-rrf) report=blended-rrf ;; \
+			*) report=reranker-unavailable-fail-open ;; \
+		esac; \
+		set +e; eval-results/eval-memory-v4 compare \
+			--baseline eval-results/public-v4-hierarchical-only.json \
+			--candidate "eval-results/public-v4-$$report.json" --enforce-gates \
+			--json "eval-results/public-v4-$$candidate-comparison.json"; status=$$?; set -e; \
+		test $$status -eq $(EVAL_GATE_FAILURE_EXIT); \
+		cmp "evaldata/public/v4/$$candidate-failing-comparison.json" \
+			"eval-results/public-v4-$$candidate-comparison.json"; \
+	done
 
 conformance-public:
 	go run ./cmd/conformance-memory run \

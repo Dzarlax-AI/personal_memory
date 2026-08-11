@@ -10,14 +10,33 @@ import (
 	"strings"
 
 	"github.com/Dzarlax-AI/personal-memory/internal/memory/lifecycle"
+	"github.com/Dzarlax-AI/personal-memory/internal/rerank"
 )
 
-const canonicalScoreScale = 100000
+const (
+	canonicalV3ScoreScale  = 100000
+	canonicalV4ScoreScale  = 10000
+	maxRoutingReasonCodes  = 8
+	maxRoutingTraceResults = 100
+)
+
+var allowedRoutingReasonCodes = map[string]struct{}{
+	RoutingReasonNoFolderMatch: {}, RoutingReasonFlatFallback: {},
+	RoutingReasonEmptyFolderResult: {}, RoutingReasonEmptyResults: {}, RoutingReasonFlatRescue: {},
+}
+
+var allowedRoutingSources = map[string]struct{}{
+	RoutingSourceFlat: {}, RoutingSourceFolderFiltered: {},
+}
+
+var allowedRerankerReasons = map[string]struct{}{
+	rerank.ReasonApplied: {}, rerank.ReasonFallback: {}, rerank.ReasonDisabled: {},
+}
 
 func normalizeReport(report Report) Report {
 	report.TopK = append([]int(nil), report.TopK...)
 	sort.Ints(report.TopK)
-	if report.SchemaVersion == CurrentReportSchemaVersion && report.Queries != nil {
+	if report.SchemaVersion >= CurrentReportSchemaVersion && report.Queries != nil {
 		report.Queries = append([]QueryReport{}, report.Queries...)
 	} else {
 		report.Queries = append([]QueryReport(nil), report.Queries...)
@@ -29,7 +48,7 @@ func normalizeReport(report Report) Report {
 		})
 		report.Queries[i].Lifecycle = cloneQueryLifecycleReport(report.Queries[i].Lifecycle)
 	}
-	if report.SchemaVersion == CurrentReportSchemaVersion && report.Cohorts != nil {
+	if report.SchemaVersion >= CurrentReportSchemaVersion && report.Cohorts != nil {
 		report.Cohorts = append([]CohortAggregateMetrics{}, report.Cohorts...)
 	} else {
 		report.Cohorts = append([]CohortAggregateMetrics(nil), report.Cohorts...)
@@ -47,18 +66,22 @@ func normalizeReport(report Report) Report {
 	report.GateFailures = append([]string(nil), report.GateFailures...)
 	sort.Strings(report.GateFailures)
 	for i := range report.Queries {
-		if report.SchemaVersion == CurrentReportSchemaVersion && report.Queries[i].Results != nil {
+		if report.SchemaVersion >= CurrentReportSchemaVersion && report.Queries[i].Results != nil {
 			report.Queries[i].Results = append([]RetrievedItem{}, report.Queries[i].Results...)
 		} else {
 			report.Queries[i].Results = append([]RetrievedItem(nil), report.Queries[i].Results...)
 		}
-		if report.SchemaVersion == CurrentReportSchemaVersion {
+		if report.SchemaVersion >= CurrentReportSchemaVersion {
 			for j := range report.Queries[i].Results {
 				// Qdrant can differ by a few float32 ULPs across CPU
-				// architectures. Five decimal places preserve useful score
-				// diagnostics while keeping canonical fixture bytes portable.
+				// architectures. V3 remains immutable at five decimal places;
+				// v4 uses four after Linux/macOS crossed a five-decimal boundary.
+				scale := canonicalV3ScoreScale
+				if report.SchemaVersion >= DocumentRoutingSchemaVersion {
+					scale = canonicalV4ScoreScale
+				}
 				report.Queries[i].Results[j].Score =
-					canonicalResultScore(report.Queries[i].Results[j].Score)
+					canonicalResultScore(report.Queries[i].Results[j].Score, scale)
 			}
 		}
 		if report.Queries[i].Lifecycle != nil {
@@ -93,8 +116,8 @@ func normalizeReport(report Report) Report {
 	return report
 }
 
-func canonicalResultScore(score float64) float64 {
-	rounded := math.Round(score*canonicalScoreScale) / canonicalScoreScale
+func canonicalResultScore(score float64, scale int) float64 {
+	rounded := math.Round(score*float64(scale)) / float64(scale)
 	if rounded == 0 {
 		return 0
 	}
@@ -291,7 +314,8 @@ func DecodeReport(data []byte) (Report, error) {
 	}
 	if (report.SchemaVersion != SchemaVersion &&
 		report.SchemaVersion != LifecycleSchemaVersion &&
-		report.SchemaVersion != CurrentReportSchemaVersion) ||
+		report.SchemaVersion != CurrentReportSchemaVersion &&
+		report.SchemaVersion != DocumentRoutingSchemaVersion) ||
 		strings.TrimSpace(report.DatasetVersion) == "" {
 		return Report{}, fmt.Errorf("report schema_version and dataset_version are invalid")
 	}
@@ -319,9 +343,19 @@ func DecodeReport(data []byte) (Report, error) {
 			return Report{}, fmt.Errorf("decode report lifecycle: %w", err)
 		}
 	}
-	if report.SchemaVersion == CurrentReportSchemaVersion {
+	if report.SchemaVersion >= CurrentReportSchemaVersion {
+		if report.SchemaVersion == CurrentReportSchemaVersion {
+			if err := rejectDocumentRoutingV4Fields(report); err != nil {
+				return Report{}, err
+			}
+		}
 		if err := validateV3Report(report); err != nil {
 			return Report{}, fmt.Errorf("decode report v3: %w", err)
+		}
+		if report.SchemaVersion == DocumentRoutingSchemaVersion {
+			if err := validateDocumentRoutingReport(report); err != nil {
+				return Report{}, err
+			}
 		}
 	} else if report.Embedding.inputProfilePresent ||
 		report.Configuration.present["retrieval_strategy"] ||
@@ -331,6 +365,23 @@ func DecodeReport(data []byte) (Report, error) {
 		return Report{}, fmt.Errorf("report v3 identity and cohort fields require schema_version %d", CurrentReportSchemaVersion)
 	}
 	return normalizeReport(report), nil
+}
+
+func rejectDocumentRoutingV4Fields(report Report) error {
+	for _, field := range []string{
+		"document_routing_strategy", "routing_candidate_limit", "routing_rrf_constant",
+		"reranker_model_id", "reranker_candidate_cap", "reranker_timeout_ms",
+	} {
+		if report.Configuration.present[field] {
+			return fmt.Errorf("configuration field %s requires schema_version %d", field, DocumentRoutingSchemaVersion)
+		}
+	}
+	for _, query := range report.Queries {
+		if query.Routing != nil {
+			return fmt.Errorf("query %q routing trace requires schema_version %d", query.ID, DocumentRoutingSchemaVersion)
+		}
+	}
+	return nil
 }
 
 func validateReportQueryContracts(report Report) error {
@@ -357,7 +408,7 @@ func validateReportQueryContracts(report Report) error {
 			if query.Lifecycle != nil {
 				return fmt.Errorf("query %q field lifecycle requires schema_version %d", query.ID, LifecycleSchemaVersion)
 			}
-		case LifecycleSchemaVersion, CurrentReportSchemaVersion:
+		case LifecycleSchemaVersion, CurrentReportSchemaVersion, DocumentRoutingSchemaVersion:
 			if query.Target == "facts" && query.Lifecycle == nil {
 				return fmt.Errorf("query %q field lifecycle is required for facts", query.ID)
 			}
@@ -365,7 +416,7 @@ func validateReportQueryContracts(report Report) error {
 				return fmt.Errorf("query %q field lifecycle must be omitted for documents", query.ID)
 			}
 		}
-		if report.SchemaVersion == CurrentReportSchemaVersion {
+		if report.SchemaVersion >= CurrentReportSchemaVersion {
 			if err := validateQueryCohorts(query.ID, query.Cohorts, query.Cohorts != nil); err != nil {
 				return err
 			}
@@ -386,6 +437,49 @@ func validateReportQueryContracts(report Report) error {
 			}
 		} else if query.Lifecycle.AsOf != "" {
 			return fmt.Errorf("query %q field as_of is only valid for as_of intent", query.ID)
+		}
+	}
+	return nil
+}
+
+func validateDocumentRoutingReport(report Report) error {
+	if err := validateDocumentRoutingConfiguration(report.Configuration); err != nil {
+		return err
+	}
+	for _, query := range report.Queries {
+		if query.Target == "facts" {
+			if query.Routing != nil {
+				return fmt.Errorf("fact query %q must not contain routing trace", query.ID)
+			}
+			continue
+		}
+		if query.Routing == nil || query.Routing.Strategy != report.Configuration.DocumentRoutingStrategy {
+			return fmt.Errorf("document query %q requires matching routing trace", query.ID)
+		}
+		if len(query.Routing.ReasonCodes) > maxRoutingReasonCodes || len(query.Routing.SelectedFolders) > report.Configuration.FolderTopK || len(query.Routing.Results) > maxRoutingTraceResults {
+			return fmt.Errorf("document query %q routing trace exceeds bounds", query.ID)
+		}
+		for _, code := range query.Routing.ReasonCodes {
+			if _, ok := allowedRoutingReasonCodes[code]; !ok {
+				return fmt.Errorf("document query %q routing reason code %q is not allowed", query.ID, code)
+			}
+		}
+		if query.Routing.RerankerReason != "" {
+			if _, ok := allowedRerankerReasons[query.Routing.RerankerReason]; !ok {
+				return fmt.Errorf("document query %q reranker reason %q is not allowed", query.ID, query.Routing.RerankerReason)
+			}
+		}
+		for _, result := range query.Routing.Results {
+			for _, source := range result.Sources {
+				if _, ok := allowedRoutingSources[source.Source]; !ok {
+					return fmt.Errorf("document query %q routing source %q is not allowed", query.ID, source.Source)
+				}
+			}
+		}
+		for _, folder := range query.Routing.SelectedFolders {
+			if folder == "" || strings.HasPrefix(folder, "/") || strings.Contains(folder, "..") || strings.Contains(folder, `\`) {
+				return fmt.Errorf("document query %q routing folder is not privacy-safe", query.ID)
+			}
 		}
 	}
 	return nil

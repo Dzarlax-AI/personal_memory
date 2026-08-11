@@ -95,15 +95,16 @@ func (d *Dataset) Validate() error {
 func (d *Dataset) validate(allowEmptyCorpusVectors, requireQueryVectors bool) error {
 	if d.SchemaVersion != SchemaVersion &&
 		d.SchemaVersion != LifecycleSchemaVersion &&
-		d.SchemaVersion != CurrentDatasetSchemaVersion {
-		return fmt.Errorf("schema_version must be %d, %d, or %d",
-			SchemaVersion, LifecycleSchemaVersion, CurrentDatasetSchemaVersion)
+		d.SchemaVersion != CurrentDatasetSchemaVersion &&
+		d.SchemaVersion != DocumentRoutingSchemaVersion {
+		return fmt.Errorf("schema_version must be %d, %d, %d, or %d",
+			SchemaVersion, LifecycleSchemaVersion, CurrentDatasetSchemaVersion, DocumentRoutingSchemaVersion)
 	}
 	if strings.TrimSpace(d.DatasetVersion) == "" {
 		return fmt.Errorf("dataset_version is required")
 	}
 	identity := d.Embedding
-	if err := validateEmbeddingIdentity(identity, d.SchemaVersion == CurrentDatasetSchemaVersion); err != nil {
+	if err := validateEmbeddingIdentity(identity, d.SchemaVersion >= CurrentDatasetSchemaVersion); err != nil {
 		return err
 	}
 	if d.SchemaVersion < CurrentDatasetSchemaVersion && identity.inputProfilePresent {
@@ -116,7 +117,7 @@ func (d *Dataset) validate(allowEmptyCorpusVectors, requireQueryVectors bool) er
 	if err := normalizeTopK(&cfg.TopK); err != nil {
 		return err
 	}
-	if err := validateRetrievalConfiguration(*cfg, d.SchemaVersion == CurrentDatasetSchemaVersion); err != nil {
+	if err := validateRetrievalConfiguration(*cfg, d.SchemaVersion >= CurrentDatasetSchemaVersion); err != nil {
 		return err
 	}
 	if d.SchemaVersion < CurrentDatasetSchemaVersion &&
@@ -125,9 +126,18 @@ func (d *Dataset) validate(allowEmptyCorpusVectors, requireQueryVectors bool) er
 			cfg.present["rrf_constant"]) {
 		return fmt.Errorf("retrieval strategy fields require schema_version %d", CurrentDatasetSchemaVersion)
 	}
-	if d.SchemaVersion == CurrentDatasetSchemaVersion && len(d.Queries) == 0 {
+	if d.SchemaVersion >= CurrentDatasetSchemaVersion && len(d.Queries) == 0 {
 		return fmt.Errorf("schema_version %d dataset requires at least one query",
 			CurrentDatasetSchemaVersion)
+	}
+	if d.SchemaVersion == DocumentRoutingSchemaVersion {
+		if err := validateDocumentRoutingConfiguration(*cfg); err != nil {
+			return err
+		}
+	} else if cfg.present["document_routing_strategy"] || cfg.present["routing_candidate_limit"] ||
+		cfg.present["routing_rrf_constant"] || cfg.present["reranker_model_id"] ||
+		cfg.present["reranker_candidate_cap"] || cfg.present["reranker_timeout_ms"] {
+		return fmt.Errorf("document routing fields require schema_version %d", DocumentRoutingSchemaVersion)
 	}
 
 	for name, points := range map[string][]FixturePoint{
@@ -184,7 +194,7 @@ func (d *Dataset) validate(allowEmptyCorpusVectors, requireQueryVectors bool) er
 			(query.cohortsPresent || query.Cohorts != nil) {
 			return fmt.Errorf("query %q cohorts require schema_version %d", query.ID, CurrentDatasetSchemaVersion)
 		}
-		if d.SchemaVersion == CurrentDatasetSchemaVersion {
+		if d.SchemaVersion >= CurrentDatasetSchemaVersion {
 			if err := validateQueryCohorts(query.ID, query.Cohorts, query.cohortsPresent); err != nil {
 				return err
 			}
@@ -334,6 +344,44 @@ func (d *Dataset) validate(allowEmptyCorpusVectors, requireQueryVectors bool) er
 	}
 	if d.Gates.MinimumMRR != nil && (*d.Gates.MinimumMRR < 0 || *d.Gates.MinimumMRR > 1 || math.IsNaN(*d.Gates.MinimumMRR)) {
 		return fmt.Errorf("minimum_mrr must be between 0 and 1")
+	}
+	return nil
+}
+
+func validateDocumentRoutingConfiguration(cfg Configuration) error {
+	for _, field := range []string{"document_routing_strategy", "routing_candidate_limit", "routing_rrf_constant"} {
+		if !cfg.present[field] {
+			return fmt.Errorf("configuration field %s is required", field)
+		}
+	}
+	switch cfg.DocumentRoutingStrategy {
+	case DocumentRoutingHierarchical, DocumentRoutingFlat, DocumentRoutingBlendedRRF:
+	default:
+		return fmt.Errorf("document_routing_strategy must be hierarchical-only, flat-only, or blended-rrf")
+	}
+	const maxRoutingCandidatesPerSource = 100
+	if cfg.RoutingCandidateLimit < 1 || cfg.RoutingCandidateLimit > maxRoutingCandidatesPerSource {
+		return fmt.Errorf("routing_candidate_limit must be between 1 and %d", maxRoutingCandidatesPerSource)
+	}
+	if cfg.RoutingCandidateLimit < cfg.TopK[len(cfg.TopK)-1] {
+		return fmt.Errorf("routing_candidate_limit must be at least max(top_k)")
+	}
+	if cfg.RoutingRRFConstant < 1 || cfg.RoutingRRFConstant > 1000 {
+		return fmt.Errorf("routing_rrf_constant must be between 1 and 1000")
+	}
+	hasReranker := strings.TrimSpace(cfg.RerankerModelID) != ""
+	if hasReranker != cfg.present["reranker_model_id"] {
+		return fmt.Errorf("reranker_model_id must be a non-empty string when present")
+	}
+	if hasReranker {
+		if cfg.RerankerCandidateCap < 1 || cfg.RerankerCandidateCap > 100 {
+			return fmt.Errorf("reranker_candidate_cap must be between 1 and 100")
+		}
+		if cfg.RerankerTimeoutMS < 1 || cfg.RerankerTimeoutMS > 60000 {
+			return fmt.Errorf("reranker_timeout_ms must be between 1 and 60000")
+		}
+	} else if cfg.present["reranker_candidate_cap"] || cfg.present["reranker_timeout_ms"] {
+		return fmt.Errorf("reranker cap and timeout require reranker_model_id")
 	}
 	return nil
 }

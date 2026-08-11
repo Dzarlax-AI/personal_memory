@@ -25,6 +25,10 @@ const CurrentDatasetSchemaVersion = 3
 // CurrentReportSchemaVersion is the latest emitted report schema.
 const CurrentReportSchemaVersion = 3
 
+// DocumentRoutingSchemaVersion adds independent document routing identity and
+// privacy-safe routing traces while leaving schema-v3 artifacts immutable.
+const DocumentRoutingSchemaVersion = 4
+
 // InputProfile is the visible, versioned transformation applied before
 // embedding. These IDs intentionally mirror the production contract without
 // coupling immutable evaluation schemas to runtime configuration.
@@ -43,6 +47,24 @@ type RetrievalStrategy string
 const (
 	RetrievalVectorOnly RetrievalStrategy = "vector-only"
 	RetrievalHybridRRF  RetrievalStrategy = "hybrid-rrf"
+)
+
+type DocumentRoutingStrategy string
+
+const (
+	DocumentRoutingHierarchical DocumentRoutingStrategy = "hierarchical-only"
+	DocumentRoutingFlat         DocumentRoutingStrategy = "flat-only"
+	DocumentRoutingBlendedRRF   DocumentRoutingStrategy = "blended-rrf"
+)
+
+const (
+	RoutingReasonNoFolderMatch     = "no_folder_match"
+	RoutingReasonFlatFallback      = "flat_fallback"
+	RoutingReasonEmptyFolderResult = "empty_folder_results"
+	RoutingReasonEmptyResults      = "empty_results"
+	RoutingReasonFlatRescue        = "flat_rescue"
+	RoutingSourceFlat              = "flat"
+	RoutingSourceFolderFiltered    = "folder_filtered"
 )
 
 // PointID preserves whether a fixture ID was encoded as a JSON number or
@@ -157,16 +179,22 @@ func (identity *EmbeddingIdentity) UnmarshalJSON(data []byte) error {
 
 // Configuration captures retrieval settings that participate in report identity.
 type Configuration struct {
-	Name                string            `json:"name"`
-	FactCollection      string            `json:"fact_collection"`
-	ChunkCollection     string            `json:"chunk_collection"`
-	FolderCollection    string            `json:"folder_collection"`
-	FolderTopK          int               `json:"folder_top_k"`
-	FolderThreshold     float64           `json:"folder_threshold"`
-	TopK                []int             `json:"top_k"`
-	RetrievalStrategy   RetrievalStrategy `json:"retrieval_strategy,omitempty"`
-	DenseCandidateLimit int               `json:"dense_candidate_limit,omitempty"`
-	RRFConstant         int               `json:"rrf_constant,omitempty"`
+	Name                    string                  `json:"name"`
+	FactCollection          string                  `json:"fact_collection"`
+	ChunkCollection         string                  `json:"chunk_collection"`
+	FolderCollection        string                  `json:"folder_collection"`
+	FolderTopK              int                     `json:"folder_top_k"`
+	FolderThreshold         float64                 `json:"folder_threshold"`
+	TopK                    []int                   `json:"top_k"`
+	RetrievalStrategy       RetrievalStrategy       `json:"retrieval_strategy,omitempty"`
+	DenseCandidateLimit     int                     `json:"dense_candidate_limit,omitempty"`
+	RRFConstant             int                     `json:"rrf_constant,omitempty"`
+	DocumentRoutingStrategy DocumentRoutingStrategy `json:"document_routing_strategy,omitempty"`
+	RoutingCandidateLimit   int                     `json:"routing_candidate_limit,omitempty"`
+	RoutingRRFConstant      int                     `json:"routing_rrf_constant,omitempty"`
+	RerankerModelID         string                  `json:"reranker_model_id,omitempty"`
+	RerankerCandidateCap    int                     `json:"reranker_candidate_cap,omitempty"`
+	RerankerTimeoutMS       int                     `json:"reranker_timeout_ms,omitempty"`
 
 	present map[string]bool
 }
@@ -183,7 +211,9 @@ func (configuration *Configuration) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
-	for _, field := range []string{"retrieval_strategy", "dense_candidate_limit", "rrf_constant"} {
+	for _, field := range []string{"retrieval_strategy", "dense_candidate_limit", "rrf_constant",
+		"document_routing_strategy", "routing_candidate_limit", "routing_rrf_constant",
+		"reranker_model_id", "reranker_candidate_cap", "reranker_timeout_ms"} {
 		if raw, exists := fields[field]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			return fmt.Errorf("%s must not be null", field)
 		}
@@ -198,16 +228,22 @@ func (configuration *Configuration) UnmarshalJSON(data []byte) error {
 
 func (configuration Configuration) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Name                string             `json:"name"`
-		FactCollection      string             `json:"fact_collection"`
-		ChunkCollection     string             `json:"chunk_collection"`
-		FolderCollection    string             `json:"folder_collection"`
-		FolderTopK          int                `json:"folder_top_k"`
-		FolderThreshold     float64            `json:"folder_threshold"`
-		TopK                []int              `json:"top_k"`
-		RetrievalStrategy   *RetrievalStrategy `json:"retrieval_strategy,omitempty"`
-		DenseCandidateLimit *int               `json:"dense_candidate_limit,omitempty"`
-		RRFConstant         *int               `json:"rrf_constant,omitempty"`
+		Name                    string                   `json:"name"`
+		FactCollection          string                   `json:"fact_collection"`
+		ChunkCollection         string                   `json:"chunk_collection"`
+		FolderCollection        string                   `json:"folder_collection"`
+		FolderTopK              int                      `json:"folder_top_k"`
+		FolderThreshold         float64                  `json:"folder_threshold"`
+		TopK                    []int                    `json:"top_k"`
+		RetrievalStrategy       *RetrievalStrategy       `json:"retrieval_strategy,omitempty"`
+		DenseCandidateLimit     *int                     `json:"dense_candidate_limit,omitempty"`
+		RRFConstant             *int                     `json:"rrf_constant,omitempty"`
+		DocumentRoutingStrategy *DocumentRoutingStrategy `json:"document_routing_strategy,omitempty"`
+		RoutingCandidateLimit   *int                     `json:"routing_candidate_limit,omitempty"`
+		RoutingRRFConstant      *int                     `json:"routing_rrf_constant,omitempty"`
+		RerankerModelID         *string                  `json:"reranker_model_id,omitempty"`
+		RerankerCandidateCap    *int                     `json:"reranker_candidate_cap,omitempty"`
+		RerankerTimeoutMS       *int                     `json:"reranker_timeout_ms,omitempty"`
 	}
 	encoded := wire{
 		Name: configuration.Name, FactCollection: configuration.FactCollection,
@@ -223,6 +259,16 @@ func (configuration Configuration) MarshalJSON() ([]byte, error) {
 		encoded.RetrievalStrategy = &configuration.RetrievalStrategy
 		encoded.DenseCandidateLimit = &configuration.DenseCandidateLimit
 		encoded.RRFConstant = &configuration.RRFConstant
+	}
+	if configuration.DocumentRoutingStrategy != "" || configuration.present["document_routing_strategy"] {
+		encoded.DocumentRoutingStrategy = &configuration.DocumentRoutingStrategy
+		encoded.RoutingCandidateLimit = &configuration.RoutingCandidateLimit
+		encoded.RoutingRRFConstant = &configuration.RoutingRRFConstant
+		if configuration.RerankerModelID != "" || configuration.present["reranker_model_id"] {
+			encoded.RerankerModelID = &configuration.RerankerModelID
+			encoded.RerankerCandidateCap = &configuration.RerankerCandidateCap
+			encoded.RerankerTimeoutMS = &configuration.RerankerTimeoutMS
+		}
 	}
 	return json.Marshal(encoded)
 }
@@ -655,6 +701,28 @@ type QueryReport struct {
 	Results   []RetrievedItem       `json:"results"`
 	Metrics   QueryMetrics          `json:"metrics"`
 	Lifecycle *QueryLifecycleReport `json:"lifecycle,omitempty"`
+	Routing   *RoutingTrace         `json:"routing,omitempty"`
+}
+
+type RoutingSourceTrace struct {
+	Source string `json:"source"`
+	Rank   int    `json:"rank"`
+}
+
+type RoutingResultTrace struct {
+	ID      string               `json:"id"`
+	Sources []RoutingSourceTrace `json:"sources"`
+}
+
+// RoutingTrace intentionally contains no query/document text or storage paths.
+// ReasonCodes describe routing decisions only; RerankerReason separately
+// records the bounded reranker outcome.
+type RoutingTrace struct {
+	Strategy        DocumentRoutingStrategy `json:"strategy"`
+	ReasonCodes     []string                `json:"reason_codes"`
+	SelectedFolders []string                `json:"selected_folders"`
+	Results         []RoutingResultTrace    `json:"results"`
+	RerankerReason  string                  `json:"reranker_reason,omitempty"`
 }
 
 // CohortAggregateMetrics is a deterministic ranking aggregate for one cohort.

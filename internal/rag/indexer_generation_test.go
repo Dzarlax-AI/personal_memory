@@ -266,6 +266,60 @@ func TestIndexFile_UnchangedCompleteGenerationDoesNoWork(t *testing.T) {
 	}
 }
 
+func TestRunRefreshesLegacyFolderSummaryWithoutRewritingChunks(t *testing.T) {
+	h := newGenerationHarness(t, 100)
+	content := "# Stable\nunchanged"
+	path := writeRAGFile(t, h.idx.docsDir, content)
+	if changed, err := h.idx.indexFile(context.Background(), path, nil); err != nil || !changed {
+		t.Fatalf("initial index = changed %v, err %v", changed, err)
+	}
+	dir := filepath.Dir(path)
+	folderID := folderPointID(dir)
+	h.points[folderID] = qdrant.Point{ID: folderID, Payload: map[string]interface{}{
+		"folder_path": dir, "summary": "legacy absolute summary",
+	}}
+	h.embeds, h.upserts, h.deletes = 0, 0, 0
+
+	if err := h.idx.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if h.embeds != 1 || h.upserts != 1 || h.deletes != 0 {
+		t.Fatalf("refresh calls embeds=%d upserts=%d deletes=%d", h.embeds, h.upserts, h.deletes)
+	}
+	payload := h.points[folderID].Payload
+	if payload["summary_version"] != folderSummaryVersion || payload["relative_folder_path"] != "" {
+		t.Fatalf("folder payload = %#v", payload)
+	}
+	if summary, _ := payload["summary"].(string); strings.Contains(summary, h.idx.docsDir) {
+		t.Fatalf("summary leaked absolute root: %q", summary)
+	}
+}
+
+func TestRunRemovesLegacyHiddenFolderSummaryWithoutRefreshingIt(t *testing.T) {
+	h := newGenerationHarness(t, 100)
+	hiddenDir := filepath.Join(h.idx.docsDir, ".sync")
+	if err := os.Mkdir(hiddenDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hiddenDir, "private.md"), []byte("hidden"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	folderID := folderPointID(hiddenDir)
+	h.points[folderID] = qdrant.Point{ID: folderID, Payload: map[string]interface{}{
+		"folder_path": hiddenDir, "summary": "legacy hidden summary",
+	}}
+
+	if err := h.idx.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, exists := h.points[folderID]; exists {
+		t.Fatal("legacy hidden-folder summary remains indexed")
+	}
+	if h.embeds != 0 || h.upserts != 0 || h.deletes != 1 {
+		t.Fatalf("hidden cleanup calls embeds=%d upserts=%d deletes=%d", h.embeds, h.upserts, h.deletes)
+	}
+}
+
 func TestIndexFile_LegacyUnversionedChunksAreUpgraded(t *testing.T) {
 	h := newGenerationHarness(t, 100)
 	content := "same content"

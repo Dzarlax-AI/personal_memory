@@ -169,6 +169,43 @@ cmp evaldata/public/v3/hybrid-rrf60-candidate.json \
   eval-results/public-v3-hybrid-rrf60.json
 ```
 
+## Deterministic public v4 document-routing replay
+
+Schema v4 adds an independent `document_routing_strategy`, bounded routing
+parameters, and privacy-safe per-query routing traces. It leaves every v3 byte
+unchanged. Routing decisions are recorded only in `reason_codes`; the separate
+`reranker_reason` field records the bounded reranker outcome. Both fields and
+result source names are validated against fixed allowlists.
+
+The compact synthetic v4 corpus reuses pinned v3 vectors for eight queries:
+seven document cases covering misleading or missing folder summaries, an exact
+product name, and identifiers/paths, plus one multilingual control.
+
+```bash
+make eval-public-v4 QDRANT_TEST_URL=http://127.0.0.1:6333
+```
+
+The target byte-replays hierarchical-only, flat-only, blended RRF, and an
+explicitly unavailable reranker fail-open case, then byte-recomputes strict
+comparisons. Expected quality-gate rejection exits with status `3`; status `1`
+is reserved for usage, input, output, and other errors. Only isolated Qdrant
+and precomputed fixture vectors are used.
+
+Schema-v4 diagnostic result scores are rounded to four decimal places. This
+absorbs observed float32 boundary differences between Linux and macOS Qdrant
+without changing ranking order or metrics; historical schema-v3 artifacts
+retain their five-decimal canonicalization unchanged.
+
+The unavailable case is a resilience check, not a model-quality benchmark: it
+records `reranker_fallback` and preserves the deterministic blended order.
+Against hierarchical-only, blended RRF improved aggregate MRR from `0.59375`
+to `0.65` without regressing either protected cohort, but it did not strictly
+improve one as required. Flat-only reached aggregate MRR `0.828125`, but
+regressed protected identifier/path MRR from `0.375` to `0.3125`. Therefore
+the benchmark has no winner: the runtime default remains hierarchical-only and
+reranking remains disabled. Real reranker quality and latency evidence requires
+a separately provisioned, identity-matched endpoint and remains follow-up work.
+
 ## Materialize vectors with TEI
 
 `materialize` creates a reusable schema-v3 fixture by replacing every fact,
@@ -273,7 +310,7 @@ The CLI checks TEI identity before embedding missing query vectors. Keep live
 reports private because result IDs and retrieval ordering can reveal details
 about the indexed corpus.
 
-## Version and rebaseline public v3
+## Version and rebaseline public evidence
 
 Treat the dataset and all pinned evidence as one reviewed unit:
 
@@ -293,8 +330,8 @@ Treat the dataset and all pinned evidence as one reviewed unit:
    a failing comparison when the evidence says there is no winner.
 8. Verify Qdrant has no leaked `eval_*` collections.
 9. Replace pinned reports only after review, update their contract hashes and
-   tests, then run `make eval-public`, `go test ./...`, and `go vet ./...`.
+   tests, then run `make eval-public`, `make eval-public-v4`, `go test ./...`,
+   and `go vet ./...`.
 
-Schema v1 and v2 remain accepted. Their immutable public datasets and
-baselines document historical behavior, but neither is a substitute for a
-schema-v3 baseline or candidate.
+Schema v1 and v2 remain accepted, and schema v3 remains immutable historical
+retrieval evidence. Schema v4 is the current document-routing evidence.

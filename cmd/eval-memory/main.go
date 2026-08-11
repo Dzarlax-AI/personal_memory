@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,18 +13,30 @@ import (
 
 	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
 	memoryeval "github.com/Dzarlax-AI/personal-memory/internal/eval"
+	"github.com/Dzarlax-AI/personal-memory/internal/rerank"
 )
 
-const defaultTimeout = 2 * time.Minute
+type unavailableReranker struct{ modelID string }
+
+func (r unavailableReranker) ModelID() string { return r.modelID }
+func (unavailableReranker) Rerank(context.Context, string, []rerank.Candidate) ([]rerank.Ranked, error) {
+	return nil, fmt.Errorf("reranker endpoint unavailable in offline replay")
+}
+
+const (
+	defaultTimeout  = 2 * time.Minute
+	exitError       = 1
+	exitGateFailure = 3
+)
 
 func main() {
 	if err := runCLI(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		var gateErr *gateFailureError
 		if errors.As(err, &gateErr) {
-			os.Exit(3)
+			os.Exit(exitGateFailure)
 		}
-		os.Exit(1)
+		os.Exit(exitError)
 	}
 }
 
@@ -59,6 +70,13 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	retrievalStrategy := flags.String("retrieval-strategy", "", "override retrieval strategy")
 	denseCandidateLimit := flags.Int("dense-candidate-limit", -1, "override hybrid dense candidate limit")
 	rrfConstant := flags.Int("rrf-constant", -1, "override hybrid RRF constant")
+	documentRoutingStrategy := flags.String("document-routing-strategy", "", "override document routing strategy")
+	routingCandidateLimit := flags.Int("routing-candidate-limit", -1, "override document routing candidate limit")
+	routingRRFConstant := flags.Int("routing-rrf-constant", -1, "override document routing RRF constant")
+	rerankerModelID := flags.String("reranker-model-id", "", "override reranker identity")
+	rerankerCandidateCap := flags.Int("reranker-candidate-cap", -1, "override reranker candidate cap")
+	rerankerTimeoutMS := flags.Int("reranker-timeout-ms", -1, "override reranker timeout in milliseconds")
+	offlineRerankerUnavailable := flags.Bool("offline-reranker-unavailable", false, "fixture-only deterministic reranker failure evidence")
 	jsonPath := flags.String("json", "", "JSON report output path")
 	markdownPath := flags.String("markdown", "", "Markdown report output path")
 	timeout := flags.Duration("timeout", defaultTimeout, "overall evaluation timeout")
@@ -107,6 +125,25 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	if *rrfConstant >= 0 {
 		overrides.RRFConstant = rrfConstant
 	}
+	if *documentRoutingStrategy != "" {
+		value := memoryeval.DocumentRoutingStrategy(*documentRoutingStrategy)
+		overrides.DocumentRoutingStrategy = &value
+	}
+	if *routingCandidateLimit >= 0 {
+		overrides.RoutingCandidateLimit = routingCandidateLimit
+	}
+	if *routingRRFConstant >= 0 {
+		overrides.RoutingRRFConstant = routingRRFConstant
+	}
+	if *rerankerModelID != "" {
+		overrides.RerankerModelID = rerankerModelID
+	}
+	if *rerankerCandidateCap >= 0 {
+		overrides.RerankerCandidateCap = rerankerCandidateCap
+	}
+	if *rerankerTimeoutMS >= 0 {
+		overrides.RerankerTimeoutMS = rerankerTimeoutMS
+	}
 	dataset, err = memoryeval.WithExperimentOverrides(dataset, overrides, *source)
 	if err != nil {
 		return fmt.Errorf("apply experiment overrides: %w", err)
@@ -123,6 +160,15 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	options := memoryeval.RunOptions{
 		Source: *source, QdrantURL: strings.TrimRight(*qdrantURL, "/"),
 		DocumentsRoot: *documentsRoot,
+	}
+	if *offlineRerankerUnavailable {
+		if *source != "fixture" {
+			return fmt.Errorf("--offline-reranker-unavailable requires --source fixture")
+		}
+		if *rerankerModelID == "" {
+			return fmt.Errorf("--offline-reranker-unavailable requires --reranker-model-id")
+		}
+		options.Reranker = unavailableReranker{modelID: *rerankerModelID}
 	}
 	needsEmbedding := *source == "tei-fixture"
 	if *source == "live" {
@@ -311,11 +357,10 @@ func compareCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(comparison, "", "  ")
+	data, err := memoryeval.RenderComparisonJSON(comparison)
 	if err != nil {
-		return fmt.Errorf("encode comparison: %w", err)
+		return err
 	}
-	data = append(data, '\n')
 	if *outputPath != "" {
 		if err := writeAtomic(*outputPath, data, 0o644); err != nil {
 			return fmt.Errorf("write comparison: %w", err)

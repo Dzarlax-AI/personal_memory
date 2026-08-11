@@ -71,6 +71,27 @@ func TestRenderV3ReportCanonicalizesCrossPlatformScores(t *testing.T) {
 	}
 }
 
+func TestRenderV4ReportCanonicalizesFloat32BoundaryNoiseMoreCoarsely(t *testing.T) {
+	left := validV3ComparisonReport()
+	left.SchemaVersion = DocumentRoutingSchemaVersion
+	right := left
+	left.Queries[0].Results = []RetrievedItem{{ID: "candidate", Score: 0.7740849}}
+	right.Queries = append([]QueryReport(nil), left.Queries...)
+	right.Queries[0].Results = []RetrievedItem{{ID: "candidate", Score: 0.7740851}}
+
+	leftJSON, err := RenderJSON(left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightJSON, err := RenderJSON(right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(leftJSON, rightJSON) {
+		t.Fatalf("schema-v4 float32 boundary noise changed canonical bytes\nleft:\n%s\nright:\n%s", leftJSON, rightJSON)
+	}
+}
+
 func TestDecodeReportRejectsDiagnosticsOnOldSchema(t *testing.T) {
 	data, err := os.ReadFile("../../evaldata/public/v1/baseline.json")
 	if err != nil {

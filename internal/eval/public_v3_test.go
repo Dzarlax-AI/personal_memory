@@ -392,11 +392,10 @@ func TestPublicV3HybridCandidateAndFailingComparisonPinnedContract(t *testing.T)
 	if err != nil {
 		t.Fatalf("compare %s and %s: %v", baselinePath, candidatePath, err)
 	}
-	recomputedData, err := json.MarshalIndent(recomputed, "", "  ")
+	recomputedData, err := RenderComparisonJSON(recomputed)
 	if err != nil {
 		t.Fatalf("render recomputed comparison: %v", err)
 	}
-	recomputedData = append(recomputedData, '\n')
 	if !bytes.Equal(comparisonData, recomputedData) {
 		t.Fatalf("%s is not the canonical offline comparison", comparisonPath)
 	}
