@@ -21,7 +21,7 @@ const (
 // handled by this process from overwriting each other's counters.
 type recallCounter struct {
 	qdrant *qdrant.Client
-	queue  chan string
+	queue  chan []string
 	done   chan struct{}
 	cancel context.CancelFunc
 	stopCh chan struct{}
@@ -36,7 +36,7 @@ func newRecallCounter(parent context.Context, qc *qdrant.Client, queueSize int, 
 	ctx, cancel := context.WithCancel(parent)
 	c := &recallCounter{
 		qdrant:    qc,
-		queue:     make(chan string, queueSize),
+		queue:     make(chan []string, queueSize),
 		done:      make(chan struct{}),
 		stopCh:    make(chan struct{}),
 		cancel:    cancel,
@@ -47,6 +47,14 @@ func newRecallCounter(parent context.Context, qc *qdrant.Client, queueSize int, 
 }
 
 func (c *recallCounter) enqueue(ctx context.Context, id string) error {
+	return c.enqueueBatch(ctx, []string{id})
+}
+
+func (c *recallCounter) enqueueBatch(ctx context.Context, ids []string) error {
+	batch := append([]string(nil), ids...)
+	if len(batch) == 0 {
+		return nil
+	}
 	c.mu.Lock()
 	if !c.accepting {
 		c.mu.Unlock()
@@ -56,7 +64,7 @@ func (c *recallCounter) enqueue(ctx context.Context, id string) error {
 	c.mu.Unlock()
 	defer c.enqueueWG.Done()
 	select {
-	case c.queue <- id:
+	case c.queue <- batch:
 		return nil
 	case <-ctx.Done():
 		return fmt.Errorf("enqueue recall increment: %w", ctx.Err())
@@ -90,15 +98,15 @@ func (c *recallCounter) run(ctx context.Context, flushInterval time.Duration) {
 
 	for {
 		select {
-		case id := <-c.queue:
-			pending[id]++
+		case batch := <-c.queue:
+			addRecallBatch(pending, batch)
 		case <-ticker.C:
 			c.flush(ctx, pending)
 		case <-ctx.Done():
 			for {
 				select {
-				case id := <-c.queue:
-					pending[id]++
+				case batch := <-c.queue:
+					addRecallBatch(pending, batch)
 				default:
 					shutdownCtx, cancel := context.WithTimeout(context.Background(), recallShutdownTimeout)
 					for len(pending) > 0 {
@@ -119,6 +127,12 @@ func (c *recallCounter) run(ctx context.Context, flushInterval time.Duration) {
 				}
 			}
 		}
+	}
+}
+
+func addRecallBatch(pending map[string]int, batch []string) {
+	for _, id := range batch {
+		pending[id]++
 	}
 }
 

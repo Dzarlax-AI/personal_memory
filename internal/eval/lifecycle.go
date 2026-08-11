@@ -302,79 +302,20 @@ func decidePresentation(intent QueryIntent, view lifecycle.View, expired, hasCan
 	result := LifecycleCandidateReport{
 		State: view.State, Canonical: view.Canonical, Expired: expired, Valid: view.Valid,
 	}
+	sharedIntent := lifecycle.PresentationIntentBroad
+	if intent == QueryIntentCurrent {
+		sharedIntent = lifecycle.PresentationIntentCurrent
+	}
+	presentation := lifecycle.DecidePresentation(sharedIntent, view, expired, hasCanonicalCurrent)
+	result.Decision = PresentationDecision(presentation.Decision)
+	result.ReasonCodes = make([]LifecycleReasonCode, len(presentation.ReasonCodes))
+	for index, reason := range presentation.ReasonCodes {
+		result.ReasonCodes[index] = LifecycleReasonCode(reason)
+	}
 	if !view.Valid {
 		result.State = ""
-		result.Decision = PresentationSuppress
-		result.ReasonCodes = []LifecycleReasonCode{ReasonInvalidLifecycle}
-		return result
-	}
-	if expired {
-		result.Decision = PresentationSuppress
-		result.ReasonCodes = []LifecycleReasonCode{ReasonExpired}
-		return result
-	}
-
-	switch intent {
-	case QueryIntentCurrent:
-		switch view.State {
-		case lifecycle.Current:
-			if !view.Canonical && hasCanonicalCurrent {
-				result.Decision = PresentationDemote
-				result.ReasonCodes = []LifecycleReasonCode{ReasonCanonicalPreference}
-			} else {
-				result.Decision = PresentationInclude
-				result.ReasonCodes = []LifecycleReasonCode{ReasonCurrentTruth}
-			}
-		case lifecycle.Historical:
-			result.Decision = PresentationSuppress
-			result.ReasonCodes = []LifecycleReasonCode{ReasonHistorical}
-		case lifecycle.Superseded:
-			result.Decision = PresentationSuppress
-			result.ReasonCodes = []LifecycleReasonCode{ReasonSuperseded}
-		case lifecycle.Disputed:
-			result.Decision = PresentationSuppress
-			result.ReasonCodes = []LifecycleReasonCode{ReasonDisputed}
-		}
-	case QueryIntentHistory, QueryIntentAsOf:
-		historyStyleDecision(&result, view.State)
-	case QueryIntentUncertainty:
-		uncertaintyDecision(&result, view.State)
 	}
 	return result
-}
-
-func historyStyleDecision(result *LifecycleCandidateReport, state lifecycle.State) {
-	switch state {
-	case lifecycle.Current:
-		result.Decision = PresentationInclude
-		result.ReasonCodes = []LifecycleReasonCode{ReasonCurrentContext}
-	case lifecycle.Historical:
-		result.Decision = PresentationInclude
-		result.ReasonCodes = []LifecycleReasonCode{ReasonHistoricalContext}
-	case lifecycle.Superseded:
-		result.Decision = PresentationInclude
-		result.ReasonCodes = []LifecycleReasonCode{ReasonSupersededContext}
-	case lifecycle.Disputed:
-		result.Decision = PresentationUncertain
-		result.ReasonCodes = []LifecycleReasonCode{ReasonDisputed}
-	}
-}
-
-func uncertaintyDecision(result *LifecycleCandidateReport, state lifecycle.State) {
-	switch state {
-	case lifecycle.Current:
-		result.Decision = PresentationInclude
-		result.ReasonCodes = []LifecycleReasonCode{ReasonCurrentContext}
-	case lifecycle.Historical:
-		result.Decision = PresentationInclude
-		result.ReasonCodes = []LifecycleReasonCode{ReasonHistoricalContext}
-	case lifecycle.Superseded:
-		result.Decision = PresentationInclude
-		result.ReasonCodes = []LifecycleReasonCode{ReasonSupersededContext}
-	case lifecycle.Disputed:
-		result.Decision = PresentationUncertain
-		result.ReasonCodes = []LifecycleReasonCode{ReasonDisputed}
-	}
 }
 
 func scoreLifecycleExpectations(query Query, report *QueryLifecycleReport) {

@@ -83,7 +83,7 @@ internal/
 - `import_facts(facts)` — bulk import from JSON string
 
 ### Reading
-- `recall_facts(query, tags?, namespace?, limit?)` — semantic search with scores; filters expired; async-increments `recall_count`
+- `recall_facts(query, tags?, namespace?, limit?, lifecycle_mode?, as_of?)` — lifecycle-ranked semantic search; defaults to valid, non-expired current facts, supports `current`/`history`/`as_of`/`include_all`, and async-increments `recall_count`
 - `list_facts(tags?, namespace?)` — list all facts with metadata
 - `find_related(query, namespace?, limit?)` — lifecycle-ranked related facts with cosine scores; valid superseded facts remain eligible above the duplicate threshold
 - `get_stats()` — counts, namespace/tag breakdown, most recalled
@@ -175,7 +175,8 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - Similarity scores are cosine proximity, not contradiction or entailment probability. Duplicate, related, disputed, and superseded are distinct concepts; inspect structured related candidates semantically before acting on them.
 - `store_fact` returns `status`, `stored`, optional `point_id`/`duplicate`, and `related_facts`; `find_related` returns `count` and `related_facts`. Candidates include text, score, namespace, tags, and normalized lifecycle metadata, with a text fallback for older clients.
 - Duplicate prevention is unchanged except that a valid superseded fact does not block a new current fact. Related-fact feedback does not auto-supersede, classify disputes, or invoke an LLM.
-- `recall_facts` and operational context admit only valid, non-expired current facts; payloads with no lifecycle fields are legacy current. Canonical current facts rank first without changing vector scores.
+- `recall_facts` defaults to valid, non-expired current facts; payloads with no lifecycle fields are legacy current. `history`, `as_of`, and `include_all` expose every valid, non-expired state and mark disputed facts uncertain. `as_of` changes only the expiry reference and does not reconstruct historical intervals. Operational context remains current-only.
+- Structured recall results expose `semantic_score`/`semantic_rank`, lifecycle-adjusted `final_rank`, normalized lifecycle, decision, safe reason codes, and `point_id`; the text fallback omits point IDs and lifecycle relationship IDs. Lifecycle ranking uses a bounded semantic candidate pool, so canonical current facts rank first only when present in that pool and vector scores never change. Recall cache identity includes lifecycle mode and the applicable `as_of` date.
 - `find_related`, `list_facts`, `export_facts`, `get_stats`, and Viz retain history-inspection visibility as defined in `docs/lifecycle.md`; malformed explicit lifecycle metadata remains inspectable but is never current truth.
 - Lifecycle writes are explicit and validated. `store_fact`/`update_fact` preserve old-client behavior when lifecycle inputs are omitted; `set_fact_lifecycle` uses exact IDs and a lifecycle-only ordered Qdrant batch without re-embedding.
 - Lifecycle migration is standalone, dry-run-first, manifest-backed, and never runs at startup. Apply/rollback require stopped writers; rollback uses compare-before-restore and never overwrites post-migration lifecycle changes.

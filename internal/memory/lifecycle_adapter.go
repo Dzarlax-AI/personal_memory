@@ -9,8 +9,6 @@ import (
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 )
 
-const lifecycleCacheScope = "lifecycle-current-v1"
-
 const maxLifecycleCandidateLimit = maxSearchLimit * 4
 
 type lifecycleSearchPoint struct {
@@ -59,21 +57,6 @@ func lifecycleView(pointID string, payload map[string]interface{}) lifecycle.Vie
 	return view
 }
 
-func addLifecycleMetadata(target map[string]interface{}, view lifecycle.View) {
-	target["lifecycle_state"] = string(view.State)
-	target["lifecycle_legacy"] = view.Legacy
-	target["canonical"] = view.Canonical
-	target["provenance"] = view.Provenance
-	target["verified_at"] = view.VerifiedAt
-	target["supersedes"] = view.Supersedes
-	target["superseded_by"] = view.SupersededBy
-	target["lifecycle_valid"] = view.Valid
-	if !view.Valid {
-		target["lifecycle_error"] = view.InvalidReason
-	}
-	target["_lifecycle_summary"] = formatLifecycleView(view)
-}
-
 func formatLifecycleView(view lifecycle.View) string {
 	parts := []string{"state:" + string(view.State)}
 	if view.Legacy {
@@ -101,32 +84,6 @@ func formatLifecycleView(view lifecycle.View) string {
 		parts = append(parts, "superseded-by:"+strings.Join(view.SupersededBy, ","))
 	}
 	return "[" + strings.Join(parts, " ") + "]"
-}
-
-func lifecycleSummaryFromHit(hit map[string]interface{}) string {
-	if summary, ok := hit["_lifecycle_summary"].(string); ok && summary != "" {
-		return summary
-	}
-	return ""
-}
-
-func currentSearchPoints(points []qdrant.Point) []lifecycleSearchPoint {
-	byID := make(map[string]lifecycleSearchPoint, len(points))
-	candidates := make([]lifecycle.Candidate, 0, len(points))
-	for _, point := range points {
-		view := lifecycleView(point.ID, point.Payload)
-		if !lifecycle.IsCurrentTruth(view, isExpired(point.Payload)) {
-			continue
-		}
-		byID[point.ID] = lifecycleSearchPoint{point: point, view: view}
-		candidates = append(candidates, lifecycle.Candidate{PointID: point.ID, Score: point.Score, View: view})
-	}
-	lifecycle.SortCandidates(candidates)
-	result := make([]lifecycleSearchPoint, 0, len(candidates))
-	for _, candidate := range candidates {
-		result = append(result, byID[candidate.PointID])
-	}
-	return result
 }
 
 func relatedSearchPoints(points []qdrant.Point) []lifecycleSearchPoint {
