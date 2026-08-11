@@ -13,6 +13,9 @@ type ExperimentOverrides struct {
 	DocumentRoutingStrategy *DocumentRoutingStrategy
 	RoutingCandidateLimit   *int
 	RoutingRRFConstant      *int
+	RerankerModelID         *string
+	RerankerCandidateCap    *int
+	RerankerTimeoutMS       *int
 }
 
 // WithExperimentOverrides returns an independently mutable dataset copy and
@@ -68,6 +71,18 @@ func WithExperimentOverrides(source *Dataset, overrides ExperimentOverrides, run
 	if overrides.RoutingRRFConstant != nil {
 		cloned.Configuration.RoutingRRFConstant = *overrides.RoutingRRFConstant
 		cloned.Configuration.present["routing_rrf_constant"] = true
+	}
+	if overrides.RerankerModelID != nil {
+		cloned.Configuration.RerankerModelID = *overrides.RerankerModelID
+		cloned.Configuration.present["reranker_model_id"] = true
+	}
+	if overrides.RerankerCandidateCap != nil {
+		cloned.Configuration.RerankerCandidateCap = *overrides.RerankerCandidateCap
+		cloned.Configuration.present["reranker_candidate_cap"] = true
+	}
+	if overrides.RerankerTimeoutMS != nil {
+		cloned.Configuration.RerankerTimeoutMS = *overrides.RerankerTimeoutMS
+		cloned.Configuration.present["reranker_timeout_ms"] = true
 	}
 	if err := cloned.ValidateForSource(runSource); err != nil {
 		return nil, err

@@ -68,7 +68,7 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 		baseline.DatasetVersion != candidate.DatasetVersion {
 		return Comparison{}, fmt.Errorf("baseline and candidate identities are incompatible")
 	}
-	if baseline.SchemaVersion == CurrentReportSchemaVersion {
+	if baseline.SchemaVersion >= CurrentReportSchemaVersion {
 		if baseline.Mode != candidate.Mode {
 			return Comparison{}, fmt.Errorf("baseline and candidate modes are incompatible")
 		}
@@ -108,7 +108,7 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 			return Comparison{}, fmt.Errorf("baseline and candidate top_k differ")
 		}
 	}
-	if baseline.SchemaVersion == CurrentReportSchemaVersion {
+	if baseline.SchemaVersion >= CurrentReportSchemaVersion {
 		if err := validateV3Report(baseline); err != nil {
 			return Comparison{}, fmt.Errorf("baseline v3 report is invalid: %w", err)
 		}
@@ -124,7 +124,7 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 		Aggregate:      deltaMetrics(baseline.Aggregate, candidate.Aggregate, baseline.TopK),
 		GatesPassed:    !enforceGates || candidate.GatesPassed,
 	}
-	if baseline.SchemaVersion == CurrentReportSchemaVersion {
+	if baseline.SchemaVersion >= CurrentReportSchemaVersion {
 		baselineEmbedding := baseline.Embedding
 		candidateEmbedding := candidate.Embedding
 		baselineConfiguration := cloneConfiguration(baseline.Configuration)
@@ -148,7 +148,7 @@ func Compare(baseline, candidate Report, enforceGates bool) (Comparison, error) 
 		}
 	}
 	if enforceGates {
-		if baseline.SchemaVersion == CurrentReportSchemaVersion {
+		if baseline.SchemaVersion >= CurrentReportSchemaVersion {
 			if !candidate.GatesPassed || len(candidate.GateFailures) != 0 {
 				comparison.GateFailures = append(comparison.GateFailures, "candidate dataset gates failed")
 			}
@@ -237,7 +237,7 @@ func validateMatchedQueryContracts(baseline, candidate Report) error {
 				return queryContractMismatch(candidateQuery.ID, "as_of")
 			}
 		}
-		if baseline.SchemaVersion == CurrentReportSchemaVersion &&
+		if baseline.SchemaVersion >= CurrentReportSchemaVersion &&
 			!equalCohortSets(baselineQuery.Cohorts, candidateQuery.Cohorts) {
 			return queryContractMismatch(candidateQuery.ID, "cohorts")
 		}

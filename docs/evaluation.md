@@ -143,6 +143,34 @@ The pinned
 verified cross-configuration comparison. It records the expected conservative
 gate failure and is not used as a passing ranking target.
 
+## Deterministic public v4 document-routing replay
+
+Schema v4 adds an independent `document_routing_strategy`, bounded routing
+parameters, and privacy-safe per-query routing traces. It leaves every v3 byte
+unchanged. The compact synthetic v4 corpus reuses pinned v3 vectors for eight
+queries: seven document cases covering misleading or missing folder summaries,
+an exact product name, and identifiers/paths, plus one multilingual control.
+
+```bash
+make eval-public-v4 QDRANT_TEST_URL=http://127.0.0.1:6333
+```
+
+The target byte-replays hierarchical-only, flat-only, blended RRF, and an
+explicitly unavailable reranker fail-open case, then byte-recomputes strict
+comparisons. Only isolated Qdrant and precomputed fixture vectors are used.
+The unavailable case is a resilience check, not a model-quality benchmark: it
+records `reranker_fallback` and preserves the deterministic blended order.
+
+Against hierarchical-only, blended RRF improved aggregate MRR from `0.59375`
+to `0.65` without regressing either protected cohort, but it did not strictly
+improve one as required. Flat-only reached aggregate MRR `0.828125`, but
+regressed protected identifier/path MRR from `0.375` to `0.3125`. Therefore
+the benchmark has no winner:
+the runtime default remains hierarchical-only and reranking remains disabled.
+Real reranker quality and latency evidence requires a separately provisioned,
+identity-matched endpoint and remains follow-up work; this limitation means the
+model-quality portion of the reranker acceptance criterion is not yet met.
+
 Equivalent direct commands are:
 
 ```bash
@@ -273,7 +301,7 @@ The CLI checks TEI identity before embedding missing query vectors. Keep live
 reports private because result IDs and retrieval ordering can reveal details
 about the indexed corpus.
 
-## Version and rebaseline public v3
+## Version and rebaseline public evidence
 
 Treat the dataset and all pinned evidence as one reviewed unit:
 
@@ -295,6 +323,5 @@ Treat the dataset and all pinned evidence as one reviewed unit:
 9. Replace pinned reports only after review, update their contract hashes and
    tests, then run `make eval-public`, `go test ./...`, and `go vet ./...`.
 
-Schema v1 and v2 remain accepted. Their immutable public datasets and
-baselines document historical behavior, but neither is a substitute for a
-schema-v3 baseline or candidate.
+Schema v1 and v2 remain accepted, and schema v3 remains immutable historical
+retrieval evidence. Schema v4 is the current document-routing evidence.

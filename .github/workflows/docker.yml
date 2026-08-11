@@ -106,6 +106,10 @@ jobs:
         run: make eval-public
         env:
           QDRANT_TEST_URL: http://127.0.0.1:6333
+      - name: Run public document routing evaluation
+        run: make eval-public-v4
+        env:
+          QDRANT_TEST_URL: http://127.0.0.1:6333
       - name: Publish public retrieval evaluation summary
         if: always()
         shell: bash
@@ -155,6 +159,9 @@ jobs:
             eval-results/public-v3-hybrid-rrf60.json
             eval-results/public-v3-hybrid-rrf60.md
             evaldata/public/v3/hybrid-rrf60-failing-comparison.json
+            eval-results/public-v4-*.json
+            eval-results/public-v4-*.md
+            evaldata/public/v4/*-failing-comparison.json
           if-no-files-found: warn
           retention-days: 14
 

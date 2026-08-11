@@ -14,7 +14,15 @@ import (
 
 	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
 	memoryeval "github.com/Dzarlax-AI/personal-memory/internal/eval"
+	"github.com/Dzarlax-AI/personal-memory/internal/rerank"
 )
+
+type unavailableReranker struct{ modelID string }
+
+func (r unavailableReranker) ModelID() string { return r.modelID }
+func (unavailableReranker) Rerank(context.Context, string, []rerank.Candidate) ([]rerank.Ranked, error) {
+	return nil, fmt.Errorf("reranker endpoint unavailable in offline replay")
+}
 
 const defaultTimeout = 2 * time.Minute
 
@@ -62,6 +70,10 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	documentRoutingStrategy := flags.String("document-routing-strategy", "", "override document routing strategy")
 	routingCandidateLimit := flags.Int("routing-candidate-limit", -1, "override document routing candidate limit")
 	routingRRFConstant := flags.Int("routing-rrf-constant", -1, "override document routing RRF constant")
+	rerankerModelID := flags.String("reranker-model-id", "", "override reranker identity")
+	rerankerCandidateCap := flags.Int("reranker-candidate-cap", -1, "override reranker candidate cap")
+	rerankerTimeoutMS := flags.Int("reranker-timeout-ms", -1, "override reranker timeout in milliseconds")
+	offlineRerankerUnavailable := flags.Bool("offline-reranker-unavailable", false, "fixture-only deterministic reranker failure evidence")
 	jsonPath := flags.String("json", "", "JSON report output path")
 	markdownPath := flags.String("markdown", "", "Markdown report output path")
 	timeout := flags.Duration("timeout", defaultTimeout, "overall evaluation timeout")
@@ -120,6 +132,15 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	if *routingRRFConstant >= 0 {
 		overrides.RoutingRRFConstant = routingRRFConstant
 	}
+	if *rerankerModelID != "" {
+		overrides.RerankerModelID = rerankerModelID
+	}
+	if *rerankerCandidateCap >= 0 {
+		overrides.RerankerCandidateCap = rerankerCandidateCap
+	}
+	if *rerankerTimeoutMS >= 0 {
+		overrides.RerankerTimeoutMS = rerankerTimeoutMS
+	}
 	dataset, err = memoryeval.WithExperimentOverrides(dataset, overrides, *source)
 	if err != nil {
 		return fmt.Errorf("apply experiment overrides: %w", err)
@@ -136,6 +157,15 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	options := memoryeval.RunOptions{
 		Source: *source, QdrantURL: strings.TrimRight(*qdrantURL, "/"),
 		DocumentsRoot: *documentsRoot,
+	}
+	if *offlineRerankerUnavailable {
+		if *source != "fixture" {
+			return fmt.Errorf("--offline-reranker-unavailable requires --source fixture")
+		}
+		if *rerankerModelID == "" {
+			return fmt.Errorf("--offline-reranker-unavailable requires --reranker-model-id")
+		}
+		options.Reranker = unavailableReranker{modelID: *rerankerModelID}
 	}
 	needsEmbedding := *source == "tei-fixture"
 	if *source == "live" {

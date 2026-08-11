@@ -17,7 +17,7 @@ const canonicalScoreScale = 100000
 func normalizeReport(report Report) Report {
 	report.TopK = append([]int(nil), report.TopK...)
 	sort.Ints(report.TopK)
-	if report.SchemaVersion == CurrentReportSchemaVersion && report.Queries != nil {
+	if report.SchemaVersion >= CurrentReportSchemaVersion && report.Queries != nil {
 		report.Queries = append([]QueryReport{}, report.Queries...)
 	} else {
 		report.Queries = append([]QueryReport(nil), report.Queries...)
@@ -29,7 +29,7 @@ func normalizeReport(report Report) Report {
 		})
 		report.Queries[i].Lifecycle = cloneQueryLifecycleReport(report.Queries[i].Lifecycle)
 	}
-	if report.SchemaVersion == CurrentReportSchemaVersion && report.Cohorts != nil {
+	if report.SchemaVersion >= CurrentReportSchemaVersion && report.Cohorts != nil {
 		report.Cohorts = append([]CohortAggregateMetrics{}, report.Cohorts...)
 	} else {
 		report.Cohorts = append([]CohortAggregateMetrics(nil), report.Cohorts...)
@@ -47,12 +47,12 @@ func normalizeReport(report Report) Report {
 	report.GateFailures = append([]string(nil), report.GateFailures...)
 	sort.Strings(report.GateFailures)
 	for i := range report.Queries {
-		if report.SchemaVersion == CurrentReportSchemaVersion && report.Queries[i].Results != nil {
+		if report.SchemaVersion >= CurrentReportSchemaVersion && report.Queries[i].Results != nil {
 			report.Queries[i].Results = append([]RetrievedItem{}, report.Queries[i].Results...)
 		} else {
 			report.Queries[i].Results = append([]RetrievedItem(nil), report.Queries[i].Results...)
 		}
-		if report.SchemaVersion == CurrentReportSchemaVersion {
+		if report.SchemaVersion >= CurrentReportSchemaVersion {
 			for j := range report.Queries[i].Results {
 				// Qdrant can differ by a few float32 ULPs across CPU
 				// architectures. Five decimal places preserve useful score

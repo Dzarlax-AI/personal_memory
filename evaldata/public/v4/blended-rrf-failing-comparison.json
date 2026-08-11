@@ -1,0 +1,597 @@
+{
+  "schema_version": 4,
+  "dataset_version": "4.0.0",
+  "baseline_embedding": {
+    "provider": "tei",
+    "model_id": "intfloat/multilingual-e5-small",
+    "model_revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+    "dtype": "float32",
+    "pooling": "mean",
+    "vector_size": 384,
+    "input_profile": "legacy-raw-v1"
+  },
+  "candidate_embedding": {
+    "provider": "tei",
+    "model_id": "intfloat/multilingual-e5-small",
+    "model_revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+    "dtype": "float32",
+    "pooling": "mean",
+    "vector_size": 384,
+    "input_profile": "legacy-raw-v1"
+  },
+  "baseline_configuration": {
+    "name": "public-v4-hierarchical-only",
+    "fact_collection": "memory",
+    "chunk_collection": "doc_chunks",
+    "folder_collection": "doc_folders",
+    "folder_top_k": 3,
+    "folder_threshold": 0.5,
+    "top_k": [
+      1,
+      3,
+      5,
+      20
+    ],
+    "retrieval_strategy": "vector-only",
+    "dense_candidate_limit": 0,
+    "rrf_constant": 0,
+    "document_routing_strategy": "hierarchical-only",
+    "routing_candidate_limit": 20,
+    "routing_rrf_constant": 60
+  },
+  "candidate_configuration": {
+    "name": "public-v4-blended-rrf",
+    "fact_collection": "memory",
+    "chunk_collection": "doc_chunks",
+    "folder_collection": "doc_folders",
+    "folder_top_k": 3,
+    "folder_threshold": 0.5,
+    "top_k": [
+      1,
+      3,
+      5,
+      20
+    ],
+    "retrieval_strategy": "vector-only",
+    "dense_candidate_limit": 0,
+    "rrf_constant": 0,
+    "document_routing_strategy": "blended-rrf",
+    "routing_candidate_limit": 20,
+    "routing_rrf_constant": 60
+  },
+  "baseline_mode": "fixture",
+  "candidate_mode": "fixture",
+  "aggregate": {
+    "mrr": 0.05625000000000002,
+    "hit_at": {
+      "1": 0,
+      "20": 0.25,
+      "3": 0,
+      "5": 0.25
+    },
+    "ndcg_at": {
+      "1": 0,
+      "20": 0.10219117066349181,
+      "3": 0,
+      "5": 0.10219117066349181
+    }
+  },
+  "cohorts": [
+    {
+      "cohort": "exact-name",
+      "baseline": {
+        "cohort": "exact-name",
+        "query_count": 1,
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "invariant_violations": 0
+      },
+      "candidate": {
+        "cohort": "exact-name",
+        "query_count": 1,
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "invariant_violations": 0
+      },
+      "metrics": {
+        "mrr": 0,
+        "hit_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        },
+        "ndcg_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        }
+      }
+    },
+    {
+      "cohort": "general-semantic",
+      "baseline": {
+        "cohort": "general-semantic",
+        "query_count": 6,
+        "hit_at": {
+          "1": 0.6666666666666666,
+          "20": 0.6666666666666666,
+          "3": 0.6666666666666666,
+          "5": 0.6666666666666666
+        },
+        "mrr": 0.6666666666666666,
+        "ndcg_at": {
+          "1": 0.6666666666666666,
+          "20": 0.6666666666666666,
+          "3": 0.6666666666666666,
+          "5": 0.6666666666666666
+        },
+        "invariant_violations": 0
+      },
+      "candidate": {
+        "cohort": "general-semantic",
+        "query_count": 6,
+        "hit_at": {
+          "1": 0.6666666666666666,
+          "20": 1,
+          "3": 0.6666666666666666,
+          "5": 1
+        },
+        "mrr": 0.7416666666666667,
+        "ndcg_at": {
+          "1": 0.6666666666666666,
+          "20": 0.8029215608846557,
+          "3": 0.6666666666666666,
+          "5": 0.8029215608846557
+        },
+        "invariant_violations": 0
+      },
+      "metrics": {
+        "mrr": 0.07500000000000007,
+        "hit_at": {
+          "1": 0,
+          "20": 0.33333333333333337,
+          "3": 0,
+          "5": 0.33333333333333337
+        },
+        "ndcg_at": {
+          "1": 0,
+          "20": 0.1362548942179891,
+          "3": 0,
+          "5": 0.1362548942179891
+        }
+      }
+    },
+    {
+      "cohort": "identifier-path",
+      "baseline": {
+        "cohort": "identifier-path",
+        "query_count": 2,
+        "hit_at": {
+          "1": 0,
+          "20": 1,
+          "3": 0.5,
+          "5": 1
+        },
+        "mrr": 0.375,
+        "ndcg_at": {
+          "1": 0,
+          "20": 0.5308031558224252,
+          "3": 0.3154648767857287,
+          "5": 0.5308031558224252
+        },
+        "invariant_violations": 0
+      },
+      "candidate": {
+        "cohort": "identifier-path",
+        "query_count": 2,
+        "hit_at": {
+          "1": 0,
+          "20": 1,
+          "3": 0.5,
+          "5": 1
+        },
+        "mrr": 0.375,
+        "ndcg_at": {
+          "1": 0,
+          "20": 0.5308031558224252,
+          "3": 0.3154648767857287,
+          "5": 0.5308031558224252
+        },
+        "invariant_violations": 0
+      },
+      "metrics": {
+        "mrr": 0,
+        "hit_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        },
+        "ndcg_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        }
+      }
+    },
+    {
+      "cohort": "multilingual",
+      "baseline": {
+        "cohort": "multilingual",
+        "query_count": 1,
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "invariant_violations": 0
+      },
+      "candidate": {
+        "cohort": "multilingual",
+        "query_count": 1,
+        "hit_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "mrr": 1,
+        "ndcg_at": {
+          "1": 1,
+          "20": 1,
+          "3": 1,
+          "5": 1
+        },
+        "invariant_violations": 0
+      },
+      "metrics": {
+        "mrr": 0,
+        "hit_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        },
+        "ndcg_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        }
+      }
+    }
+  ],
+  "queries": [
+    {
+      "id": "document-flat",
+      "baseline_result_ids": [
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+        "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5",
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2"
+      ],
+      "candidate_result_ids": [
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+        "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5",
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+        "dddddddd-dddd-4ddd-8ddd-ddddddddddd4",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa6",
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc3",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa7",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa8"
+      ],
+      "metrics": {
+        "mrr": 0,
+        "hit_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        },
+        "ndcg_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        }
+      }
+    },
+    {
+      "id": "document-hierarchical",
+      "baseline_result_ids": [
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11"
+      ],
+      "candidate_result_ids": [
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
+        "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5",
+        "dddddddd-dddd-4ddd-8ddd-ddddddddddd4",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa6",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa7",
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc3",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa8",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9"
+      ],
+      "metrics": {
+        "mrr": 0,
+        "hit_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        },
+        "ndcg_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        }
+      }
+    },
+    {
+      "id": "document-hierarchical-fallback",
+      "baseline_result_ids": [
+        "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5",
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
+      ],
+      "candidate_result_ids": [
+        "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5",
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc3",
+        "dddddddd-dddd-4ddd-8ddd-ddddddddddd4",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa6",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa8",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa7"
+      ],
+      "metrics": {
+        "mrr": 0.25,
+        "hit_at": {
+          "1": 0,
+          "20": 1,
+          "3": 0,
+          "5": 1
+        },
+        "ndcg_at": {
+          "1": 0,
+          "20": 0.43067655807339306,
+          "3": 0,
+          "5": 0.43067655807339306
+        }
+      }
+    },
+    {
+      "id": "document-materialized-record",
+      "baseline_result_ids": [
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11"
+      ],
+      "candidate_result_ids": [
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
+        "dddddddd-dddd-4ddd-8ddd-ddddddddddd4",
+        "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5",
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc3",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa8",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa6",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa7"
+      ],
+      "metrics": {
+        "mrr": 0.2,
+        "hit_at": {
+          "1": 0,
+          "20": 1,
+          "3": 0,
+          "5": 1
+        },
+        "ndcg_at": {
+          "1": 0,
+          "20": 0.38685280723454163,
+          "3": 0,
+          "5": 0.38685280723454163
+        }
+      }
+    },
+    {
+      "id": "exact-name-document",
+      "baseline_result_ids": [
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa6",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa7",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9"
+      ],
+      "candidate_result_ids": [
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa6",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa7",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9",
+        "dddddddd-dddd-4ddd-8ddd-ddddddddddd4",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa8",
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc3",
+        "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5",
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10"
+      ],
+      "metrics": {
+        "mrr": 0,
+        "hit_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        },
+        "ndcg_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        }
+      }
+    },
+    {
+      "id": "fact-multilingual",
+      "baseline_result_ids": [
+        "22222222-2222-4222-8222-222222222222"
+      ],
+      "candidate_result_ids": [
+        "22222222-2222-4222-8222-222222222222"
+      ],
+      "metrics": {
+        "mrr": 0,
+        "hit_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        },
+        "ndcg_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        }
+      }
+    },
+    {
+      "id": "identifier-adr-path-document",
+      "baseline_result_ids": [
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10"
+      ],
+      "candidate_result_ids": [
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10",
+        "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5",
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc3",
+        "dddddddd-dddd-4ddd-8ddd-ddddddddddd4",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa6",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa7",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa8"
+      ],
+      "metrics": {
+        "mrr": 0,
+        "hit_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        },
+        "ndcg_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        }
+      }
+    },
+    {
+      "id": "identifier-cluster-document",
+      "baseline_result_ids": [
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa8",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11"
+      ],
+      "candidate_result_ids": [
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa9",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa8",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa10",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaa11",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa6",
+        "dddddddd-dddd-4ddd-8ddd-ddddddddddd4",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+        "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa7",
+        "cccccccc-cccc-4ccc-8ccc-ccccccccccc3"
+      ],
+      "metrics": {
+        "mrr": 0,
+        "hit_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        },
+        "ndcg_at": {
+          "1": 0,
+          "20": 0,
+          "3": 0,
+          "5": 0
+        }
+      }
+    }
+  ],
+  "lifecycle": {
+    "baseline_aggregate": {
+      "checks": 0,
+      "violations": 0,
+      "canonical_preference_checks": 0,
+      "canonical_preference_violations": 0
+    },
+    "candidate_aggregate": {
+      "checks": 0,
+      "violations": 0,
+      "canonical_preference_checks": 0,
+      "canonical_preference_violations": 0
+    }
+  },
+  "gates_passed": false,
+  "gate_failures": [
+    "protected cohorts require a ranking improvement"
+  ]
+}

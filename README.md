@@ -594,6 +594,20 @@ machinery only and is not an enabled production feature. See
 [`docs/evaluation.md`](docs/evaluation.md) for fixture, `tei-fixture`, read-only
 live, materialization, privacy, versioning, timing, and gate semantics.
 
+Document routing has a separate deterministic schema-v4 replay:
+
+```bash
+make eval-public-v4 QDRANT_TEST_URL=http://127.0.0.1:6333
+```
+
+Flat-only and blended RRF improved aggregate ranking in the synthetic fixture.
+Flat-only regressed the protected identifier/path cohort; blended RRF did not
+provide the required strict protected-cohort improvement. Production therefore
+keeps hierarchical-only as the default. The fourth replay verifies fail-open
+behavior when the configured reranker is unavailable; it does not claim model
+quality or latency, so reranking remains disabled pending real endpoint
+evidence.
+
 ### Model memory conformance
 
 The repository also includes a deterministic public suite for the normative

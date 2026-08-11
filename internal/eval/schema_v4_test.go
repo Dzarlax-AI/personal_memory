@@ -48,6 +48,23 @@ func TestSchemaV4RequiresIndependentBoundedDocumentRoutingStrategy(t *testing.T)
 	}
 }
 
+func TestSchemaV4CanonicalReportNormalizesScoresAndEmptySlices(t *testing.T) {
+	report := normalizeReport(Report{
+		SchemaVersion: DocumentRoutingSchemaVersion,
+		Queries: []QueryReport{
+			{ID: "empty", Results: []RetrievedItem{}},
+			{ID: "scored", Results: []RetrievedItem{{ID: "candidate", Score: 0.1234567}}},
+		},
+		Cohorts: []CohortAggregateMetrics{},
+	})
+	if report.Queries == nil || report.Cohorts == nil || report.Queries[0].Results == nil {
+		t.Fatal("schema v4 canonical empty slices must encode as arrays")
+	}
+	if got := report.Queries[1].Results[0].Score; got != 0.12346 {
+		t.Fatalf("canonical score = %v, want 0.12346", got)
+	}
+}
+
 func TestDecodeReportV3RejectsV4RoutingConfigurationAndTrace(t *testing.T) {
 	base, err := RenderJSON(validV3ComparisonReport())
 	if err != nil {
