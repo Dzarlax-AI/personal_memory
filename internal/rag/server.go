@@ -14,6 +14,7 @@ import (
 	"github.com/Dzarlax-AI/personal-memory/internal/config"
 	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
+	"github.com/Dzarlax-AI/personal-memory/internal/rerank"
 	"github.com/Dzarlax-AI/personal-memory/internal/retrieval"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -53,11 +54,28 @@ type Server struct {
 	searchChunks  pointSearcher
 	searchFolders pointSearcher
 	queryEmbed    queryEmbedder
+	reranker      rerank.Reranker
+	rerankerCap   int
 	cfg           *config.Config
 	indexer       *Indexer
 	lifeCtx       context.Context // cancelled on graceful shutdown
 	reindexMu     sync.Mutex      // held while a background reindex is running
 	workWG        sync.WaitGroup  // all background loops and on-demand reindexes
+}
+
+// SetBlendedReranker injects an optional reranker for blended searches. It is
+// deliberately not enabled by environment configuration: production keeps
+// deterministic routing unless an experiment wires this explicitly.
+func (s *Server) SetBlendedReranker(service rerank.Reranker, candidateCap int) error {
+	if service == nil {
+		s.reranker, s.rerankerCap = nil, 0
+		return nil
+	}
+	if candidateCap < 1 || candidateCap > rerank.MaxCandidates {
+		return fmt.Errorf("reranker candidate cap must be between 1 and %d", rerank.MaxCandidates)
+	}
+	s.reranker, s.rerankerCap = service, candidateCap
+	return nil
 }
 
 // NewServer builds the RAG MCP server. lifeCtx should be the long-lived
@@ -136,7 +154,7 @@ func (s *Server) handleSearchDocuments(ctx context.Context, req mcp.CallToolRequ
 	if mode == "flat" {
 		points, err = s.flatSearch(ctx, vec, limit)
 	} else if mode == "blended" {
-		points, routing, err = s.blendedSearch(ctx, vec, limit)
+		points, routing, err = s.blendedSearch(ctx, query, vec, limit)
 	} else {
 		points, err = s.hierarchicalSearch(ctx, vec, limit)
 	}
@@ -252,7 +270,7 @@ type routingMetadata struct {
 	SelectedFolderPaths []string               `json:"selected_folder_paths"`
 }
 
-func (s *Server) blendedSearch(ctx context.Context, vec []float32, limit int) ([]qdrant.Point, map[string]routingMetadata, error) {
+func (s *Server) blendedSearch(ctx context.Context, query string, vec []float32, limit int) ([]qdrant.Point, map[string]routingMetadata, error) {
 	folderLimit := min(s.cfg.RAGFolderTopK, retrieval.MaxCandidates)
 	threshold := s.cfg.RAGFolderThreshold
 	folderPoints, err := s.searchFolders.Search(ctx, vec, folderLimit, nil, &threshold)
@@ -329,6 +347,29 @@ func (s *Server) blendedSearch(ctx context.Context, vec []float32, limit int) ([
 	for i, result := range fused {
 		points[i] = pointsByID[result.ID]
 		routing[result.ID] = routingForFusedResult(result, selectedFolders)
+	}
+	if s.reranker != nil && len(points) > 0 {
+		cap := min(len(points), s.rerankerCap)
+		candidates := make([]rerank.Candidate, cap)
+		for i := 0; i < cap; i++ {
+			text, _ := points[i].Payload["text"].(string)
+			candidates[i] = rerank.Candidate{ID: points[i].ID, Text: text}
+		}
+		reranked, reason := rerank.ApplyFailOpen(ctx, s.reranker, query, candidates)
+		if reason == "reranker_applied" {
+			byID := make(map[string]qdrant.Point, cap)
+			for _, point := range points[:cap] {
+				byID[point.ID] = point
+			}
+			for i, candidate := range reranked {
+				points[i] = byID[candidate.ID]
+			}
+		}
+		for _, point := range points[:cap] {
+			metadata := routing[point.ID]
+			metadata.ReasonCodes = append(metadata.ReasonCodes, reason)
+			routing[point.ID] = metadata
+		}
 	}
 	return points, routing, nil
 }

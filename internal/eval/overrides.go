@@ -5,11 +5,14 @@ import "fmt"
 // ExperimentOverrides contains only dimensions intended to vary between
 // evaluation experiments. Nil fields preserve the dataset value.
 type ExperimentOverrides struct {
-	ConfigurationName   *string
-	InputProfile        *InputProfile
-	RetrievalStrategy   *RetrievalStrategy
-	DenseCandidateLimit *int
-	RRFConstant         *int
+	ConfigurationName       *string
+	InputProfile            *InputProfile
+	RetrievalStrategy       *RetrievalStrategy
+	DenseCandidateLimit     *int
+	RRFConstant             *int
+	DocumentRoutingStrategy *DocumentRoutingStrategy
+	RoutingCandidateLimit   *int
+	RoutingRRFConstant      *int
 }
 
 // WithExperimentOverrides returns an independently mutable dataset copy and
@@ -53,6 +56,18 @@ func WithExperimentOverrides(source *Dataset, overrides ExperimentOverrides, run
 	if overrides.RRFConstant != nil {
 		cloned.Configuration.RRFConstant = *overrides.RRFConstant
 		cloned.Configuration.present["rrf_constant"] = true
+	}
+	if overrides.DocumentRoutingStrategy != nil {
+		cloned.Configuration.DocumentRoutingStrategy = *overrides.DocumentRoutingStrategy
+		cloned.Configuration.present["document_routing_strategy"] = true
+	}
+	if overrides.RoutingCandidateLimit != nil {
+		cloned.Configuration.RoutingCandidateLimit = *overrides.RoutingCandidateLimit
+		cloned.Configuration.present["routing_candidate_limit"] = true
+	}
+	if overrides.RoutingRRFConstant != nil {
+		cloned.Configuration.RoutingRRFConstant = *overrides.RoutingRRFConstant
+		cloned.Configuration.present["routing_rrf_constant"] = true
 	}
 	if err := cloned.ValidateForSource(runSource); err != nil {
 		return nil, err

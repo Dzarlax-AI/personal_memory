@@ -10,7 +10,7 @@ import (
 )
 
 // folderSummary builds a text summary of a directory for embedding — no LLM needed.
-func folderSummary(dir string) (string, error) {
+func folderSummary(dir string, displayPath string) (string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return "", err
@@ -47,7 +47,7 @@ func folderSummary(dir string) (string, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Folder: %s\n", dir))
+	sb.WriteString(fmt.Sprintf("Folder: %s\n", displayPath))
 	sb.WriteString(fmt.Sprintf("Files (%d): %s\n", len(files), strings.Join(files, ", ")))
 	if len(topics) > 0 {
 		sb.WriteString(fmt.Sprintf("Topics: %s\n", strings.Join(topics, ", ")))

@@ -291,7 +291,8 @@ func DecodeReport(data []byte) (Report, error) {
 	}
 	if (report.SchemaVersion != SchemaVersion &&
 		report.SchemaVersion != LifecycleSchemaVersion &&
-		report.SchemaVersion != CurrentReportSchemaVersion) ||
+		report.SchemaVersion != CurrentReportSchemaVersion &&
+		report.SchemaVersion != DocumentRoutingSchemaVersion) ||
 		strings.TrimSpace(report.DatasetVersion) == "" {
 		return Report{}, fmt.Errorf("report schema_version and dataset_version are invalid")
 	}
@@ -319,9 +320,19 @@ func DecodeReport(data []byte) (Report, error) {
 			return Report{}, fmt.Errorf("decode report lifecycle: %w", err)
 		}
 	}
-	if report.SchemaVersion == CurrentReportSchemaVersion {
+	if report.SchemaVersion >= CurrentReportSchemaVersion {
+		if report.SchemaVersion == CurrentReportSchemaVersion {
+			if err := rejectDocumentRoutingV4Fields(report); err != nil {
+				return Report{}, err
+			}
+		}
 		if err := validateV3Report(report); err != nil {
 			return Report{}, fmt.Errorf("decode report v3: %w", err)
+		}
+		if report.SchemaVersion == DocumentRoutingSchemaVersion {
+			if err := validateDocumentRoutingReport(report); err != nil {
+				return Report{}, err
+			}
 		}
 	} else if report.Embedding.inputProfilePresent ||
 		report.Configuration.present["retrieval_strategy"] ||
@@ -331,6 +342,23 @@ func DecodeReport(data []byte) (Report, error) {
 		return Report{}, fmt.Errorf("report v3 identity and cohort fields require schema_version %d", CurrentReportSchemaVersion)
 	}
 	return normalizeReport(report), nil
+}
+
+func rejectDocumentRoutingV4Fields(report Report) error {
+	for _, field := range []string{
+		"document_routing_strategy", "routing_candidate_limit", "routing_rrf_constant",
+		"reranker_model_id", "reranker_candidate_cap", "reranker_timeout_ms",
+	} {
+		if report.Configuration.present[field] {
+			return fmt.Errorf("configuration field %s requires schema_version %d", field, DocumentRoutingSchemaVersion)
+		}
+	}
+	for _, query := range report.Queries {
+		if query.Routing != nil {
+			return fmt.Errorf("query %q routing trace requires schema_version %d", query.ID, DocumentRoutingSchemaVersion)
+		}
+	}
+	return nil
 }
 
 func validateReportQueryContracts(report Report) error {
@@ -357,7 +385,7 @@ func validateReportQueryContracts(report Report) error {
 			if query.Lifecycle != nil {
 				return fmt.Errorf("query %q field lifecycle requires schema_version %d", query.ID, LifecycleSchemaVersion)
 			}
-		case LifecycleSchemaVersion, CurrentReportSchemaVersion:
+		case LifecycleSchemaVersion, CurrentReportSchemaVersion, DocumentRoutingSchemaVersion:
 			if query.Target == "facts" && query.Lifecycle == nil {
 				return fmt.Errorf("query %q field lifecycle is required for facts", query.ID)
 			}
@@ -365,7 +393,7 @@ func validateReportQueryContracts(report Report) error {
 				return fmt.Errorf("query %q field lifecycle must be omitted for documents", query.ID)
 			}
 		}
-		if report.SchemaVersion == CurrentReportSchemaVersion {
+		if report.SchemaVersion >= CurrentReportSchemaVersion {
 			if err := validateQueryCohorts(query.ID, query.Cohorts, query.Cohorts != nil); err != nil {
 				return err
 			}
@@ -386,6 +414,32 @@ func validateReportQueryContracts(report Report) error {
 			}
 		} else if query.Lifecycle.AsOf != "" {
 			return fmt.Errorf("query %q field as_of is only valid for as_of intent", query.ID)
+		}
+	}
+	return nil
+}
+
+func validateDocumentRoutingReport(report Report) error {
+	if err := validateDocumentRoutingConfiguration(report.Configuration); err != nil {
+		return err
+	}
+	for _, query := range report.Queries {
+		if query.Target == "facts" {
+			if query.Routing != nil {
+				return fmt.Errorf("fact query %q must not contain routing trace", query.ID)
+			}
+			continue
+		}
+		if query.Routing == nil || query.Routing.Strategy != report.Configuration.DocumentRoutingStrategy {
+			return fmt.Errorf("document query %q requires matching routing trace", query.ID)
+		}
+		if len(query.Routing.ReasonCodes) > 8 || len(query.Routing.SelectedFolders) > report.Configuration.FolderTopK || len(query.Routing.Results) > 100 {
+			return fmt.Errorf("document query %q routing trace exceeds bounds", query.ID)
+		}
+		for _, folder := range query.Routing.SelectedFolders {
+			if folder == "" || strings.HasPrefix(folder, "/") || strings.Contains(folder, "..") || strings.Contains(folder, `\`) {
+				return fmt.Errorf("document query %q routing folder is not privacy-safe", query.ID)
+			}
 		}
 	}
 	return nil

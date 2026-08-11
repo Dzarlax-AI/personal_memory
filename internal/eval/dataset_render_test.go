@@ -154,6 +154,9 @@ func TestConfigurationMarshalJSONCoversEveryExportedWireField(t *testing.T) {
 		FolderCollection: "folders", FolderTopK: 3, FolderThreshold: 0.5,
 		TopK: []int{1, 3}, RetrievalStrategy: RetrievalHybridRRF,
 		DenseCandidateLimit: 40, RRFConstant: 60,
+		DocumentRoutingStrategy: DocumentRoutingBlendedRRF, RoutingCandidateLimit: 40,
+		RoutingRRFConstant: 60, RerankerModelID: "model/revision",
+		RerankerCandidateCap: 20, RerankerTimeoutMS: 500,
 	}
 	data, err := json.Marshal(configuration)
 	if err != nil {

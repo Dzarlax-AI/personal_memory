@@ -28,6 +28,11 @@ type Indexer struct {
 
 const maxIndexerChunkBytes = 1024 * 1024
 
+// folderSummaryVersion changes whenever the deterministic summary input or
+// payload contract changes. It lets reindex refresh folder vectors without
+// touching already-complete chunk generations.
+const folderSummaryVersion = "relative-metadata-v2"
+
 func NewIndexer(chunks, folders *qdrant.Client, embed *embeddings.Client, docsDir string, maxBytes int) *Indexer {
 	return &Indexer{
 		chunks:   chunks,
@@ -65,8 +70,15 @@ func (idx *Indexer) Run(ctx context.Context) error {
 		return fmt.Errorf("snapshot qdrant state: %w", err)
 	}
 	slog.Info("qdrant state loaded", "files", len(state))
+	folderRefresh, err := idx.foldersNeedingRefresh(ctx)
+	if err != nil {
+		return fmt.Errorf("snapshot folder summaries: %w", err)
+	}
 
 	dirtyFolders := map[string]bool{}
+	for dir := range folderRefresh {
+		dirtyFolders[dir] = true
+	}
 	walkedFiles := map[string]bool{}
 	walkHadErrors := false
 
@@ -264,7 +276,15 @@ func (idx *Indexer) indexFile(ctx context.Context, path string, existing *fileSt
 
 // indexFolder builds and upserts a folder summary point.
 func (idx *Indexer) indexFolder(ctx context.Context, dir string) error {
-	summary, err := folderSummary(dir)
+	relativePath, err := filepath.Rel(idx.docsDir, dir)
+	if err != nil || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("folder %q is outside documents root", dir)
+	}
+	relativePath = filepath.ToSlash(relativePath)
+	if relativePath == "." {
+		relativePath = ""
+	}
+	summary, err := folderSummary(dir, relativePath)
 	if err != nil {
 		return err
 	}
@@ -274,11 +294,41 @@ func (idx *Indexer) indexFolder(ctx context.Context, dir string) error {
 	}
 	id := folderPointID(dir)
 	payload := map[string]interface{}{
-		"summary":     summary,
-		"folder_path": dir,
-		"indexed_at":  time.Now().UTC().Format(time.RFC3339),
+		"summary":              summary,
+		"folder_path":          dir,
+		"relative_folder_path": relativePath,
+		"summary_version":      folderSummaryVersion,
+		"indexed_at":           time.Now().UTC().Format(time.RFC3339),
 	}
 	return idx.folders.Upsert(ctx, qdrant.Point{ID: id, Vector: vec, Payload: payload})
+}
+
+// foldersNeedingRefresh returns only stored, in-root folder paths whose
+// summary payload predates the current deterministic contract.
+func (idx *Indexer) foldersNeedingRefresh(ctx context.Context) (map[string]bool, error) {
+	points, err := idx.folders.ScrollAllWithPayload(ctx, nil,
+		[]string{"folder_path", "summary_version", "relative_folder_path"}, false)
+	if err != nil {
+		return nil, err
+	}
+	refresh := make(map[string]bool)
+	for _, point := range points {
+		dir, _ := point.Payload["folder_path"].(string)
+		if dir == "" || !pathWithinRoot(idx.docsDir, dir) {
+			continue
+		}
+		version, _ := point.Payload["summary_version"].(string)
+		_, relativePresent := point.Payload["relative_folder_path"]
+		if version != folderSummaryVersion || !relativePresent {
+			refresh[dir] = true
+		}
+	}
+	return refresh, nil
+}
+
+func pathWithinRoot(root, candidate string) bool {
+	rel, err := filepath.Rel(root, candidate)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // reconcileFolder refreshes a live folder summary or removes its point once

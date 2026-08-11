@@ -59,6 +59,9 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	retrievalStrategy := flags.String("retrieval-strategy", "", "override retrieval strategy")
 	denseCandidateLimit := flags.Int("dense-candidate-limit", -1, "override hybrid dense candidate limit")
 	rrfConstant := flags.Int("rrf-constant", -1, "override hybrid RRF constant")
+	documentRoutingStrategy := flags.String("document-routing-strategy", "", "override document routing strategy")
+	routingCandidateLimit := flags.Int("routing-candidate-limit", -1, "override document routing candidate limit")
+	routingRRFConstant := flags.Int("routing-rrf-constant", -1, "override document routing RRF constant")
 	jsonPath := flags.String("json", "", "JSON report output path")
 	markdownPath := flags.String("markdown", "", "Markdown report output path")
 	timeout := flags.Duration("timeout", defaultTimeout, "overall evaluation timeout")
@@ -106,6 +109,16 @@ func runCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	if *rrfConstant >= 0 {
 		overrides.RRFConstant = rrfConstant
+	}
+	if *documentRoutingStrategy != "" {
+		value := memoryeval.DocumentRoutingStrategy(*documentRoutingStrategy)
+		overrides.DocumentRoutingStrategy = &value
+	}
+	if *routingCandidateLimit >= 0 {
+		overrides.RoutingCandidateLimit = routingCandidateLimit
+	}
+	if *routingRRFConstant >= 0 {
+		overrides.RoutingRRFConstant = routingRRFConstant
 	}
 	dataset, err = memoryeval.WithExperimentOverrides(dataset, overrides, *source)
 	if err != nil {
