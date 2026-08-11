@@ -8,6 +8,7 @@ import (
 )
 
 type recallCacheEntry struct {
+	mu        sync.Mutex
 	timestamp time.Time
 	result    RecallFactsResult
 }
@@ -20,7 +21,7 @@ type recallFlight struct {
 
 type Cache struct {
 	mu         sync.RWMutex
-	recalls    map[string]recallCacheEntry
+	recalls    map[string]*recallCacheEntry
 	inflight   map[string]*recallFlight
 	generation uint64
 	ttl        time.Duration
@@ -28,7 +29,7 @@ type Cache struct {
 
 func NewCache(ttl time.Duration) *Cache {
 	return &Cache{
-		recalls:  make(map[string]recallCacheEntry),
+		recalls:  make(map[string]*recallCacheEntry),
 		inflight: make(map[string]*recallFlight),
 		ttl:      ttl,
 	}
@@ -39,18 +40,32 @@ func NewCache(ttl time.Duration) *Cache {
 func (c *Cache) AcquireRecall(ctx context.Context, key string, updateHit func(*RecallFactsResult) error) (RecallFactsResult, *recallFlight, error) {
 	for {
 		c.mu.Lock()
-		if entry, ok := c.recalls[key]; ok && time.Since(entry.timestamp) <= c.ttl {
-			working := cloneRecallFactsResult(entry.result)
-			if err := updateHit(&working); err != nil {
-				c.mu.Unlock()
-				return RecallFactsResult{}, nil, err
-			}
-			entry.result = cloneRecallFactsResult(working)
-			c.recalls[key] = entry
+		if entry, ok := c.recalls[key]; ok {
+			// Serialize only this key while updateHit may wait for queue space.
 			c.mu.Unlock()
-			return working, nil, nil
-		} else if ok {
-			delete(c.recalls, key)
+			entry.mu.Lock()
+			c.mu.Lock()
+			if c.recalls[key] != entry {
+				c.mu.Unlock()
+				entry.mu.Unlock()
+				continue
+			}
+			if time.Since(entry.timestamp) > c.ttl {
+				delete(c.recalls, key)
+				c.mu.Unlock()
+				entry.mu.Unlock()
+				continue
+			} else {
+				c.mu.Unlock()
+				working := cloneRecallFactsResult(entry.result)
+				if err := updateHit(&working); err != nil {
+					entry.mu.Unlock()
+					return RecallFactsResult{}, nil, err
+				}
+				entry.result = cloneRecallFactsResult(working)
+				entry.mu.Unlock()
+				return working, nil, nil
+			}
 		}
 		if flight := c.inflight[key]; flight != nil {
 			flight.waiters++
@@ -86,7 +101,7 @@ func (c *Cache) FinishRecall(key string, flight *recallFlight, result *RecallFac
 	}
 	published := result != nil && flight.generation == c.generation
 	if published {
-		c.recalls[key] = recallCacheEntry{timestamp: time.Now(), result: cloneRecallFactsResult(*result)}
+		c.recalls[key] = &recallCacheEntry{timestamp: time.Now(), result: cloneRecallFactsResult(*result)}
 	}
 	delete(c.inflight, key)
 	close(flight.done)
@@ -94,21 +109,42 @@ func (c *Cache) FinishRecall(key string, flight *recallFlight, result *RecallFac
 }
 
 func (c *Cache) GetRecall(key string) (RecallFactsResult, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	entry, ok := c.recalls[key]
-	if !ok || time.Since(entry.timestamp) > c.ttl {
-		return RecallFactsResult{}, false
+	for {
+		c.mu.RLock()
+		entry, ok := c.recalls[key]
+		c.mu.RUnlock()
+		if !ok {
+			return RecallFactsResult{}, false
+		}
+		entry.mu.Lock()
+		c.mu.RLock()
+		current := c.recalls[key] == entry
+		c.mu.RUnlock()
+		if !current {
+			entry.mu.Unlock()
+			continue
+		}
+		if time.Since(entry.timestamp) > c.ttl {
+			entry.mu.Unlock()
+			return RecallFactsResult{}, false
+		}
+		result := cloneRecallFactsResult(entry.result)
+		entry.mu.Unlock()
+		return result, true
 	}
-	return cloneRecallFactsResult(entry.result), true
 }
 
 func (c *Cache) SetRecall(key string, result RecallFactsResult) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.recalls[key] = recallCacheEntry{
+	previous := c.recalls[key]
+	c.recalls[key] = &recallCacheEntry{
 		timestamp: time.Now(),
 		result:    cloneRecallFactsResult(result),
+	}
+	c.mu.Unlock()
+	if previous != nil {
+		previous.mu.Lock()
+		previous.mu.Unlock()
 	}
 }
 
@@ -131,11 +167,21 @@ func cloneRecallFactsResult(result RecallFactsResult) RecallFactsResult {
 
 func (c *Cache) Invalidate() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	entries := make([]*recallCacheEntry, 0, len(c.recalls))
+	for _, entry := range c.recalls {
+		entries = append(entries, entry)
+	}
 	c.generation++
-	c.recalls = make(map[string]recallCacheEntry)
+	c.recalls = make(map[string]*recallCacheEntry)
 	for key, flight := range c.inflight {
 		delete(c.inflight, key)
 		close(flight.done)
+	}
+	c.mu.Unlock()
+	// Let hit updates that started before invalidation finish before the
+	// mutating request returns, without blocking unrelated cache keys.
+	for _, entry := range entries {
+		entry.mu.Lock()
+		entry.mu.Unlock()
 	}
 }

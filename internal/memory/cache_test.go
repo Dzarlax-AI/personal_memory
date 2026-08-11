@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -50,5 +51,51 @@ func TestCache_Invalidate(t *testing.T) {
 	_, ok := c.GetRecall("key1")
 	if ok {
 		t.Error("expected cache miss after invalidate")
+	}
+}
+
+func TestCache_AcquireRecallDoesNotHoldGlobalLockDuringHitUpdate(t *testing.T) {
+	c := NewCache(time.Minute)
+	c.SetRecall("blocked", RecallFactsResult{Facts: []RecallFact{{Text: "first"}}})
+	c.SetRecall("independent", RecallFactsResult{Facts: []RecallFact{{Text: "second"}}})
+
+	entered := make(chan struct{})
+	release := make(chan struct{}, 1)
+	defer func() {
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+	}()
+	blockedDone := make(chan error, 1)
+	go func() {
+		_, _, err := c.AcquireRecall(context.Background(), "blocked", func(*RecallFactsResult) error {
+			close(entered)
+			<-release
+			return nil
+		})
+		blockedDone <- err
+	}()
+	<-entered
+
+	independentDone := make(chan error, 1)
+	go func() {
+		_, _, err := c.AcquireRecall(context.Background(), "independent", func(*RecallFactsResult) error {
+			return nil
+		})
+		independentDone <- err
+	}()
+	select {
+	case err := <-independentDone:
+		if err != nil {
+			t.Fatalf("independent cache hit failed: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("independent cache hit blocked behind another key's update")
+	}
+
+	release <- struct{}{}
+	if err := <-blockedDone; err != nil {
+		t.Fatalf("blocked cache hit failed: %v", err)
 	}
 }

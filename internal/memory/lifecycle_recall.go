@@ -117,12 +117,12 @@ func lifecycleRecallCacheIdentity(options LifecycleRecallOptions) string {
 }
 
 func lifecycleRecallFilters(base map[string]interface{}, mode RecallLifecycleMode) map[string]interface{} {
-	if mode == "" || mode == RecallLifecycleCurrent {
-		return currentLifecycleFilters(base)
-	}
 	filters := make(map[string]interface{}, len(base))
 	for key, value := range base {
 		filters[key] = cloneLifecycleRecallFilterValue(value)
+	}
+	if mode == "" || mode == RecallLifecycleCurrent {
+		return currentLifecycleFilters(filters)
 	}
 	return filters
 }

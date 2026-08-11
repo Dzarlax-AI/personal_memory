@@ -225,6 +225,13 @@ func TestLifecycleRecallFiltersPreserveBaseAndScopeCurrentOnly(t *testing.T) {
 	if _, ok := current["should"]; !ok || !reflect.DeepEqual(current["must"], base["must"]) {
 		t.Fatalf("current filters = %#v", current)
 	}
+	currentMust := current["must"].([]map[string]interface{})
+	currentMust[0]["key"] = "changed"
+	currentMust[0]["match"].(map[string]interface{})["value"] = "changed"
+	baseMust := base["must"].([]map[string]interface{})
+	if baseMust[0]["key"] != "namespace" || baseMust[0]["match"].(map[string]interface{})["value"] != "projects" {
+		t.Fatalf("current mode returned aliased nested filters: %#v", base)
+	}
 	for _, mode := range []RecallLifecycleMode{RecallLifecycleHistory, RecallLifecycleAsOf, RecallLifecycleIncludeAll} {
 		got := lifecycleRecallFilters(base, mode)
 		if !reflect.DeepEqual(got, base) {
