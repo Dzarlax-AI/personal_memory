@@ -37,7 +37,7 @@ func TestSetFactLifecycleUsesExactLifecycleOnlyBatch(t *testing.T) {
 	defer qdrantServer.Close()
 
 	cache := NewCache(time.Minute)
-	cache.Set("cached", []map[string]interface{}{{"text": "stale"}})
+	cache.SetRecall("cached", RecallFactsResult{Facts: []RecallFact{{Text: "stale"}}})
 	srv := &Server{qdrant: qdrant.NewClient(qdrantServer.URL, "memory"), cache: cache}
 	result, err := srv.setFactLifecycle(context.Background(), toolRequest(map[string]interface{}{
 		"point_id":        id,
@@ -56,7 +56,7 @@ func TestSetFactLifecycleUsesExactLifecycleOnlyBatch(t *testing.T) {
 	if strings.Contains(string(encodedBatch), "PRIVATE FACT") || strings.Contains(string(encodedBatch), "recall_count") {
 		t.Fatalf("batch leaked unrelated payload: %s", encodedBatch)
 	}
-	if _, found := cache.Get("cached"); found {
+	if _, found := cache.GetRecall("cached"); found {
 		t.Fatal("cache was not invalidated")
 	}
 }
@@ -68,7 +68,7 @@ func TestSetFactLifecycleRejectsInvalidInputBeforeQdrant(t *testing.T) {
 	}))
 	defer qdrantServer.Close()
 	cache := NewCache(time.Minute)
-	cache.Set("cached", []map[string]interface{}{{"text": "kept"}})
+	cache.SetRecall("cached", RecallFactsResult{Facts: []RecallFact{{Text: "kept"}}})
 	srv := &Server{qdrant: qdrant.NewClient(qdrantServer.URL, "memory"), cache: cache}
 
 	result, err := srv.setFactLifecycle(context.Background(), toolRequest(map[string]interface{}{
@@ -84,7 +84,7 @@ func TestSetFactLifecycleRejectsInvalidInputBeforeQdrant(t *testing.T) {
 	if requests != 0 {
 		t.Fatalf("Qdrant requests = %d, want 0", requests)
 	}
-	if _, found := cache.Get("cached"); !found {
+	if _, found := cache.GetRecall("cached"); !found {
 		t.Fatal("pre-dispatch validation invalidated cache")
 	}
 }
@@ -101,7 +101,7 @@ func TestSetFactLifecycleInvalidatesCacheAfterDispatchedError(t *testing.T) {
 	}))
 	defer qdrantServer.Close()
 	cache := NewCache(time.Minute)
-	cache.Set("cached", []map[string]interface{}{{"text": "stale"}})
+	cache.SetRecall("cached", RecallFactsResult{Facts: []RecallFact{{Text: "stale"}}})
 	srv := &Server{qdrant: qdrant.NewClient(qdrantServer.URL, "memory"), cache: cache}
 
 	result, err := srv.setFactLifecycle(context.Background(), toolRequest(map[string]interface{}{
@@ -114,7 +114,7 @@ func TestSetFactLifecycleInvalidatesCacheAfterDispatchedError(t *testing.T) {
 	if !result.IsError {
 		t.Fatal("storage failure was not returned")
 	}
-	if _, found := cache.Get("cached"); found {
+	if _, found := cache.GetRecall("cached"); found {
 		t.Fatal("dispatched failure left stale cache")
 	}
 }

@@ -239,6 +239,14 @@ The client should call `store_fact`. Personal Memory embeds the fact, checks for
 
 The client should call `recall_facts` with a natural-language query. Retrieval is semantic, so the stored wording does not need to match the query. Default recall returns only valid, non-expired current facts; facts without lifecycle metadata remain compatible as legacy current facts.
 
+For broader lifecycle context, clients can pass one of these optional parameters:
+
+```json
+{"query":"database architecture","namespace":"projects","limit":5,"lifecycle_mode":"as_of","as_of":"2026-07-21"}
+```
+
+`lifecycle_mode` is `current` (the default), `history`, `as_of`, or `include_all`. `as_of` is a required exact `YYYY-MM-DD` date only in `as_of` mode and changes the expiry reference; it does not reconstruct historical state. Broad modes return valid, non-expired current, historical, superseded, and disputed candidates, with disputed facts explicitly marked `uncertain` in structured content.
+
 ### Store a project decision
 
 > Remember that the analytics service uses ClickHouse for event storage. Put it in the `projects` namespace, tag it `analytics`, `clickhouse`, and `architecture`, with `analytics` as the primary tag.
@@ -293,7 +301,7 @@ The MCP schema accepts tags as one comma-separated string, for example `tags="po
 
 Facts normalize to one of four states: `current`, `historical`, `superseded`, or `disputed`. Payloads that predate lifecycle support and contain none of the lifecycle fields are treated as legacy current facts. Once any lifecycle field is present, malformed explicit metadata is visible for inspection but is never accepted as legacy or current truth.
 
-Default `recall_facts` and operational-context reads return only valid, non-expired current facts. `find_related` is the semantic history-inspection path and can return all lifecycle states with normalized lifecycle labels; list, export, stats, and Viz remain inventory surfaces across states. Canonical, provenance, verification, relationship, transition, retention, expiry, visibility, rollout, and rollback semantics are defined in the normative [Fact Lifecycle Contract](docs/lifecycle.md).
+Default `recall_facts` and operational-context reads return only valid, non-expired current facts. Optional `recall_facts` lifecycle modes provide valid, non-expired broad context with structured lifecycle decisions and safe reason codes; `as_of` changes only the expiry reference. `find_related` remains the semantic inspection path that also labels malformed lifecycle metadata; list, export, stats, and Viz remain inventory surfaces across states. Canonical, provenance, verification, relationship, transition, retention, expiry, visibility, rollout, and rollback semantics are defined in the normative [Fact Lifecycle Contract](docs/lifecycle.md).
 
 Startup performs no lifecycle migration. Lifecycle inputs on `store_fact` and `update_fact` are optional, while `set_fact_lifecycle` changes a complete lifecycle target by exact point ID without embedding or semantic selection. Legacy backfill is a separate dry-run-first command; see the migration runbook in the normative lifecycle contract.
 
@@ -333,7 +341,7 @@ The RAG index is separate from the fact collection. Documents are split along Ma
 
 | Tool | Purpose |
 |---|---|
-| `recall_facts(query, namespace?, limit=5)` | Return semantically relevant valid, non-expired current facts and increment recall counts. |
+| `recall_facts(query, namespace?, limit=5, lifecycle_mode?, as_of?)` | Return lifecycle-ranked semantic facts. Modes: `current` (default), `history`, `as_of`, or `include_all`; `as_of` requires an exact date used only for expiry. Structured results include semantic/final ranks, lifecycle, decision, and safe reason codes. |
 | `find_related(query, namespace?, limit=5)` | Inspect lifecycle-ranked related non-expired facts with cosine scores; valid superseded facts remain eligible above the duplicate threshold. |
 | `list_facts(namespace?)` | List facts and normalized lifecycle metadata across states. |
 | `get_stats()` | Summarize namespaces, tags, lifecycle counts, and most-recalled facts. |

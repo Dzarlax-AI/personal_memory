@@ -99,21 +99,24 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return counter.stop(ctx)
 }
 
-func (s *Server) countRecalls(ctx context.Context, hits []map[string]interface{}) error {
+func (s *Server) countRecalls(ctx context.Context, result *RecallFactsResult) error {
 	s.recallCounterMu.Lock()
 	counter := s.recallCounter
 	s.recallCounterMu.Unlock()
 	if counter == nil {
 		return fmt.Errorf("recall counter is not running")
 	}
-	for _, hit := range hits {
-		id, _ := hit["_point_id"].(string)
-		if id != "" {
-			if err := counter.enqueue(ctx, id); err != nil {
-				return err
-			}
-			hit["recall_count"] = payloadInt(hit["recall_count"]) + 1
+	ids := make([]string, 0, len(result.Facts))
+	for _, fact := range result.Facts {
+		if fact.PointID != "" {
+			ids = append(ids, fact.PointID)
 		}
+	}
+	if err := counter.enqueueBatch(ctx, ids); err != nil {
+		return err
+	}
+	for index := range result.Facts {
+		result.Facts[index].RecallCount++
 	}
 	return nil
 }
@@ -170,7 +173,8 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 	), s.storeFact)
 
 	srv.AddTool(mcp.NewTool("recall_facts",
-		mcp.WithDescription("Semantic search for facts. Returns facts with relevance scores."),
+		mcp.WithDescription("Semantic search for facts with explicit lifecycle intent. lifecycle_mode defaults to current; history returns valid current and non-current context, as_of applies its date only as the expiry reference and does not infer historical intervals, and include_all returns every valid lifecycle state. Disputed facts are marked uncertain."),
+		mcp.WithOutputSchema[RecallFactsResult](),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -178,6 +182,8 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 		mcp.WithString("query", mcp.Description("Natural language search query"), mcp.Required()),
 		mcp.WithString("namespace", mcp.Description("Filter by namespace")),
 		mcp.WithNumber("limit", mcp.Description("Max results (default 5)")),
+		mcp.WithString("lifecycle_mode", mcp.Description("Lifecycle intent: current (default), history, as_of, or include_all")),
+		mcp.WithString("as_of", mcp.Description("Exact YYYY-MM-DD expiry reference; valid only with lifecycle_mode=as_of")),
 	), s.recallFacts)
 
 	srv.AddTool(mcp.NewTool("update_fact",
@@ -602,6 +608,28 @@ type LifecycleMutationResult struct {
 	Lifecycle lifecycle.View `json:"lifecycle"`
 }
 
+type RecallFact struct {
+	PointID       string                        `json:"point_id"`
+	Text          string                        `json:"text"`
+	Namespace     string                        `json:"namespace"`
+	Tags          []string                      `json:"tags"`
+	PrimaryTag    string                        `json:"primary_tag,omitempty"`
+	RecallCount   int                           `json:"recall_count"`
+	SemanticScore float64                       `json:"semantic_score"`
+	SemanticRank  int                           `json:"semantic_rank"`
+	FinalRank     int                           `json:"final_rank"`
+	Lifecycle     lifecycle.View                `json:"lifecycle"`
+	Decision      LifecyclePresentationDecision `json:"decision"`
+	ReasonCodes   []LifecycleReasonCode         `json:"reason_codes"`
+}
+
+type RecallFactsResult struct {
+	Count         int                 `json:"count"`
+	LifecycleMode RecallLifecycleMode `json:"lifecycle_mode"`
+	AsOf          string              `json:"as_of,omitempty"`
+	Facts         []RecallFact        `json:"facts"`
+}
+
 func formatRelatedCandidate(candidate RelatedFactCandidate) string {
 	encoded, err := json.Marshal(candidate)
 	if err != nil {
@@ -761,6 +789,10 @@ func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	if err := validateCommonMetadata(args); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	lifecycleOptions, err := parseLifecycleRecallOptions(args)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	tags := tagsParam(args)
 	namespace := strParam(args, "namespace")
 	limit, err := intParam(args, "limit", 5)
@@ -771,50 +803,101 @@ func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError(validationError), nil
 	}
 
-	cacheKey := fmt.Sprintf("%s|%s|%v|%d|%s", query, namespace, tags, limit, lifecycleCacheScope)
-	if cached, ok := s.cache.Get(cacheKey); ok {
-		if err := s.countRecalls(ctx, cached); err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("record recall failed: %v", err)), nil
-		}
-		s.cache.Set(cacheKey, cached)
-		return mcp.NewToolResultText(formatFacts(cached)), nil
+	cacheKey := recallFactsCacheKey(query, namespace, tags, limit, lifecycleOptions)
+	cached, flight, err := s.cache.AcquireRecall(ctx, cacheKey, func(result *RecallFactsResult) error {
+		return s.countRecalls(ctx, result)
+	})
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("record recall failed: %v", err)), nil
 	}
+	if flight == nil {
+		return mcp.NewToolResultStructured(cached, formatRecallFactsResult(cached)), nil
+	}
+	defer s.cache.FinishRecall(cacheKey, flight, nil)
 
 	vec, err := s.embed.Embed(ctx, query)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("embedding failed: %v", err)), nil
 	}
 
-	results, err := s.qdrant.Search(ctx, vec, lifecycleCandidateLimit(limit), currentLifecycleFilters(s.buildFilters(tags, namespace)), nil)
+	results, err := s.qdrant.Search(ctx, vec, lifecycleCandidateLimit(limit), lifecycleRecallFilters(s.buildFilters(tags, namespace), lifecycleOptions.Mode), nil)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
 	}
 
-	var hits []map[string]interface{}
-	for _, lifecyclePoint := range currentSearchPoints(results) {
-		p := lifecyclePoint.point
-		hit := map[string]interface{}{
-			"_point_id":    p.ID,
-			"text":         p.Payload["text"],
-			"score":        p.Score,
-			"tags":         p.Payload["tags"],
-			"primary_tag":  p.Payload["primary_tag"],
-			"namespace":    p.Payload["namespace"],
-			"recall_count": p.Payload["recall_count"],
-		}
-		addLifecycleMetadata(hit, lifecyclePoint.view)
-		hits = append(hits, hit)
-
-		if len(hits) >= limit {
-			break
-		}
+	candidates := presentLifecycleRecallCandidates(results, lifecycleOptions, time.Now())
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
 	}
-
-	if err := s.countRecalls(ctx, hits); err != nil {
+	result := RecallFactsResult{
+		LifecycleMode: lifecycleOptions.normalizedMode(),
+		AsOf:          lifecycleOptions.AsOf,
+		Facts:         make([]RecallFact, 0, len(candidates)),
+	}
+	for _, candidate := range candidates {
+		point := candidate.point
+		result.Facts = append(result.Facts, RecallFact{
+			PointID:       point.ID,
+			Text:          stringFromPayload(point.Payload["text"]),
+			Namespace:     stringFromPayload(point.Payload["namespace"]),
+			Tags:          relatedCandidateTags(point.Payload["tags"]),
+			PrimaryTag:    stringFromPayload(point.Payload["primary_tag"]),
+			RecallCount:   payloadInt(point.Payload["recall_count"]),
+			SemanticScore: point.Score,
+			SemanticRank:  candidate.SemanticRank,
+			FinalRank:     candidate.FinalRank,
+			Lifecycle:     candidate.view,
+			Decision:      candidate.Decision,
+			ReasonCodes:   append([]LifecycleReasonCode{}, candidate.ReasonCodes...),
+		})
+	}
+	result.Count = len(result.Facts)
+	if err := s.countRecalls(ctx, &result); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("record recall failed: %v", err)), nil
 	}
-	s.cache.Set(cacheKey, hits)
-	return mcp.NewToolResultText(formatFacts(hits)), nil
+	s.cache.FinishRecall(cacheKey, flight, &result)
+	return mcp.NewToolResultStructured(result, formatRecallFactsResult(result)), nil
+}
+
+func recallFactsCacheKey(query, namespace string, tags []string, limit int, options LifecycleRecallOptions) string {
+	canonicalTags := append([]string{}, tags...)
+	sort.Strings(canonicalTags)
+	if len(canonicalTags) > 1 {
+		unique := canonicalTags[:1]
+		for _, tag := range canonicalTags[1:] {
+			if tag != unique[len(unique)-1] {
+				unique = append(unique, tag)
+			}
+		}
+		canonicalTags = unique
+	}
+	mode := options.normalizedMode()
+	asOf := ""
+	if mode == RecallLifecycleAsOf {
+		asOf = options.AsOf
+	}
+	identity := struct {
+		Version       string              `json:"version"`
+		Query         string              `json:"query"`
+		Namespace     string              `json:"namespace"`
+		Tags          []string            `json:"tags"`
+		Limit         int                 `json:"limit"`
+		LifecycleMode RecallLifecycleMode `json:"lifecycle_mode"`
+		AsOf          string              `json:"as_of"`
+	}{
+		Version:       lifecycleRecallCacheVersion,
+		Query:         query,
+		Namespace:     namespace,
+		Tags:          canonicalTags,
+		Limit:         limit,
+		LifecycleMode: mode,
+		AsOf:          asOf,
+	}
+	encoded, err := json.Marshal(identity)
+	if err != nil {
+		panic(fmt.Sprintf("encode recall cache identity: %v", err))
+	}
+	return string(encoded)
 }
 
 func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -1667,25 +1750,31 @@ func (s *Server) OperationalContextHandler() http.HandlerFunc {
 
 // --- Formatting helpers ---
 
-func formatFacts(hits []map[string]interface{}) string {
-	if len(hits) == 0 {
+func formatRecallFactsResult(result RecallFactsResult) string {
+	if len(result.Facts) == 0 {
 		return "No facts found."
 	}
-	var lines []string
-	for _, h := range hits {
-		text, _ := h["text"].(string)
-		ns, _ := h["namespace"].(string)
-		tagsList := formatTagsList(h["tags"])
-		primary := formatPrimaryTag(h["primary_tag"])
-		lifecycleSummary := lifecycleSummaryFromHit(h)
-
-		line := fmt.Sprintf("- [%.3f] %s%s ns:%s %s %s", h["score"], tagsList, primary, ns, lifecycleSummary, text)
-		if rc := payloadInt(h["recall_count"]); rc > 0 {
-			line = fmt.Sprintf("- [%.3f] %s%s ns:%s recalls:%d %s %s", h["score"], tagsList, primary, ns, rc, lifecycleSummary, text)
+	lines := make([]string, 0, len(result.Facts))
+	for _, fact := range result.Facts {
+		tagsList := formatTagsList(fact.Tags)
+		primary := formatPrimaryTag(fact.PrimaryTag)
+		lifecycleSummary := formatRecallLifecycleView(fact.Lifecycle)
+		line := fmt.Sprintf("- [%.3f] %s%s ns:%s %s %s", fact.SemanticScore, tagsList, primary, fact.Namespace, lifecycleSummary, fact.Text)
+		if fact.RecallCount > 0 {
+			line = fmt.Sprintf("- [%.3f] %s%s ns:%s recalls:%d %s %s", fact.SemanticScore, tagsList, primary, fact.Namespace, fact.RecallCount, lifecycleSummary, fact.Text)
 		}
 		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func formatRecallLifecycleView(view lifecycle.View) string {
+	// Relationships remain available in structured content. Their values are
+	// point IDs, which recall's backward-compatible human-readable fallback
+	// must not expose.
+	view.Supersedes = nil
+	view.SupersededBy = nil
+	return formatLifecycleView(view)
 }
 
 func formatTagsList(v interface{}) string {

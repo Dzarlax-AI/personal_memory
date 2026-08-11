@@ -96,9 +96,14 @@ Changing a lifecycle state does not automatically create, edit, or validate the 
 
 ## Read visibility
 
-| Read surface | Current | Historical | Superseded | Disputed | Invalid lifecycle | Expired |
+`recall_facts` accepts an optional `lifecycle_mode` with the closed values `current`, `history`, `as_of`, and `include_all`. Omitting the parameter is exactly equivalent to `current`, preserving existing client behavior. `as_of` is accepted only with `lifecycle_mode=as_of`, is required in that mode, and must be an exact, real `YYYY-MM-DD` calendar date. Supplying `as_of` in any other mode is an error.
+
+| Read surface or mode | Current | Historical | Superseded | Disputed | Invalid lifecycle | Expired at reference date |
 |---|---:|---:|---:|---:|---:|---:|
-| `recall_facts` | Yes | No | No | No | No | No |
+| `recall_facts`, `current` (default) | Include or demote | No | No | No | No | No |
+| `recall_facts`, `history` | Include | Include | Include | Uncertain | No | No |
+| `recall_facts`, `as_of` | Include | Include | Include | Uncertain | No | No |
+| `recall_facts`, `include_all` | Include | Include | Include | Uncertain | No | No |
 | Operational context tool and HTTP endpoint | Yes | No | No | No | No | No |
 | `find_related` | Yes | Yes | Yes | Yes | Yes, labeled invalid | No |
 | `list_facts` | Yes | Yes | Yes | Yes | Yes, labeled invalid | Yes |
@@ -106,7 +111,15 @@ Changing a lifecycle state does not automatically create, edit, or validate the 
 | `get_stats` | Yes | Yes | Yes | Yes | Counted separately | Counted separately |
 | Viz fact list, detail, graph, and duplicates | Yes | Yes | Yes | Yes | Yes, normalized invalid view | Yes |
 
-For `recall_facts` and operational context, “Yes” also requires valid lifecycle metadata. Legacy facts qualify as current. Canonical current facts rank ahead of ordinary current facts without altering vector similarity scores. `find_related` is an inspection-oriented semantic surface: it keeps all lifecycle states, ranks lifecycle authority tiers, and exposes normalized lifecycle metadata in its output.
+All `recall_facts` modes exclude malformed lifecycle metadata and facts expired at the applicable reference date. Legacy facts qualify as valid current facts. The `current`, `history`, and `include_all` modes use the current UTC date as their expiry reference. The `as_of` mode uses its supplied date instead: a fact is valid through its `valid_until` date and is excluded only when `as_of` is later. `as_of` does not reconstruct historical intervals, infer a fact's state on that date, or use lifecycle transition history; it changes only the expiry reference.
+
+The broad modes (`history`, `as_of`, and `include_all`) expose all valid, non-expired lifecycle states. Current, historical, and superseded facts have the `include` decision with the safe reason codes `current_context`, `historical_context`, and `superseded_context` respectively. A disputed fact is always visibly uncertain: its decision is `uncertain` with reason code `disputed`. In default `current` mode, current facts are included with `current_truth`; when at least one canonical current candidate is present, ordinary and legacy-current candidates are demoted with `canonical_preference`.
+
+The structured `recall_facts` response exposes each fact's unchanged `semantic_score`, original `semantic_rank`, lifecycle-adjusted `final_rank`, normalized `lifecycle` view, presentation `decision`, and closed, privacy-safe `reason_codes`. `point_id` is available only in structured content; the backward-compatible text fallback omits point IDs and lifecycle relationship IDs. Lifecycle ranking operates on a bounded semantic candidate pool (at least 20 candidates, normally four times the requested limit, capped by the service search limit multiplier), then returns the requested limit. Canonical preference can therefore reorder only candidates already in that pool; it cannot retrieve an otherwise absent canonical fact, and it never changes vector similarity scores.
+
+Cache entries are isolated by lifecycle mode and by the `as_of` date when applicable. Omitting `lifecycle_mode` shares the exact cache identity of explicit `current`; dates from one `as_of` request cannot satisfy another mode or date.
+
+`find_related` is an inspection-oriented semantic surface: it keeps all lifecycle states, ranks lifecycle authority tiers, and exposes normalized lifecycle metadata in its output.
 
 Viz does not filter nodes by lifecycle state. Its privacy-safe summaries include the normalized lifecycle block; selected detail responses additionally retain the raw payload unchanged.
 

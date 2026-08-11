@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Dzarlax-AI/personal-memory/internal/memory/lifecycle"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 )
 
@@ -42,10 +43,29 @@ func newRecallCounterTestServer(t *testing.T, initial int) (*Server, func() int)
 	t.Cleanup(qs.Close)
 
 	cache := NewCache(time.Minute)
-	cache.Set("query||[]|1|"+lifecycleCacheScope, []map[string]interface{}{{
-		"_point_id": "fact-id", "text": "cached fact", "score": 0.99,
-		"namespace": "personal", "recall_count": float64(initial),
-	}})
+	cache.SetRecall(recallFactsCacheKey("query", "", nil, 1, LifecycleRecallOptions{Mode: RecallLifecycleCurrent}), RecallFactsResult{
+		Count:         1,
+		LifecycleMode: RecallLifecycleCurrent,
+		Facts: []RecallFact{{
+			PointID:       "fact-id",
+			Text:          "cached fact",
+			Namespace:     "personal",
+			Tags:          []string{},
+			RecallCount:   initial,
+			SemanticScore: 0.99,
+			SemanticRank:  1,
+			FinalRank:     1,
+			Lifecycle: lifecycle.View{
+				State:        lifecycle.Current,
+				Legacy:       true,
+				Supersedes:   []string{},
+				SupersededBy: []string{},
+				Valid:        true,
+			},
+			Decision:    LifecycleDecisionInclude,
+			ReasonCodes: []LifecycleReasonCode{LifecycleReasonCurrentTruth},
+		}},
+	})
 	srv := &Server{qdrant: qdrant.NewClient(qs.URL, "memory"), cache: cache}
 	srv.Start(context.Background())
 	t.Cleanup(func() {
@@ -124,6 +144,95 @@ func TestRecallFactsCacheHitIncrementsWithoutLeakingPointID(t *testing.T) {
 	}
 	if got := count(); got != 5 {
 		t.Fatalf("recall_count = %d, want 5", got)
+	}
+}
+
+func TestCountRecallsBatchAdmissionFailureHasNoPartialEffect(t *testing.T) {
+	queue := make(chan []string, 1)
+	counter := &recallCounter{
+		queue:     queue,
+		stopCh:    make(chan struct{}),
+		accepting: false,
+	}
+	srv := &Server{recallCounter: counter}
+	result := RecallFactsResult{Facts: []RecallFact{
+		{PointID: "first", RecallCount: 3},
+		{PointID: "second", RecallCount: 7},
+	}}
+	if err := srv.countRecalls(context.Background(), &result); err == nil || !strings.Contains(err.Error(), "stopping") {
+		t.Fatalf("expected stopped batch admission, got %v", err)
+	}
+	if result.Facts[0].RecallCount != 3 || result.Facts[1].RecallCount != 7 {
+		t.Fatalf("failed batch changed visible counts: %#v", result.Facts)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("failed batch partially entered queue: len=%d", len(queue))
+	}
+}
+
+func TestRecallCounterEnqueueBatchCopiesIDs(t *testing.T) {
+	queue := make(chan []string, 1)
+	counter := &recallCounter{queue: queue, stopCh: make(chan struct{}), accepting: true}
+	ids := []string{"first", "second"}
+	if err := counter.enqueueBatch(context.Background(), ids); err != nil {
+		t.Fatal(err)
+	}
+	ids[0] = "mutated"
+	batch := <-queue
+	if batch[0] != "first" || batch[1] != "second" {
+		t.Fatalf("queued batch aliases caller IDs: %v", batch)
+	}
+}
+
+func TestRecallFactsConcurrentCacheHitsReturnUniqueMonotonicCounts(t *testing.T) {
+	const (
+		initial = 10
+		calls   = 64
+	)
+	srv, _ := newRecallCounterTestServer(t, initial)
+	start := make(chan struct{})
+	counts := make(chan int, calls)
+	errs := make(chan error, calls)
+	var wg sync.WaitGroup
+	for range calls {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			result, err := srv.recallFacts(context.Background(), toolRequest(map[string]interface{}{
+				"query": "query", "limit": float64(1),
+			}))
+			if err != nil || result.IsError {
+				errs <- fmt.Errorf("recall failed: result=%#v err=%v", result, err)
+				return
+			}
+			structured := result.StructuredContent.(RecallFactsResult)
+			counts <- structured.Facts[0].RecallCount
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	close(counts)
+	seen := make(map[int]bool, calls)
+	for count := range counts {
+		if seen[count] {
+			t.Fatalf("duplicate visible recall_count %d", count)
+		}
+		seen[count] = true
+	}
+	for want := initial + 1; want <= initial+calls; want++ {
+		if !seen[want] {
+			t.Fatalf("missing visible recall_count %d; got %v", want, seen)
+		}
+	}
+	key := recallFactsCacheKey("query", "", nil, 1, LifecycleRecallOptions{Mode: RecallLifecycleCurrent})
+	cached, ok := srv.cache.GetRecall(key)
+	if !ok || cached.Facts[0].RecallCount != initial+calls {
+		t.Fatalf("cached visible count = %#v ok=%v, want %d", cached, ok, initial+calls)
 	}
 }
 
