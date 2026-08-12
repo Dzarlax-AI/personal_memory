@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "bundle_version": "0.1.0",
+  "contract_version": "1.0.0",
+  "conformance_suite_version": "1.1.0",
+  "source_identity": {
+    "contract_sha256": "b425bb25ea0ecaa85ddaafacb9e5af9970d11a985a482b8d8fabcc612fa69668",
+    "conformance_suite_sha256": "bd10ce7d22054210ad6798b3a75f48379ccb8063a52d620677b67b36509fcd1f"
+  },
+  "required_capabilities": [
+    {"id": "ordinary_context", "tools": []}
+  ],
+  "optional_capabilities": [
+    {"id": "memory", "tools": ["recall_facts", "store_fact", "update_fact", "set_fact_lifecycle"]},
+    {"id": "documents", "tools": ["search_documents"]},
+    {"id": "todoist", "tools": ["get_tasks", "create_task", "update_task", "complete_task", "delete_task"]}
+  ],
+  "clients": [
+    {
+      "id": "codex",
+      "artifact_format_version": "1.0.0",
+      "artifacts": [
+        {"path": "codex/AGENTS.personal-memory.md", "template": "templates/codex-agents.md.tmpl"},
+        {"path": "codex/skills/personal-memory/SKILL.md", "template": "templates/codex-skill.md.tmpl"}
+      ],
+      "override_paths": ["overrides/codex/AGENTS.local.md"]
+    },
+    {
+      "id": "claude",
+      "artifact_format_version": "1.0.0",
+      "artifacts": [
+        {"path": "claude/rules/personal-memory.md", "template": "templates/claude-rules.md.tmpl"},
+        {"path": "claude/skills/personal-memory/SKILL.md", "template": "templates/claude-skill.md.tmpl"},
+        {"path": "claude/settings.personal-memory.json", "template": "templates/claude-settings.json.tmpl"}
+      ],
+      "override_paths": ["overrides/claude/personal-memory.local.md"]
+    },
+    {
+      "id": "chatgpt",
+      "artifact_format_version": "1.0.0",
+      "artifacts": [
+        {"path": "chatgpt/behavior-prompt.md", "template": "templates/chatgpt-prompt.md.tmpl"},
+        {"path": "chatgpt/remote-mcp-registration.json", "template": "templates/chatgpt-registration.json.tmpl"}
+      ],
+      "override_paths": ["overrides/chatgpt/behavior.local.md"]
+    },
+    {
+      "id": "generic_mcp",
+      "artifact_format_version": "1.0.0",
+      "artifacts": [
+        {"path": "generic-mcp/policy.json", "template": "templates/generic-policy.json.tmpl"},
+        {"path": "generic-mcp/tool-mapping.json", "template": "templates/generic-tools.json.tmpl"}
+      ],
+      "override_paths": ["overrides/generic-mcp/policy.local.json"]
+    }
+  ],
+  "source_assets": [
+    {"path": "policy.json", "sha256": "59444344db909c2871c45a0d101dd40ab83af9b2bb930ed15b1584b439ceff0f"},
+    {"path": "templates/chatgpt-prompt.md.tmpl", "sha256": "6e100bf02d625ce8f8242b9a4a040e7d4696cb9a22f2b1c85be4f4c2b7b9fe71"},
+    {"path": "templates/chatgpt-registration.json.tmpl", "sha256": "39e9ee08afc2748acbb1b79fbbb23a9eee4b36595c602db232640244d838fbcc"},
+    {"path": "templates/claude-rules.md.tmpl", "sha256": "5e7c12b19f8f9bbd3948c529e4816624f3af7bdbe4689ae2d7979c814e9c69b5"},
+    {"path": "templates/claude-settings.json.tmpl", "sha256": "7b2863b7619e45fe5847fe25961c85410398534c44aadc98c0f5fb7b950174a9"},
+    {"path": "templates/claude-skill.md.tmpl", "sha256": "115765dc6ccf0162fba559063eead0d5e3c5285d9993bf85229da762511c6116"},
+    {"path": "templates/codex-agents.md.tmpl", "sha256": "0fe35dc5567c53ea76ac6ad460d862a01fd7bd8ed4a42a19f81ad810c8ec6db0"},
+    {"path": "templates/codex-skill.md.tmpl", "sha256": "14fc21b25087fe3e8434f5293f423e90d0b7f85e7323d3f474a5895ea2b6b5d1"},
+    {"path": "templates/generic-policy.json.tmpl", "sha256": "33dfc03ec540bcb98a078f9153ef1be77cd1d48bfe44526235842319307587ba"},
+    {"path": "templates/generic-tools.json.tmpl", "sha256": "bc03993dd738eee78af1a4ac4aba9dbea38d8c3fff371223dbd2439a282b82f5"}
+  ]
+}

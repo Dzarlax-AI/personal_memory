@@ -45,6 +45,7 @@ Collection name is now a `qdrant.Client` field, not a constant — one client pe
 cmd/
   server/main.go           — entrypoint, Chi router, graceful shutdown
   indexer/main.go          — standalone RAG indexer binary (cron-friendly)
+  memory-integration/      — versioned client bundle install/update/verify/rollback/render and artifact-conformance adapter
   eval-memory/main.go      — schema-v3 retrieval runner, comparison gate, and TEI materializer
   migrate-memory-lifecycle/ — dry-run/apply/rollback lifecycle migration
 internal/
@@ -73,6 +74,7 @@ internal/
     similarity.go          — cosine similarity
     static/                — embedded dashboard: shell.html + views/*.html + assets/{styles.css, js/*.js}
   backup/loop.go           — snapshot + prune goroutine
+integrationbundle/         — embedded manifest/policy/templates, validated rendering, discovery, transactional client installation
 ```
 
 ## MCP Tools
@@ -252,6 +254,15 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - Single `StreamableHTTPServer` per MCP server (memory, todoist)
 
 ## Build & Deploy
+
+### Client integration bundle
+
+- `cmd/memory-integration` manages bundle `0.1.0` for Codex, Claude, ChatGPT, and generic MCP targets; client configuration roots are explicit and never inferred.
+- Codex activation merges a managed block into target-root `AGENTS.md` and installs a skill. Claude activation installs rules/skill and merges only its owned hook into `settings.json`. ChatGPT always requires an official UI/admin step.
+- `integrationbundle` mutations are supported only on Darwin and Linux, use no-follow root-relative writes, locking, verified state, bounded backups, and compare-before-restore recovery. User override files are never overwritten.
+- `conformance-adapter` emits normalized bundle-policy/artifact traces only from canonical enum-only policy recipes, never from suite assertions. Recipes are identity-bound and authorized by referenced rules; selected rendered artifacts must decode to the matching canonical policy/config. It never reads real prompts, tools, credentials, endpoints, or client state, and its reports are not live proprietary-client evidence.
+- `make integration-bundle-public` builds the adapter and runs all 32 public scenarios for all four client families without Qdrant, TEI, model downloads, or credentials. Generated output belongs in ignored `integration-results/`.
+- Public usage and evidence semantics are documented in `docs/integration-bundle.md`.
 
 ### Local build
 ```bash
