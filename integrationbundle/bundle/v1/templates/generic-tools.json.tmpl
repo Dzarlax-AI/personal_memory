@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "bundle_version": "{{.BundleVersion}}",
+  "contract_version": "{{.ContractVersion}}",
+  "capabilities": {
+    "memory": {"state": "{{.Memory}}", "tools": {{.MemoryToolsJSON}}},
+    "documents": {"state": "{{.Documents}}", "tools": {{.DocumentsToolsJSON}}},
+    "todoist": {"state": "{{.Todoist}}", "tools": {{.TodoistToolsJSON}}}
+  },
+  "task_fallback": "manual_task_text_only; task remains uncreated and must not be stored as a fact"
+}

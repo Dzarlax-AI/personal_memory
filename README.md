@@ -166,6 +166,32 @@ Any filesystem synchronization mechanism can populate the host directory. The in
 
 Personal Memory uses the Streamable HTTP transport.
 
+### Install the client behavior bundle
+
+The versioned integration bundle installs the contract-backed usage policy for Codex and Claude Code, exports manual setup artifacts for ChatGPT, and renders a portable policy for generic MCP hosts. It changes client configuration only; it does not configure the server or store credentials.
+
+```bash
+go build -o ./memory-integration ./cmd/memory-integration
+
+./memory-integration install \
+  --client codex \
+  --target-root "$HOME/.codex" \
+  --capability memory=disabled \
+  --capability documents=disabled \
+  --capability todoist=disabled
+
+./memory-integration verify \
+  --client codex \
+  --target-root "$HOME/.codex" \
+  --capability memory=disabled \
+  --capability documents=disabled \
+  --capability todoist=disabled
+```
+
+Available capabilities require explicit tool-discovery input. ChatGPT returns `manual_action_required` because the official UI or an administrator must apply the exported configuration. See the [versioned client integration bundle guide](docs/integration-bundle.md) for target-root semantics, discovery, update, rollback, render-only exports, privacy, and conformance evidence.
+
+Hermes Agent and OpenClaw can also connect directly to the `/memory` Streamable HTTP endpoint. They currently use the `generic_mcp` bundle output rather than a native installer target: connect the MCP server, verify the discovered tools, and load the generated policy through Hermes project context or the OpenClaw agent workspace. See the [Hermes Agent and OpenClaw setup](docs/integration-bundle.md#hermes-agent-and-openclaw) for exact examples and current limitations.
+
 | Endpoint | URL | Authentication |
 |---|---|---|
 | Memory and RAG | `https://mcp.example.com/memory` | `X-API-Key` or Bearer API key; OAuth bearer tokens when enabled |

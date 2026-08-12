@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"Apply Personal Memory bundle {{.BundleVersion}} contract {{.ContractVersion}} managed policy. Reminder only; never auto-store facts or tasks.\"}}'"
+          }
+        ]
+      }
+    ]
+  }
+}

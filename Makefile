@@ -1,4 +1,4 @@
-.PHONY: help dev-deps verify-assets build test vet eval-public eval-public-v4 conformance-public tidy clean
+.PHONY: help dev-deps verify-assets build test vet eval-public eval-public-v4 conformance-public integration-bundle-public tidy clean
 
 DS_VERSION ?= v1.4.0
 DS_DIR := internal/viz/static/assets/vendor
@@ -10,11 +10,12 @@ UNPKG_BASE := https://unpkg.com
 help:
 	@echo "Targets:"
 	@echo "  make dev-deps  — fetch browser bundles into $(DS_DIR)"
-	@echo "  make build     — build all five binaries (runs dev-deps first)"
+	@echo "  make build     — build all seven binaries (runs dev-deps first)"
 	@echo "  make test      — verify assets + vet + test + build all binaries"
 	@echo "  make eval-public — run the public retrieval dataset against Qdrant"
 	@echo "  make eval-public-v4 — replay public document-routing evidence"
 	@echo "  make conformance-public — run the public model-memory conformance suite"
+	@echo "  make integration-bundle-public — validate bundle artifacts against the public suite"
 	@echo "  make clean     — remove built binaries and the vendored browser bundles"
 
 dev-deps:
@@ -38,14 +39,14 @@ verify-assets:
 	fi
 
 build: dev-deps
-	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory ./cmd/conformance-memory
+	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory ./cmd/conformance-memory ./cmd/memory-integration
 
 vet:
 	go vet ./...
 
 test: dev-deps vet
 	go test ./...
-	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory ./cmd/conformance-memory
+	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory ./cmd/conformance-memory ./cmd/memory-integration
 
 QDRANT_TEST_URL ?= http://127.0.0.1:6333
 # eval-memory compare uses this distinct status for an expected gate rejection;
@@ -119,8 +120,28 @@ conformance-public:
 		--json conformance-results/public.json \
 		--markdown conformance-results/public.md
 
+integration-bundle-public:
+	mkdir -p integration-results
+	rm -f integration-results/*.json integration-results/*.md integration-results/memory-integration
+	go build -o integration-results/memory-integration ./cmd/memory-integration
+	@set -e; for client in codex claude chatgpt generic_mcp; do \
+		go run ./cmd/conformance-memory run \
+			--source live \
+			--suite conformancedata/public/v1/scenarios.json \
+			--contract docs/model-usage-contract.md \
+			--client-family "$$client" \
+			--adapter-exec "$(CURDIR)/integration-results/memory-integration" \
+			--adapter-arg conformance-adapter \
+			--adapter-arg=--contract-source \
+			--adapter-arg "$(CURDIR)/docs/model-usage-contract.md" \
+			--adapter-arg=--suite-source \
+			--adapter-arg "$(CURDIR)/conformancedata/public/v1/scenarios.json" \
+			--json "integration-results/$$client.json" \
+			--markdown "integration-results/$$client.md"; \
+	done
+
 tidy:
 	go mod tidy
 
 clean:
-	rm -rf $(DS_DIR) conformance-results /tmp/personal-memory /tmp/personal-memory-indexer /tmp/personal-memory-migrate-ids
+	rm -rf $(DS_DIR) conformance-results integration-results /tmp/personal-memory /tmp/personal-memory-indexer /tmp/personal-memory-migrate-ids

@@ -13,7 +13,12 @@ on:
       - "Makefile"
       - "evaldata/public/**"
       - "conformancedata/public/**"
+      - "integrationbundle/**"
       - "docs/model-usage-contract.md"
+      - "docs/integration-bundle.md"
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
       - "internal/viz/static/**"
       - ".github/workflows/docker.yml"
   pull_request:
@@ -25,7 +30,12 @@ on:
       - "Makefile"
       - "evaldata/public/**"
       - "conformancedata/public/**"
+      - "integrationbundle/**"
       - "docs/model-usage-contract.md"
+      - "docs/integration-bundle.md"
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
       - "internal/viz/static/**"
       - ".github/workflows/docker.yml"
 
@@ -167,6 +177,20 @@ jobs:
 
       - name: Run public model memory conformance
         run: make conformance-public
+
+      - name: Run public integration bundle conformance
+        run: make integration-bundle-public
+
+      - name: Upload integration bundle conformance reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: integration-bundle-conformance
+          path: |
+            integration-results/*.json
+            integration-results/*.md
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Publish model memory conformance summary
         if: always()

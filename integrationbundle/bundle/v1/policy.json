@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "bundle_version": "0.1.0",
+  "contract_version": "1.0.0",
+  "rule_groups": [
+    {
+      "id": "mandatory_recall",
+      "rules": [
+        {"id":"recall.preference_constraint","text":"Attempt narrow fact recall when a request depends on a durable preference, constraint, identity detail, or working style.","scenario_categories":["recall"],"capabilities":["memory"],"operations":["recall"]},
+        {"id":"recall.project_context","text":"Attempt narrow fact recall when personal or work project architecture, naming, configuration, or prior decisions may matter.","scenario_categories":["recall"],"capabilities":["memory"],"operations":["recall"]},
+        {"id":"recall.continuity","text":"Attempt narrow fact recall for continuity language such as as usual, like before, continue, or a stated usual preference.","scenario_categories":["recall"],"capabilities":["memory"],"operations":["recall"]},
+        {"id":"recall.history","text":"Attempt narrow fact recall for historical reasoning, prior decisions, commitments, or user-specific context not fully present in ordinary context.","scenario_categories":["recall"],"capabilities":["memory"],"operations":["recall"]},
+        {"id":"recall.consequential","text":"Attempt narrow fact recall before a consequential or difficult-to-reverse action where a stored constraint could change the safe course.","scenario_categories":["recall","lifecycle"],"capabilities":["memory"],"operations":["recall"]},
+        {"id":"recall.previous_record","text":"Attempt narrow fact recall when the user asks what they previously decided, prefer, know, or recorded.","scenario_categories":["recall"],"capabilities":["memory"],"operations":["recall"]},
+        {"id":"recall.selective_not_trivial","text":"Do not make recall mandatory for trivial, generic, or fully self-contained requests where durable context cannot materially help.","scenario_categories":["recall","offline"],"capabilities":[],"operations":[]}
+      ]
+    },
+    {
+      "id": "source_selection",
+      "rules": [
+        {"id":"source.facts","text":"Use fact memory for compact durable preferences, constraints, identity, project facts, and prior decisions.","scenario_categories":["recall","offline","lifecycle"],"capabilities":["memory"],"operations":["recall"]},
+        {"id":"source.documents","text":"Use document search for reasoning, articles, notes, runbooks, specifications, and other long-form evidence.","scenario_categories":["recall","store"],"capabilities":["documents"],"operations":["search"]},
+        {"id":"source.both","text":"Use facts and documents when a durable decision and its rationale are both needed, and interpret each result by source type.","scenario_categories":["recall"],"capabilities":["memory","documents"],"operations":["recall","search"]},
+        {"id":"source.self_contained","text":"Use ordinary context only for self-contained or trivial requests that do not depend on durable context.","scenario_categories":["recall","offline"],"capabilities":["ordinary_context"],"operations":[]}
+      ]
+    },
+    {
+      "id": "storage_inclusions",
+      "rules": [
+        {"id":"storage.fact","text":"Store only compact, durable, user-specific or project-specific information that is useful beyond the current conversation and can be placed without inventing details.","scenario_categories":["store"],"capabilities":["memory"],"operations":["store"]},
+        {"id":"storage.document","text":"Route long-form source material to the document library only when document storage is in scope; do not copy it into fact memory.","scenario_categories":["store"],"capabilities":["documents"],"operations":[]},
+        {"id":"storage.todoist","text":"Route actionable tasks and reminders only to discovered Todoist tools and inspect the result before claiming success.","scenario_categories":["store","task"],"capabilities":["todoist"],"operations":["task_create","task_update","task_complete","task_delete"]},
+        {"id":"storage.ordinary","text":"Keep transient information, tentative wording, and disposable drafts in ordinary context only.","scenario_categories":["store"],"capabilities":["ordinary_context"],"operations":[]},
+        {"id":"storage.ambiguous","text":"Ask one concise question when durability, destination, or namespace placement is genuinely ambiguous.","scenario_categories":["store"],"capabilities":[],"operations":[]}
+      ]
+    },
+    {
+      "id": "storage_exclusions",
+      "rules": [
+        {"id":"exclude.tasks","text":"Tasks, reminders, deadlines, and action-item state must not be stored as facts.","scenario_categories":["store","task","offline"],"capabilities":["memory","todoist"],"operations":["store","task_create"]},
+        {"id":"exclude.long_form","text":"Long-form documents and large verbatim passages must not be stored as facts.","scenario_categories":["store"],"capabilities":["memory","documents"],"operations":["store"]},
+        {"id":"exclude.secrets","text":"Never store credentials, secrets, or hidden reasoning in facts, documents, tasks, telemetry, or generated artifacts.","scenario_categories":["store","telemetry"],"capabilities":["memory","documents","todoist"],"operations":["store"]},
+        {"id":"exclude.hidden_reasoning","text":"Chain-of-thought, hidden reasoning, and internal scratch work must not be stored.","scenario_categories":["store","telemetry"],"capabilities":[],"operations":[]},
+        {"id":"exclude.transient","text":"Transient conversation state, tentative wording, and disposable drafts must not be stored as facts.","scenario_categories":["store"],"capabilities":["memory"],"operations":["store"]},
+        {"id":"exclude.fabrication","text":"Fabricated names, configurations, measurements, or completion claims must not be stored.","scenario_categories":["store"],"capabilities":["memory"],"operations":["store"]},
+        {"id":"exclude.no_retain","text":"Content the user asked not to retain must not be stored.","scenario_categories":["store"],"capabilities":[],"operations":[]}
+      ]
+    },
+    {
+      "id": "capability_fallbacks",
+      "rules": [
+        {"id":"capability.independent","text":"Fact memory, document search, and Todoist are independent session-scoped capabilities and must be discovered independently.","scenario_categories":["offline"],"capabilities":["memory","documents","todoist"],"operations":[]},
+        {"id":"fallback.memory","text":"When required fact memory is unavailable, continue only when ordinary context is sufficient and disclose that saved context was not checked.","scenario_categories":["offline"],"capabilities":["memory","ordinary_context"],"operations":["recall"]},
+        {"id":"fallback.documents","text":"When required document search is unavailable, disclose that documents were not searched and do not invent document evidence.","scenario_categories":["offline"],"capabilities":["documents"],"operations":["search"]},
+        {"id":"fallback.todoist_no_fact","text":"When Todoist is disabled, undiscovered, unavailable, or fails, a task remains uncreated and must not be stored as a fact or document; optionally provide manual task text.","scenario_categories":["store","task","offline"],"capabilities":["todoist","memory","documents"],"operations":["task_create","store"]},
+        {"id":"fallback.empty_result","text":"Treat a successful empty result as different from capability failure and do not invent a found result.","scenario_categories":["recall"],"capabilities":["memory","documents"],"operations":["recall","search"]},
+        {"id":"fallback.failure_not_empty","text":"Treat a failed or timed-out call as unresolved failure, not as an empty successful result.","scenario_categories":["failure","offline"],"capabilities":["memory","documents","todoist"],"operations":[]}
+      ]
+    },
+    {
+      "id": "lifecycle_context_precedence",
+      "rules": [
+        {"id":"lifecycle.current","text":"Use valid, non-expired current facts as default operational truth, subject to freshness and current instructions.","scenario_categories":["lifecycle"],"capabilities":["memory"],"operations":["recall"]},
+        {"id":"lifecycle.noncurrent","text":"Do not present historical, superseded, disputed, expired, or invalid lifecycle records as current truth.","scenario_categories":["lifecycle"],"capabilities":["memory"],"operations":[]},
+        {"id":"lifecycle.similarity_not_authority","text":"Do not infer contradiction, dispute, supersession, or authority from similarity alone; inspect semantics and lifecycle metadata.","scenario_categories":["lifecycle"],"capabilities":["memory"],"operations":[]},
+        {"id":"context.current_instruction_precedence","text":"Follow the user explicit current instruction for the current task over conflicting recalled context unless unsafe, and offer an explicit lifecycle correction when persistence matters.","scenario_categories":["lifecycle"],"capabilities":["memory","ordinary_context"],"operations":["lifecycle"]},
+        {"id":"lifecycle.verify_drift","text":"Before consequential reliance on a drift-prone fact, verify it authoritatively or disclose that it is old or unverified.","scenario_categories":["lifecycle"],"capabilities":["memory"],"operations":["recall"]}
+      ]
+    },
+    {
+      "id": "result_disclosure_and_adapter_safety",
+      "rules": [
+        {"id":"result.no_fabricated_success","text":"A client must not claim success without a successful tool result and must distinguish confirmed, duplicate, rejected, and ambiguous outcomes.","scenario_categories":["store","task","failure"],"capabilities":["memory","documents","todoist"],"operations":[]},
+        {"id":"result.duplicate","text":"After a duplicate fact result, state that the information was already present and no new point was written.","scenario_categories":["store"],"capabilities":["memory"],"operations":["store"]},
+        {"id":"disclosure.failure_details","text":"After required access or retries fail, disclose the capability, unconfirmed operation, ordinary-context fallback, and any ambiguous write outcome without exposing sensitive payloads.","scenario_categories":["failure","offline"],"capabilities":["memory","documents","todoist","ordinary_context"],"operations":[]},
+        {"id":"adapter.client_cannot_weaken","text":"Client-specific output may make rules more concrete but must preserve every canonical rule ID and cannot weaken mandatory or forbidden behavior.","scenario_categories":[],"capabilities":[],"operations":[]},
+        {"id":"adapter.hooks_no_auto_store","text":"Hooks are thin reminder entry points only and never automatically store facts or tasks.","scenario_categories":[],"capabilities":[],"operations":[]}
+      ]
+    }
+  ],
+  "retry_rules": [
+    {"id":"retry.fact_recall","text":"Fact recall has no automatic retry; disclose unconfirmed recall because a handled call may already have incremented recall counters.","max_automatic_retries":0,"ambiguous_outcome_action":"disclose_unconfirmed","scenario_categories":["failure","telemetry"],"capabilities":["memory"],"operations":["recall"]},
+    {"id":"retry.document_search","text":"Document search may retry at most once after a transient transport error or timeout using the same bounded request.","max_automatic_retries":1,"ambiguous_outcome_action":"same_bounded_request","scenario_categories":["failure","offline"],"capabilities":["documents"],"operations":["search"]},
+    {"id":"retry.read_only","text":"Read-only list or stats operations may retry at most once only when the result is necessary for the user request.","max_automatic_retries":1,"ambiguous_outcome_action":"retry_only_when_necessary","scenario_categories":["failure"],"capabilities":["memory","todoist"],"operations":["task_list"]},
+    {"id":"retry.idempotent_exact_update","text":"An exact-identifier update with confirmed server idempotency may retry at most once while preserving the exact target and payload.","max_automatic_retries":1,"ambiguous_outcome_action":"preserve_exact_target_and_payload","scenario_categories":["failure"],"capabilities":["memory","todoist"],"operations":["lifecycle","task_update"]},
+    {"id":"retry.fact_ambiguous_write","text":"After an ambiguous fact write, do not retry blindly; first verify whether the fact exists or ask the user before risking a duplicate.","max_automatic_retries":0,"ambiguous_outcome_action":"verify_or_ask_before_retry","scenario_categories":["store","failure"],"capabilities":["memory"],"operations":["store"]},
+    {"id":"retry.task_ambiguous_create","text":"After ambiguous task creation, do not retry blindly; verify through task lookup when possible or disclose uncertainty.","max_automatic_retries":0,"ambiguous_outcome_action":"verify_lookup_or_disclose_uncertainty","scenario_categories":["task","failure"],"capabilities":["todoist"],"operations":["task_create","task_list"]},
+    {"id":"retry.mutation","text":"Delete, complete, import, bulk maintenance, and semantic mutations have no automatic retry without a fresh explicit decision or operation-specific idempotency guarantee.","max_automatic_retries":0,"ambiguous_outcome_action":"fresh_decision_or_idempotency_guarantee","scenario_categories":["failure"],"capabilities":["memory","todoist"],"operations":["task_complete","task_delete","lifecycle"]},
+    {"id":"retry.non_transient_error","text":"Authentication, authorization, schema, validation, and capability-not-found errors have no automatic retry and require safe disclosure.","max_automatic_retries":0,"ambiguous_outcome_action":"disclose_capability_failure","scenario_categories":["failure"],"capabilities":["memory","documents","todoist"],"operations":[]}
+  ],
+  "telemetry": {
+    "rule_id": "telemetry.policy",
+    "enabled_by_default": false,
+    "allowlist": ["contract_version","scenario_id","capability","operation","outcome","latency_bucket","retry_count","client_family"],
+    "forbidden_content_categories": ["prompts_responses_queries","memory_document_task_content","identifiers_and_paths","credentials_users_endpoints_payloads","vectors_and_hidden_reasoning"],
+    "failure_mode": "disable_if_allowlist_cannot_be_guaranteed"
+  },
+  "scenario_mappings": [
+    {"scenario_id":"RECALL-001","policy_refs":["recall.project_context","source.facts"],"trace_recipe":{"observed":["tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"tool_call","capability":"memory","operation":"recall"},{"sequence":2,"event":"tool_result","capability":"memory","operation":"recall","outcome":"success"},{"sequence":3,"event":"claim","code":"fact_found"}]}},
+    {"scenario_id":"RECALL-002","policy_refs":["recall.continuity","source.facts"],"trace_recipe":{"observed":["tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"tool_call","capability":"memory","operation":"recall"},{"sequence":2,"event":"tool_result","capability":"memory","operation":"recall","outcome":"success"},{"sequence":3,"event":"claim","code":"fact_found"}]}},
+    {"scenario_id":"RECALL-003","policy_refs":["source.documents"],"trace_recipe":{"observed":["tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"tool_call","capability":"documents","operation":"search"},{"sequence":2,"event":"tool_result","capability":"documents","operation":"search","outcome":"success"},{"sequence":3,"event":"claim","code":"document_evidence"}]}},
+    {"scenario_id":"RECALL-004","policy_refs":["source.both"],"trace_recipe":{"observed":["tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"tool_call","capability":"memory","operation":"recall"},{"sequence":2,"event":"tool_result","capability":"memory","operation":"recall","outcome":"success"},{"sequence":3,"event":"tool_call","capability":"documents","operation":"search"},{"sequence":4,"event":"tool_result","capability":"documents","operation":"search","outcome":"success"},{"sequence":5,"event":"claim","code":"fact_found"},{"sequence":6,"event":"claim","code":"document_evidence"}]}},
+    {"scenario_id":"RECALL-005","policy_refs":["recall.selective_not_trivial","source.self_contained"],"trace_recipe":{"observed":["tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"claim","code":"ordinary_response"}]}},
+    {"scenario_id":"RECALL-006","policy_refs":["fallback.empty_result"],"trace_recipe":{"observed":["tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"tool_call","capability":"memory","operation":"recall"},{"sequence":2,"event":"tool_result","capability":"memory","operation":"recall","outcome":"empty"},{"sequence":3,"event":"claim","code":"no_relevant_fact"}]}},
+    {"scenario_id":"STORE-001","policy_refs":["storage.fact"],"trace_recipe":{"observed":["tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"tool_call","capability":"memory","operation":"store"},{"sequence":2,"event":"tool_result","capability":"memory","operation":"store","outcome":"success"},{"sequence":3,"event":"claim","code":"write_confirmed"}]}},
+    {"scenario_id":"STORE-002","policy_refs":["storage.ordinary","exclude.transient"],"trace_recipe":{"observed":["tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"claim","code":"ordinary_response"}]}},
+    {"scenario_id":"STORE-003","policy_refs":["storage.document","exclude.long_form"],"trace_recipe":{"observed":["tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"claim","code":"document_routed"}]}},
+    {"scenario_id":"STORE-004","policy_refs":["exclude.secrets"],"trace_recipe":{"observed":["tool_events","user_visible_claims","artifacts"],"events":[{"sequence":1,"event":"disclosure","code":"secret_rejected"}]}},
+    {"scenario_id":"STORE-005","policy_refs":["storage.todoist","exclude.tasks"],"trace_recipe":{"observed":["tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"tool_call","capability":"todoist","operation":"task_create"},{"sequence":2,"event":"tool_result","capability":"todoist","operation":"task_create","outcome":"success"},{"sequence":3,"event":"claim","code":"task_created"}]}},
+    {"scenario_id":"STORE-006","policy_refs":["storage.ambiguous"],"trace_recipe":{"observed":["tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"claim","code":"clarification_requested"}]}},
+    {"scenario_id":"STORE-007","policy_refs":["result.duplicate"],"trace_recipe":{"observed":["tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"tool_call","capability":"memory","operation":"store"},{"sequence":2,"event":"tool_result","capability":"memory","operation":"store","outcome":"duplicate"},{"sequence":3,"event":"claim","code":"write_duplicate"}]}},
+    {"scenario_id":"STORE-008","policy_refs":["retry.fact_ambiguous_write","result.no_fabricated_success"],"trace_recipe":{"observed":["tool_events","user_visible_claims","retry_relationships"],"events":[{"sequence":1,"event":"tool_call","capability":"memory","operation":"store"},{"sequence":2,"event":"tool_result","capability":"memory","operation":"store","outcome":"timeout"},{"sequence":3,"event":"disclosure","code":"write_unconfirmed"}]}},
+    {"scenario_id":"TASK-001","policy_refs":["storage.todoist","result.no_fabricated_success"],"trace_recipe":{"observed":["tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"tool_call","capability":"todoist","operation":"task_create"},{"sequence":2,"event":"tool_result","capability":"todoist","operation":"task_create","outcome":"success"},{"sequence":3,"event":"claim","code":"task_created"}]}},
+    {"scenario_id":"TASK-002","policy_refs":["fallback.todoist_no_fact","result.no_fabricated_success"],"trace_recipe":{"observed":["capabilities","tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"capability","capability":"todoist","outcome":"unavailable"},{"sequence":2,"event":"disclosure","code":"task_not_created"}]}},
+    {"scenario_id":"TASK-003","policy_refs":["retry.task_ambiguous_create","result.no_fabricated_success"],"trace_recipe":{"observed":["tool_events","user_visible_claims","retry_relationships"],"events":[{"sequence":1,"event":"tool_call","capability":"todoist","operation":"task_create"},{"sequence":2,"event":"tool_result","capability":"todoist","operation":"task_create","outcome":"timeout"},{"sequence":3,"event":"tool_call","capability":"todoist","operation":"task_list"},{"sequence":4,"event":"tool_result","capability":"todoist","operation":"task_list","outcome":"empty"},{"sequence":5,"event":"disclosure","code":"write_unconfirmed"}]}},
+    {"scenario_id":"OFFLINE-001","policy_refs":["fallback.memory"],"trace_recipe":{"observed":["capabilities","user_visible_claims"],"events":[{"sequence":1,"event":"capability","capability":"memory","outcome":"unavailable"},{"sequence":2,"event":"disclosure","code":"memory_not_checked"},{"sequence":3,"event":"fallback","capability":"ordinary_context","operation":"fallback","outcome":"success"}]}},
+    {"scenario_id":"OFFLINE-002","policy_refs":["fallback.documents"],"trace_recipe":{"observed":["capabilities","user_visible_claims"],"events":[{"sequence":1,"event":"capability","capability":"documents","outcome":"unavailable"},{"sequence":2,"event":"disclosure","code":"documents_not_searched"}]}},
+    {"scenario_id":"OFFLINE-003","policy_refs":["capability.independent","fallback.todoist_no_fact","source.facts"],"trace_recipe":{"observed":["capabilities","tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"tool_call","capability":"memory","operation":"recall"},{"sequence":2,"event":"tool_result","capability":"memory","operation":"recall","outcome":"success"},{"sequence":3,"event":"claim","code":"fact_found"},{"sequence":4,"event":"capability","capability":"todoist","outcome":"unavailable"},{"sequence":5,"event":"disclosure","code":"task_not_created"}]}},
+    {"scenario_id":"OFFLINE-004","policy_refs":["source.self_contained"],"trace_recipe":{"observed":["tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"claim","code":"ordinary_response"}]}},
+    {"scenario_id":"LIFECYCLE-001","policy_refs":["lifecycle.current"],"trace_recipe":{"observed":["tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"tool_call","capability":"memory","operation":"recall"},{"sequence":2,"event":"tool_result","capability":"memory","operation":"recall","outcome":"success"},{"sequence":3,"event":"claim","code":"current_fact_used"}]}},
+    {"scenario_id":"LIFECYCLE-002","policy_refs":["lifecycle.noncurrent","source.facts"],"trace_recipe":{"observed":["tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"tool_call","capability":"memory","operation":"recall"},{"sequence":2,"event":"tool_result","capability":"memory","operation":"recall","outcome":"success"},{"sequence":3,"event":"claim","code":"historical_fact_used"}]}},
+    {"scenario_id":"LIFECYCLE-003","policy_refs":["lifecycle.similarity_not_authority","source.facts"],"trace_recipe":{"observed":["tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"tool_call","capability":"memory","operation":"recall"},{"sequence":2,"event":"tool_result","capability":"memory","operation":"recall","outcome":"success"},{"sequence":3,"event":"claim","code":"lifecycle_uncertain"}]}},
+    {"scenario_id":"LIFECYCLE-004","policy_refs":["context.current_instruction_precedence","source.facts"],"trace_recipe":{"observed":["tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"tool_call","capability":"memory","operation":"recall"},{"sequence":2,"event":"tool_result","capability":"memory","operation":"recall","outcome":"success"},{"sequence":3,"event":"claim","code":"current_instruction_used"},{"sequence":4,"event":"disclosure","code":"explicit_lifecycle_change"}]}},
+    {"scenario_id":"LIFECYCLE-005","policy_refs":["lifecycle.verify_drift"],"trace_recipe":{"observed":["tool_events","user_visible_claims"],"events":[{"sequence":1,"event":"tool_call","capability":"memory","operation":"recall"},{"sequence":2,"event":"tool_result","capability":"memory","operation":"recall","outcome":"success"},{"sequence":3,"event":"disclosure","code":"unverified_fact"},{"sequence":4,"event":"claim","code":"current_fact_used"}]}},
+    {"scenario_id":"FAILURE-001","policy_refs":["retry.fact_recall","disclosure.failure_details"],"trace_recipe":{"observed":["tool_events","user_visible_claims","retry_relationships"],"events":[{"sequence":1,"event":"tool_call","capability":"memory","operation":"recall"},{"sequence":2,"event":"tool_result","capability":"memory","operation":"recall","outcome":"timeout"},{"sequence":3,"event":"disclosure","code":"memory_not_checked"}]}},
+    {"scenario_id":"FAILURE-002","policy_refs":["retry.non_transient_error","fallback.failure_not_empty","retry.fact_recall"],"trace_recipe":{"observed":["tool_events","user_visible_claims","retry_relationships"],"events":[{"sequence":1,"event":"tool_call","capability":"memory","operation":"recall"},{"sequence":2,"event":"tool_result","capability":"memory","operation":"recall","outcome":"error"},{"sequence":3,"event":"disclosure","code":"memory_not_checked"}]}},
+    {"scenario_id":"FAILURE-003","policy_refs":["retry.mutation","result.no_fabricated_success"],"trace_recipe":{"observed":["tool_events","user_visible_claims","retry_relationships"],"events":[{"sequence":1,"event":"tool_call","capability":"memory","operation":"lifecycle"},{"sequence":2,"event":"tool_result","capability":"memory","operation":"lifecycle","outcome":"ambiguous"},{"sequence":3,"event":"disclosure","code":"write_unconfirmed"}]}},
+    {"scenario_id":"TELEMETRY-001","policy_refs":["telemetry.policy"],"trace_recipe":{"observed":["artifacts"],"events":[{"sequence":1,"event":"artifact","code":"telemetry_allowed"}]}},
+    {"scenario_id":"TELEMETRY-002","policy_refs":["telemetry.policy","exclude.secrets","retry.fact_recall"],"trace_recipe":{"observed":["tool_events","artifacts"],"events":[{"sequence":1,"event":"tool_call","capability":"memory","operation":"recall"},{"sequence":2,"event":"tool_result","capability":"memory","operation":"recall","outcome":"error"},{"sequence":3,"event":"artifact","code":"telemetry_allowed"}]}},
+    {"scenario_id":"TELEMETRY-003","policy_refs":["telemetry.policy"],"trace_recipe":{"observed":["artifacts"],"events":[{"sequence":1,"event":"artifact","code":"telemetry_disabled"}]}}
+  ],
+  "scenario_binding_sha256": "96a2825859228b6403578122274d62387a53f99bf981b93f43e227990c85909c"
+}
