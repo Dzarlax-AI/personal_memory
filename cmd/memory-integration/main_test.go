@@ -18,6 +18,9 @@ func projectSources(t *testing.T) (string, string) {
 	if _, e := os.Stat(contract); e != nil {
 		t.Fatal(e)
 	}
+	if _, e := os.Stat(suite); e != nil {
+		t.Fatal(e)
+	}
 	return contract, suite
 }
 func TestCLIParsingAndDryRun(t *testing.T) {
@@ -88,11 +91,7 @@ func TestConformanceAdapterStrictStdinAndIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	scenario := suite.Scenarios[0]
-	request := map[string]any{
-		"schema_version": 1, "contract_version": "1.0.0", "client_family": "codex",
-		"scenario_id": scenario.ID, "intent_class": scenario.IntentClass,
-		"synthetic_input": scenario.SyntheticInput, "capabilities": scenario.Capabilities,
-	}
+	request := adapterRequestForCLI("codex", suite.ContractVersion, scenario)
 	encoded, err := json.Marshal(request)
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +146,7 @@ func TestConformanceAdapterInputLimitAndContentFreeFlagErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := json.Marshal(adapterRequestForCLI("codex", suite.Scenarios[0]))
+	request, err := json.Marshal(adapterRequestForCLI("codex", suite.ContractVersion, suite.Scenarios[0]))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,11 +169,30 @@ func TestConformanceAdapterInputLimitAndContentFreeFlagErrors(t *testing.T) {
 	}
 }
 
-func adapterRequestForCLI(client string, scenario conformance.Scenario) map[string]any {
+func adapterRequestForCLI(client, contractVersion string, scenario conformance.Scenario) map[string]any {
 	return map[string]any{
-		"schema_version": 1, "contract_version": "1.0.0", "client_family": client,
+		"schema_version": conformance.CurrentSchemaVersion, "contract_version": contractVersion, "client_family": client,
 		"scenario_id": scenario.ID, "intent_class": scenario.IntentClass,
 		"synthetic_input": scenario.SyntheticInput, "capabilities": scenario.Capabilities,
+	}
+}
+
+func TestDiscoveryFileDecodingIsStrictAndBounded(t *testing.T) {
+	valid := []byte(`{"performed":true,"tools":["recall_facts"]}`)
+	got, err := decodeDiscovery(bytes.NewReader(valid))
+	if err != nil || !got.Performed || len(got.Tools) != 1 {
+		t.Fatalf("valid discovery: got=%+v err=%v", got, err)
+	}
+	for name, input := range map[string][]byte{
+		"unknown field":  []byte(`{"performed":true,"tool":["recall_facts"]}`),
+		"trailing value": append(append([]byte{}, valid...), []byte(` {}`)...),
+		"oversized":      bytes.Repeat([]byte(" "), (1<<20)+1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := decodeDiscovery(bytes.NewReader(input)); err == nil {
+				t.Fatal("expected strict discovery rejection")
+			}
+		})
 	}
 }
 

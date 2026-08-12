@@ -41,8 +41,14 @@ func TestRenderedSetsBindOneCapabilityConfig(t *testing.T) {
 	b := loadTestBundle(t)
 	aCfg := CapabilityConfig{Memory: CapabilityAvailable, Documents: CapabilityDisabled, Todoist: CapabilityUnavailable}
 	bCfg := CapabilityConfig{Memory: CapabilityDisabled, Documents: CapabilityAvailable, Todoist: CapabilityAvailable}
-	a, _ := b.Render(aCfg)
-	other, _ := b.Render(bCfg)
+	a, err := b.Render(aCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := b.Render(bCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
 	mixed := cloneArtifactSets(a)
 	mixed[0].Artifacts[0] = other[0].Artifacts[0]
 	refreshArtifactSetDigests(mixed)
@@ -64,8 +70,6 @@ func TestRenderedSetsBindOneCapabilityConfig(t *testing.T) {
 func TestPortableRelativeArtifactPaths(t *testing.T) {
 	invalid := []string{"", ".", "..", "a/../b", "a//b", "/a", `\\server\share`, `C:\foo`, "C:/foo", "C:foo", "a:b", "a\\b", "a\x00b", "a\nb", "a/./b", "CON", "con.txt", "dir/AUX.json", "NUL.md", "COM1", "lpt9.log", "a. ", "a./b", "dir /b"}
 	for _, value := range invalid {
-		value = strings.ReplaceAll(value, `\x00`, "\x00")
-		value = strings.ReplaceAll(value, `\n`, "\n")
 		if safeRelativePath(value) {
 			t.Errorf("accepted unsafe path %q", value)
 		}
@@ -90,7 +94,7 @@ func TestPathCasefoldCollisionsAndOverlaps(t *testing.T) {
 }
 
 func TestPrivacyLintHighConfidenceValues(t *testing.T) {
-	invalid := []string{"prefix postgresql://db.internal/name suffix", "ssh://host/path", "git+ssh://host/repo", "postgres://user:pass@host/db", `api_key: "abcd/efghijkl"`, `password='abc!def/12345'`, "/root", "/home", "/Users"}
+	invalid := []string{"prefix postgresql://db.internal/name suffix", "ssh://host/path", "git+ssh://host/repo", "postgres://user:pass@host/db", `api_key: "abcd/efghijkl"`, `password='abc!def/12345'`, "/root", "/home", "/Users", "/etc"}
 	for _, value := range invalid {
 		if err := validateSourcePrivacy("test", []byte(value)); err == nil {
 			t.Errorf("privacy lint accepted %q", value)

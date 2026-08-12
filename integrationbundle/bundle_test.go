@@ -77,6 +77,27 @@ func TestEveryInstructionAdapterPreservesCanonicalRuleGraph(t *testing.T) {
 	}
 }
 
+func TestGenericToolMappingIsDerivedFromManifest(t *testing.T) {
+	b := loadTestBundle(t)
+	sets, err := b.Render(CapabilityConfig{Memory: CapabilityAvailable, Documents: CapabilityUnavailable, Todoist: CapabilityDisabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rendered struct {
+		Capabilities map[conformance.Capability]struct {
+			Tools []string `json:"tools"`
+		} `json:"capabilities"`
+	}
+	if err = json.Unmarshal([]byte(artifactContent(t, sets, conformance.ClientGenericMCP, "generic-mcp/tool-mapping.json")), &rendered); err != nil {
+		t.Fatal(err)
+	}
+	for _, capability := range b.Manifest().OptionalCapabilities {
+		if got := rendered.Capabilities[capability.ID].Tools; !reflect.DeepEqual(got, capability.Tools) {
+			t.Fatalf("%s tools = %v, want manifest tools %v", capability.ID, got, capability.Tools)
+		}
+	}
+}
+
 func TestScenarioReferencesResolveAndAreCoherent(t *testing.T) {
 	b := loadTestBundle(t)
 	policy := b.Policy()
@@ -129,14 +150,14 @@ func TestAdversarialPolicyAndTemplateWeakeningIsRejected(t *testing.T) {
 
 	for _, templatePath := range []string{"templates/codex-agents.md.tmpl", "templates/claude-rules.md.tmpl", "templates/chatgpt-prompt.md.tmpl", "templates/generic-policy.json.tmpl"} {
 		templates := cloneBytesMap(b.templates)
-		templates[templatePath] = bytes.Replace(templates[templatePath], []byte("{{.CanonicalPolicy"), []byte("{{.OmittedCanonicalPolicy"), 1)
+		templates[templatePath] = bytes.Replace(templates[templatePath], []byte("{{.CanonicalPolicy"), []byte("{{.UnknownCanonicalPolicy"), 1)
 		manifest := manifestWithAssetDigest(b.manifestSource, templatePath, digest(templates[templatePath]))
 		mutatedBundle, err := loadSources(manifest, b.policySource, templates, testContract(t), testSuite(t))
 		if err != nil {
 			t.Fatalf("load mutated %s: %v", templatePath, err)
 		}
 		if _, err := mutatedBundle.Render(CapabilityConfig{Memory: CapabilityAvailable, Documents: CapabilityAvailable, Todoist: CapabilityDisabled}); err == nil {
-			t.Fatalf("expected rendered coverage rejection for %s, got %v", templatePath, err)
+			t.Fatalf("expected rendered coverage rejection for %s", templatePath)
 		}
 	}
 }
@@ -406,15 +427,6 @@ func testSuite(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return b
-}
-
-func joinArtifacts(artifacts []Artifact) string {
-	var out strings.Builder
-	for _, artifact := range artifacts {
-		out.Write(artifact.Content)
-		out.WriteByte('\n')
-	}
-	return out.String()
 }
 
 func artifactContent(t *testing.T, sets []ArtifactSet, client conformance.ClientFamily, path string) string {

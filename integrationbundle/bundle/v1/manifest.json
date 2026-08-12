@@ -64,6 +64,6 @@
     {"path": "templates/codex-agents.md.tmpl", "sha256": "0fe35dc5567c53ea76ac6ad460d862a01fd7bd8ed4a42a19f81ad810c8ec6db0"},
     {"path": "templates/codex-skill.md.tmpl", "sha256": "14fc21b25087fe3e8434f5293f423e90d0b7f85e7323d3f474a5895ea2b6b5d1"},
     {"path": "templates/generic-policy.json.tmpl", "sha256": "33dfc03ec540bcb98a078f9153ef1be77cd1d48bfe44526235842319307587ba"},
-    {"path": "templates/generic-tools.json.tmpl", "sha256": "bc03993dd738eee78af1a4ac4aba9dbea38d8c3fff371223dbd2439a282b82f5"}
+    {"path": "templates/generic-tools.json.tmpl", "sha256": "c918307aab26ca2b423217f9e7078ca18fb3ac49304cff3459e9ee564deca06e"}
   ]
 }

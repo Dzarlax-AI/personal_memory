@@ -23,14 +23,17 @@ func platformFileIdentity(info fs.FileInfo) (uint64, uint64) {
 	return 0, 0
 }
 
-type mutationRoot struct{ fd int }
+type mutationRoot struct {
+	fd      int
+	syncDir func(int) error
+}
 
-func openMutationRoot(rootName string) (*mutationRoot, error) {
+func openMutationRoot(rootName string, _, _ uint64) (*mutationRoot, error) {
 	fd, err := unix.Open(rootName, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, err
 	}
-	return &mutationRoot{fd: fd}, nil
+	return &mutationRoot{fd: fd, syncDir: unix.Fsync}, nil
 }
 func (m *mutationRoot) Close() error { return unix.Close(m.fd) }
 func (m *mutationRoot) identity() (uint64, uint64, error) {
@@ -57,7 +60,11 @@ func (m *mutationRoot) lock(ctx context.Context, exclusive bool) (*rootLock, err
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	lfd, e := unix.Dup(m.fd)
+	// F_DUPFD_CLOEXEC keeps the lock anchored to the already validated root's
+	// open file description and prevents inheritance across exec. Close performs
+	// an explicit LOCK_UN before closing the duplicate; one rootContext never
+	// acquires overlapping locks.
+	lfd, e := unix.FcntlInt(uintptr(m.fd), unix.F_DUPFD_CLOEXEC, 0)
 	if e != nil {
 		return nil, e
 	}
@@ -98,7 +105,7 @@ func withParentFD(root *mutationRoot, relative string, create bool, fn func(int,
 			if e = unix.Mkdirat(fd, part, 0o700); e != nil && !errors.Is(e, unix.EEXIST) {
 				return e
 			}
-			if e = unix.Fsync(fd); e != nil {
+			if e = root.syncDir(fd); e != nil {
 				return e
 			}
 			next, e = unix.Openat(fd, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
@@ -142,9 +149,12 @@ func atomicWriteRelative(root *mutationRoot, relative string, data []byte, mode 
 				return err
 			}
 			if err = unix.Unlinkat(fd, tempName, 0); err != nil {
-				return err
+				return &mutationCommittedError{err: err}
 			}
-			return unix.Fsync(fd)
+			if err = root.syncDir(fd); err != nil {
+				return &mutationCommittedError{err: err}
+			}
+			return nil
 		}
 		if err != nil {
 			_ = unix.Unlinkat(fd, tempName, 0)
@@ -154,7 +164,10 @@ func atomicWriteRelative(root *mutationRoot, relative string, data []byte, mode 
 			_ = unix.Unlinkat(fd, tempName, 0)
 			return err
 		}
-		return unix.Fsync(fd)
+		if err = root.syncDir(fd); err != nil {
+			return &mutationCommittedError{err: err}
+		}
+		return nil
 	})
 }
 func removeRelative(root *mutationRoot, relative string) error {
@@ -169,7 +182,7 @@ func removeRelative(root *mutationRoot, relative string) error {
 		if err := unix.Unlinkat(fd, base, 0); err != nil {
 			return err
 		}
-		return unix.Fsync(fd)
+		return root.syncDir(fd)
 	})
 }
 func removeAnyRelative(root *mutationRoot, relative string) error {
@@ -179,7 +192,7 @@ func removeAnyRelative(root *mutationRoot, relative string) error {
 				return err
 			}
 		}
-		return unix.Fsync(fd)
+		return root.syncDir(fd)
 	})
 }
 func ensureDirRelative(root *mutationRoot, dir string) error {

@@ -78,12 +78,31 @@ func TestTelemetryConcurrentLinesShortWriteAndFalseTuple(t *testing.T) {
 			t.Fatal("invalid concurrent JSONL")
 		}
 	}
-	short, _ := b.NewTelemetrySink(true, shortWriter{})
+	short, err := b.NewTelemetrySink(true, shortWriter{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !errors.Is(short.Record(event), io.ErrShortWrite) {
 		t.Fatal("short write not detected")
 	}
 	event.Capability = conformance.CapabilityMemory
 	if err := sink.Record(event); err == nil {
 		t.Fatal("false scenario tuple accepted")
+	}
+}
+
+func TestTelemetryTuplesIncludeOrderedAssertions(t *testing.T) {
+	before := conformance.EventPattern{Event: conformance.EventToolResult, Capability: conformance.CapabilityMemory, Operation: conformance.OperationRecall, Outcome: conformance.OutcomeTimeout}
+	after := conformance.EventPattern{Event: conformance.EventToolResult, Capability: conformance.CapabilityDocuments, Operation: conformance.OperationSearch, Outcome: conformance.OutcomeSuccess}
+	suite := &conformance.Suite{Scenarios: []conformance.Scenario{{ID: "ORDERED-001", Assertions: conformance.Assertions{
+		Ordered: []conformance.OrderAssertion{{Before: before, After: after}},
+		AnyOf:   []conformance.AssertionAlternative{{Ordered: []conformance.OrderAssertion{{Before: after, After: before}}}},
+	}}}}
+	tuples := buildTelemetryTuples(suite)["ORDERED-001"]
+	for _, pattern := range []conformance.EventPattern{before, after} {
+		key := string(pattern.Capability) + "\x00" + string(pattern.Operation) + "\x00" + string(pattern.Outcome)
+		if !tuples[key] {
+			t.Fatalf("ordered assertion tuple is missing: %+v", pattern)
+		}
 	}
 }

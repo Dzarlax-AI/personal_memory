@@ -1,6 +1,7 @@
 package integrationbundle
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -81,7 +82,7 @@ func TestConformanceTraceIsDeterministicAndContainsNoArbitraryContent(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if containsBytes(encoded, []byte(request.SyntheticInput)) || containsBytes(encoded, []byte(request.IntentClass)) {
+	if bytes.Contains(encoded, []byte(request.SyntheticInput)) || bytes.Contains(encoded, []byte(request.IntentClass)) {
 		t.Fatalf("trace leaked arbitrary request content: %s", encoded)
 	}
 }
@@ -165,16 +166,4 @@ func cloneAdapterRequest(request conformance.AdapterRequest) conformance.Adapter
 		ID: request.ScenarioID, IntentClass: request.IntentClass,
 		SyntheticInput: request.SyntheticInput, Capabilities: request.Capabilities,
 	})
-}
-
-func containsBytes(haystack, needle []byte) bool {
-	if len(needle) == 0 || len(haystack) < len(needle) {
-		return false
-	}
-	for i := 0; i <= len(haystack)-len(needle); i++ {
-		if string(haystack[i:i+len(needle)]) == string(needle) {
-			return true
-		}
-	}
-	return false
 }

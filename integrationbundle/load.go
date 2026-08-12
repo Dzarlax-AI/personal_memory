@@ -18,8 +18,6 @@ import (
 )
 
 var (
-	semanticVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
-	normalizedToken = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 	policyReference = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
 	hexDigest       = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	windowsDriveAbs = regexp.MustCompile(`(?i)(^|[\s"'=:\(])([a-z]:[\\/])`)
@@ -30,6 +28,7 @@ var (
 	namedCredential = regexp.MustCompile(`(?i)(api[_-]?key|token|password|client_secret)[[:space:]]*[:=][[:space:]]*["']?[^[:space:]"']{8,}`)
 	uncPath         = regexp.MustCompile(`\\\\[a-zA-Z0-9._-]+\\[a-zA-Z0-9.$_-]+`)
 	posixAbsolute   = regexp.MustCompile(`(^|[[:space:]"'=:,(])/[a-zA-Z0-9._-]+(/[a-zA-Z0-9._-]+)+`)
+	privateRoot     = regexp.MustCompile(`(?i)(^|[[:space:]"'=:,(])/(root|users|home|tmp|var|etc)(?:$|[[:space:]"'),.;:/])`)
 )
 
 var canonicalRuleGroups = map[string][]RuleID{
@@ -233,7 +232,8 @@ func validateClients(m *Manifest, templates map[string][]byte) error {
 	allPaths := map[string]string{}
 	seen := map[conformance.ClientFamily]bool{}
 	for _, client := range m.Clients {
-		if _, supported := artifactFormatVersions[client.ID]; !supported {
+		_, supported := artifactFormatVersion(client.ID)
+		if !supported {
 			return fmt.Errorf("unknown client %q", client.ID)
 		}
 		if seen[client.ID] {
@@ -245,8 +245,9 @@ func validateClients(m *Manifest, templates map[string][]byte) error {
 		if client.ID != want[i] {
 			return fmt.Errorf("client %d must be %q", i, want[i])
 		}
-		if client.ArtifactFormatVersion != artifactFormatVersions[client.ID] {
-			return fmt.Errorf("client %q artifact format version must be %q", client.ID, artifactFormatVersions[client.ID])
+		formatVersion, _ := artifactFormatVersion(client.ID)
+		if client.ArtifactFormatVersion != formatVersion {
+			return fmt.Errorf("client %q artifact format version must be %q", client.ID, formatVersion)
 		}
 		if len(client.Artifacts) == 0 || len(client.OverridePaths) == 0 {
 			return fmt.Errorf("client %q must declare artifacts and separate override paths", client.ID)
@@ -521,6 +522,9 @@ func validateTraceRecipe(mapping ScenarioMapping, scenario conformance.Scenario,
 			if event.Event == conformance.EventToolCall {
 				pending[key]++
 			} else {
+				if pending[key] == 0 {
+					return fmt.Errorf("scenario %q trace recipe tool result has no preceding call", mapping.ScenarioID)
+				}
 				pending[key]--
 				if state == conformance.CapabilityTimeout && event.Outcome != conformance.OutcomeTimeout {
 					return fmt.Errorf("scenario %q trace recipe result conflicts with timeout capability state", mapping.ScenarioID)
@@ -666,14 +670,8 @@ func validateSourcePrivacy(name string, source []byte) error {
 	// Best-effort, high-confidence defense in depth only. This is not a
 	// secrets boundary: installers must never log source or artifact content.
 	text := string(source)
-	lower := strings.ToLower(text)
-	if urlValue.MatchString(text) || privateEndpoint.MatchString(text) || uriCredentials.MatchString(text) || windowsDriveAbs.MatchString(text) || uncPath.MatchString(text) || posixAbsolute.MatchString(text) || strings.Contains(text, "../") || strings.Contains(text, `..\`) || credentialValue.MatchString(text) || namedCredential.MatchString(text) {
+	if urlValue.MatchString(text) || privateEndpoint.MatchString(text) || uriCredentials.MatchString(text) || windowsDriveAbs.MatchString(text) || uncPath.MatchString(text) || posixAbsolute.MatchString(text) || privateRoot.MatchString(text) || strings.Contains(text, "../") || strings.Contains(text, `..\`) || credentialValue.MatchString(text) || namedCredential.MatchString(text) {
 		return fmt.Errorf("source asset %q contains endpoint, credential, absolute path, UNC path, or traversal", name)
-	}
-	for _, root := range []string{"/root", "/users", "/home", "/tmp", "/var", "/etc"} {
-		if lower == root || strings.Contains(lower, root+"/") {
-			return fmt.Errorf("source asset %q contains absolute path", name)
-		}
 	}
 	return nil
 }

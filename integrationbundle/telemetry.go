@@ -122,9 +122,17 @@ func buildTelemetryTuples(suite *conformance.Suite) map[string]map[string]bool {
 		for _, p := range s.Assertions.Must {
 			add(p)
 		}
+		for _, order := range s.Assertions.Ordered {
+			add(order.Before)
+			add(order.After)
+		}
 		for _, a := range s.Assertions.AnyOf {
 			for _, p := range a.Must {
 				add(p)
+			}
+			for _, order := range a.Ordered {
+				add(order.Before)
+				add(order.After)
 			}
 		}
 		for _, c := range s.Assertions.Counts {

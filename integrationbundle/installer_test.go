@@ -109,27 +109,39 @@ func TestApplyFailureAutomaticallyRestores(t *testing.T) {
 	}
 }
 
-func TestPreservesSurroundingClientFilesAndIgnoresTemp(t *testing.T) {
+func TestClaudePreservesSurroundingSettingsAndIgnoresTemp(t *testing.T) {
 	root := t.TempDir()
-	agents := filepath.Join(root, "AGENTS.md")
 	settings := filepath.Join(root, "settings.json")
-	os.WriteFile(agents, []byte("user agents"), 0o600)
 	os.WriteFile(settings, []byte(`{"unknown":true,"hooks":{"Other":[]}}`), 0o600)
 	os.WriteFile(filepath.Join(root, ".personal-memory-tmp-interrupted"), []byte("ignore"), 0o600)
 	if _, err := Install(InstallOptions{TargetRoot: root, set: testSet(t, conformance.ClientClaude)}); err != nil {
 		t.Fatal(err)
 	}
-	got, _ := os.ReadFile(agents)
-	if string(got) != "user agents" {
-		t.Fatal("Codex surrounding bytes changed")
-	}
-	got, _ = os.ReadFile(settings)
+	got, _ := os.ReadFile(settings)
 	var decoded map[string]json.RawMessage
 	if json.Unmarshal(got, &decoded) != nil || string(decoded["unknown"]) != "true" {
 		t.Fatal("Claude unrelated setting changed")
 	}
 	if _, err := claudeManaged(got); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCommittedInstallReportsRetentionWarningWithoutFailure(t *testing.T) {
+	root := t.TempDir()
+	set := testSet(t, conformance.ClientCodex)
+	result, err := Install(InstallOptions{TargetRoot: root, set: set, prune: func(*rootContext, conformance.ClientFamily, string) error {
+		return errors.New("injected retention failure")
+	}})
+	if err != nil {
+		t.Fatalf("committed install reported failure: %v", err)
+	}
+	if result.Status != StatusInstalled || !result.Changed || !reflect.DeepEqual(result.Warnings, []string{"backup_retention_failed"}) {
+		t.Fatalf("unexpected committed result: %+v", result)
+	}
+	verified, err := Verify(VerifyOptions{TargetRoot: root, set: set})
+	if err != nil || verified.Status != StatusInstalled {
+		t.Fatalf("committed install is not verifiable: result=%+v err=%v", verified, err)
 	}
 }
 
@@ -140,7 +152,7 @@ func TestBackupTamperRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt, _ := openValidatedRoot(root)
-	defer rt.Close()
+	defer func() { _ = rt.Close() }()
 	st, _, _ := readState(rt, set.ClientID)
 	manifest := filepath.Join(root, filepath.FromSlash(stateDir(set.ClientID)+"/backups/"+st.PreviousTransaction+"/manifest.json"))
 	if err := os.WriteFile(manifest, []byte("{}"), 0o600); err != nil {
@@ -802,12 +814,12 @@ func TestRollbackWaitsForLockAndHonorsCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	held, err := r.mutation.lock(context.Background(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer held.Close()
+	defer func() { _ = held.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err = Rollback(RollbackOptions{TargetRoot: root, Client: set.ClientID, set: set, Context: ctx}); !errors.Is(err, context.Canceled) {

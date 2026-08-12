@@ -11,19 +11,25 @@ import (
 func platformFileIdentity(fs.FileInfo) (uint64, uint64) { return 0, 0 }
 
 type UnsupportedMutationPlatformError struct{ Operation string }
-type mutationRoot struct{}
+type mutationRoot struct {
+	dev uint64
+	ino uint64
+}
 type rootLock struct{}
 
 func (*rootLock) Close() error { return nil }
-func (*mutationRoot) identity() (uint64, uint64, error) {
-	return 0, 0, &UnsupportedMutationPlatformError{Operation: "root_identity"}
+func (m *mutationRoot) identity() (uint64, uint64, error) {
+	return m.dev, m.ino, nil
 }
-func (*mutationRoot) lock(context.Context, bool) (*rootLock, error) {
-	return nil, &UnsupportedMutationPlatformError{Operation: "lock"}
+func (*mutationRoot) lock(_ context.Context, exclusive bool) (*rootLock, error) {
+	if exclusive {
+		return nil, &UnsupportedMutationPlatformError{Operation: "lock"}
+	}
+	return &rootLock{}, nil
 }
 
-func openMutationRoot(string) (*mutationRoot, error) {
-	return &mutationRoot{}, nil
+func openMutationRoot(_ string, dev, ino uint64) (*mutationRoot, error) {
+	return &mutationRoot{dev: dev, ino: ino}, nil
 }
 func (*mutationRoot) Close() error { return nil }
 

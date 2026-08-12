@@ -21,3 +21,4 @@ conformance-results/
 
 # Client integration bundle: generated artifact-conformance reports and executable.
 integration-results/
+/memory-integration

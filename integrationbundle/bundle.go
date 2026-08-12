@@ -17,13 +17,6 @@ const (
 	SuiteVersion        = "1.1.0"
 )
 
-var artifactFormatVersions = map[conformance.ClientFamily]string{
-	conformance.ClientCodex:      "1.0.0",
-	conformance.ClientClaude:     "1.0.0",
-	conformance.ClientChatGPT:    "1.0.0",
-	conformance.ClientGenericMCP: "1.0.0",
-}
-
 var canonicalClientInventories = map[conformance.ClientFamily]ClientManifest{
 	conformance.ClientCodex: {ID: conformance.ClientCodex, ArtifactFormatVersion: "1.0.0", Artifacts: []ArtifactOwnership{
 		{Path: "codex/AGENTS.personal-memory.md", Template: "templates/codex-agents.md.tmpl"},
@@ -42,6 +35,11 @@ var canonicalClientInventories = map[conformance.ClientFamily]ClientManifest{
 		{Path: "generic-mcp/policy.json", Template: "templates/generic-policy.json.tmpl"},
 		{Path: "generic-mcp/tool-mapping.json", Template: "templates/generic-tools.json.tmpl"},
 	}, OverridePaths: []string{"overrides/generic-mcp/policy.local.json"}},
+}
+
+func artifactFormatVersion(client conformance.ClientFamily) (string, bool) {
+	inventory, ok := canonicalClientInventories[client]
+	return inventory.ArtifactFormatVersion, ok
 }
 
 //go:embed bundle/v1

@@ -3,9 +3,9 @@
   "bundle_version": "{{.BundleVersion}}",
   "contract_version": "{{.ContractVersion}}",
   "capabilities": {
-    "memory": {"state": "{{.Memory}}", "tools": ["recall_facts", "store_fact", "update_fact", "set_fact_lifecycle"]},
-    "documents": {"state": "{{.Documents}}", "tools": ["search_documents"]},
-    "todoist": {"state": "{{.Todoist}}", "tools": ["get_tasks", "create_task", "update_task", "complete_task", "delete_task"]}
+    "memory": {"state": "{{.Memory}}", "tools": {{.MemoryToolsJSON}}},
+    "documents": {"state": "{{.Documents}}", "tools": {{.DocumentsToolsJSON}}},
+    "todoist": {"state": "{{.Todoist}}", "tools": {{.TodoistToolsJSON}}}
   },
   "task_fallback": "manual_task_text_only; task remains uncreated and must not be stored as a fact"
 }

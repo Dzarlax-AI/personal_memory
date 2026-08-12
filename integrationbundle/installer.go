@@ -28,6 +28,8 @@ const currentContractSHA256 = "b425bb25ea0ecaa85ddaafacb9e5af9970d11a985a482b8d8
 const currentSuiteSHA256 = "bd10ce7d22054210ad6798b3a75f48379ccb8063a52d620677b67b36509fcd1f"
 const keepCompletedBackups = 3
 
+var errDiscoveryRequired = errors.New("tool discovery must be explicitly performed")
+
 type InstallStatus string
 
 const (
@@ -74,6 +76,7 @@ type Result struct {
 	Actions      []PlanAction             `json:"actions,omitempty"`
 	Capabilities CapabilityConfig         `json:"capabilities"`
 	MissingTools []string                 `json:"missing_tools,omitempty"`
+	Warnings     []string                 `json:"warnings,omitempty"`
 }
 type InstallOptions struct {
 	TargetRoot      string
@@ -86,6 +89,7 @@ type InstallOptions struct {
 	FailAfterWrites int
 	beforeApply     func(*rootContext) error
 	afterWrite      func(string) error
+	prune           func(*rootContext, conformance.ClientFamily, string) error
 	failRecovery    bool
 	set             ArtifactSet
 	root            *rootContext
@@ -107,6 +111,7 @@ type RollbackOptions struct {
 	Config          CapabilityConfig
 	Context         context.Context
 	FailAfterWrites int
+	prune           func(*rootContext, conformance.ClientFamily, string) error
 	failRecovery    bool
 	set             ArtifactSet
 }
@@ -169,6 +174,11 @@ type rootContext struct {
 	identity string
 }
 
+type mutationCommittedError struct{ err error }
+
+func (e *mutationCommittedError) Error() string { return e.err.Error() }
+func (e *mutationCommittedError) Unwrap() error { return e.err }
+
 func (r *rootContext) Close() error { return errors.Join(r.mutation.Close(), r.Root.Close()) }
 
 func PlanInstall(o InstallOptions) (InstallPlan, error) { return plan(o, false) }
@@ -187,14 +197,14 @@ func plan(o InstallOptions, update bool) (InstallPlan, error) {
 		if err != nil {
 			return InstallPlan{}, err
 		}
-		defer r.Close()
+		defer func() { _ = r.Close() }()
 	}
 	if !o.lockHeld {
 		lock, lockErr := r.mutation.lock(o.Context, false)
 		if lockErr != nil {
 			return InstallPlan{}, lockErr
 		}
-		defer lock.Close()
+		defer func() { _ = lock.Close() }()
 	}
 	if err = validateSet(set, o.Discovery); err != nil {
 		return InstallPlan{}, err
@@ -300,12 +310,12 @@ func apply(o InstallOptions, update bool) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	lock, err := r.mutation.lock(o.Context, true)
 	if err != nil {
 		return Result{}, err
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 	o.root = r
 	o.lockHeld = true
 	p, err := plan(o, update)
@@ -396,6 +406,15 @@ func apply(o InstallOptions, update bool) (Result, error) {
 		}
 		return Result{}, cause
 	}
+	recordCommittedWrite := func(path string) error {
+		writes++
+		snapshot, snapshotErr := snapshotAction(r, path)
+		if snapshotErr != nil {
+			return fmt.Errorf("record committed write identity: %w", snapshotErr)
+		}
+		postWrite[path] = snapshot
+		return nil
+	}
 	for _, a := range active {
 		pa := findAction(p.Actions, a.Path)
 		if err = revalidate(r, pa); err != nil {
@@ -411,12 +430,16 @@ func apply(o InstallOptions, update bool) (Result, error) {
 		}
 		if !bytes.Equal(current, desired) {
 			if err = atomicWriteRoot(r, a.Path, desired, 0o600); err != nil {
+				var committed *mutationCommittedError
+				if errors.As(err, &committed) {
+					if recordErr := recordCommittedWrite(a.Path); recordErr != nil {
+						return recoverApply(errors.Join(err, recordErr))
+					}
+				}
 				return recoverApply(err)
 			}
-			writes++
-			postWrite[a.Path], err = snapshotAction(r, a.Path)
-			if err != nil {
-				return Result{}, fmt.Errorf("record post-write identity: %w", err)
+			if err = recordCommittedWrite(a.Path); err != nil {
+				return recoverApply(err)
 			}
 			if o.afterWrite != nil {
 				if err = o.afterWrite(a.Path); err != nil {
@@ -439,13 +462,18 @@ func apply(o InstallOptions, update bool) (Result, error) {
 				return recoverApply(err)
 			}
 			if err = atomicWriteRoot(r, p0, overrideStub(p0), 0o600); err != nil {
+				var committed *mutationCommittedError
+				if errors.As(err, &committed) {
+					createdOverrides = append(createdOverrides, p0)
+					if recordErr := recordCommittedWrite(p0); recordErr != nil {
+						return recoverApply(errors.Join(err, recordErr))
+					}
+				}
 				return recoverApply(err)
 			}
 			createdOverrides = append(createdOverrides, p0)
-			writes++
-			postWrite[p0], err = snapshotAction(r, p0)
-			if err != nil {
-				return Result{}, fmt.Errorf("record post-write identity: %w", err)
+			if err = recordCommittedWrite(p0); err != nil {
+				return recoverApply(err)
 			}
 			if o.afterWrite != nil {
 				if err = o.afterWrite(p0); err != nil {
@@ -485,8 +513,12 @@ func apply(o InstallOptions, update bool) (Result, error) {
 	if err = writeState(r, st); err != nil {
 		return recoverApply(err)
 	}
-	if err = pruneBackups(r, set.ClientID, tx); err != nil {
-		return Result{}, err
+	prune := pruneBackups
+	if o.prune != nil {
+		prune = o.prune
+	}
+	if err = prune(r, set.ClientID, tx); err != nil {
+		res.Warnings = append(res.Warnings, "backup_retention_failed")
 	}
 	return res, nil
 }
@@ -497,12 +529,12 @@ func Verify(o VerifyOptions) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	lock, err := r.mutation.lock(o.Context, false)
 	if err != nil {
 		return Result{}, err
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 	res := Result{Status: StatusMissing, Client: o.Client, Capabilities: o.Config}
 	if resolveErr != nil {
 		res.Status = StatusIncompatible
@@ -564,12 +596,12 @@ func Rollback(o RollbackOptions) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	lock, err := r.mutation.lock(o.Context, true)
 	if err != nil {
 		return Result{}, err
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 	st, exists, err := readState(r, o.Client)
 	if err != nil || !exists {
 		return Result{}, fmt.Errorf("verified installation state is required")
@@ -617,14 +649,19 @@ func Rollback(o RollbackOptions) (Result, error) {
 	if bm.State != nil {
 		referenced = bm.State.PreviousTransaction
 	}
-	if err = pruneBackups(r, o.Client, referenced); err != nil {
-		return Result{}, err
-	}
 	status := StatusInstalled
 	if o.Client == conformance.ClientChatGPT {
 		status = StatusManualActionRequired
 	}
-	return Result{Status: status, Client: o.Client, Changed: true}, nil
+	res := Result{Status: status, Client: o.Client, Changed: true}
+	prune := pruneBackups
+	if o.prune != nil {
+		prune = o.prune
+	}
+	if err = prune(r, o.Client, referenced); err != nil {
+		res.Warnings = append(res.Warnings, "backup_retention_failed")
+	}
+	return res, nil
 }
 
 func WriteRendered(root string, bundle *Bundle, client conformance.ClientFamily, config CapabilityConfig) (Result, error) {
@@ -636,8 +673,8 @@ func WriteRendered(root string, bundle *Bundle, client conformance.ClientFamily,
 	if err != nil {
 		return Result{}, err
 	}
-	defer r.Close()
-	if err = validateSet(set, Discovery{}); err != nil && strings.Contains(err.Error(), "discovery") == false {
+	defer func() { _ = r.Close() }()
+	if err = validateSet(set, Discovery{}); err != nil && !errors.Is(err, errDiscoveryRequired) {
 		return Result{}, err
 	}
 	for _, a := range set.Artifacts {
@@ -720,13 +757,13 @@ func mergeActive(a activeArtifact, current []byte, exists bool) ([]byte, error) 
 func mergeCodex(current, block []byte) ([]byte, error) {
 	begins, ends := markerLines(current, codexBegin), markerLines(current, codexEnd)
 	if len(begins) != len(ends) || len(begins) > 1 {
-		return nil, fmt.Errorf("Codex managed markers are invalid")
+		return nil, fmt.Errorf("invalid Codex managed markers")
 	}
 	if len(begins) == 1 {
 		b := begins[0][0]
 		e := ends[0][0]
 		if e < b {
-			return nil, fmt.Errorf("Codex managed markers are invalid")
+			return nil, fmt.Errorf("invalid Codex managed markers")
 		}
 		e = ends[0][1]
 		if e < len(current) && current[e] == '\r' {
@@ -747,12 +784,12 @@ func mergeCodex(current, block []byte) ([]byte, error) {
 func codexManaged(content []byte) ([]byte, error) {
 	begins, ends := markerLines(content, codexBegin), markerLines(content, codexEnd)
 	if len(begins) != 1 || len(ends) != 1 {
-		return nil, fmt.Errorf("Codex managed block missing or duplicated")
+		return nil, fmt.Errorf("missing or duplicated Codex managed block")
 	}
 	b := begins[0][0]
 	e := ends[0][0]
 	if e < b {
-		return nil, fmt.Errorf("Codex markers reordered")
+		return nil, fmt.Errorf("reordered Codex markers")
 	}
 	return content[b : e+len(codexEnd)], nil
 }
@@ -786,11 +823,6 @@ func codexLineEnding(block, current []byte) []byte {
 	return block
 }
 
-type claudeSettings struct {
-	Hooks map[string][]json.RawMessage `json:"hooks,omitempty"`
-	Rest  map[string]json.RawMessage   `json:"-"`
-}
-
 func decodeSettings(data []byte) (map[string]json.RawMessage, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return map[string]json.RawMessage{}, nil
@@ -808,7 +840,7 @@ func extractOwnedHook(data []byte) ([]byte, error) {
 	}
 	hooks := m["hooks"]
 	if len(hooks) == 0 {
-		return nil, fmt.Errorf("Claude hook missing")
+		return nil, fmt.Errorf("missing Claude hook")
 	}
 	var hm map[string][]json.RawMessage
 	if err = json.Unmarshal(hooks, &hm); err != nil {
@@ -816,14 +848,14 @@ func extractOwnedHook(data []byte) ([]byte, error) {
 	}
 	entries := hm["UserPromptSubmit"]
 	if len(entries) != 1 {
-		return nil, fmt.Errorf("Claude owned hook must be singular")
+		return nil, fmt.Errorf("multiple Claude owned hooks are not allowed")
 	}
 	canonical, err := canonicalJSON(entries[0])
 	if err != nil {
 		return nil, err
 	}
 	if !ownedClaudeHook(canonical) {
-		return nil, fmt.Errorf("Claude hook identity missing")
+		return nil, fmt.Errorf("missing Claude hook identity")
 	}
 	return canonical, nil
 }
@@ -865,7 +897,7 @@ func claudeManaged(content []byte) ([]byte, error) {
 	}
 	var hm map[string][]json.RawMessage
 	if err = json.Unmarshal(m["hooks"], &hm); err != nil {
-		return nil, fmt.Errorf("Claude hooks missing")
+		return nil, fmt.Errorf("missing Claude hooks")
 	}
 	var found []byte
 	for _, e := range hm["UserPromptSubmit"] {
@@ -878,7 +910,7 @@ func claudeManaged(content []byte) ([]byte, error) {
 		}
 	}
 	if found == nil {
-		return nil, fmt.Errorf("Claude owned hook missing")
+		return nil, fmt.Errorf("missing Claude owned hook")
 	}
 	return found, nil
 }
@@ -925,7 +957,7 @@ func validateSet(set ArtifactSet, d Discovery) error {
 		return err
 	}
 	if anyAvailable(set.CapabilityConfig) && !d.Performed {
-		return fmt.Errorf("tool discovery must be explicitly performed")
+		return errDiscoveryRequired
 	}
 	if d.Performed && len(missingTools(set.CapabilityConfig, d.Tools)) > 0 {
 		return fmt.Errorf("required discovered tools are missing")
@@ -933,7 +965,8 @@ func validateSet(set ArtifactSet, d Discovery) error {
 	return nil
 }
 func validateSetStructure(set ArtifactSet) error {
-	if !validClient(set.ClientID) || set.BundleVersion != BundleVersion || set.ContractVersion != ContractVersion || set.ArtifactFormatVersion != artifactFormatVersions[set.ClientID] || set.SourceIdentity.ContractSHA256 != currentContractSHA256 || set.SourceIdentity.ConformanceSuiteSHA256 != currentSuiteSHA256 || artifactSetDigest(set.Artifacts) != set.DigestSHA256 || capabilityConfigDigest(set.CapabilityConfig) != set.CapabilityConfigSHA256 {
+	formatVersion, supported := artifactFormatVersion(set.ClientID)
+	if !supported || set.BundleVersion != BundleVersion || set.ContractVersion != ContractVersion || set.ArtifactFormatVersion != formatVersion || set.SourceIdentity.ContractSHA256 != currentContractSHA256 || set.SourceIdentity.ConformanceSuiteSHA256 != currentSuiteSHA256 || artifactSetDigest(set.Artifacts) != set.DigestSHA256 || capabilityConfigDigest(set.CapabilityConfig) != set.CapabilityConfigSHA256 {
 		return fmt.Errorf("invalid artifact set")
 	}
 	want := canonicalClientInventories[set.ClientID]
@@ -1051,7 +1084,7 @@ func missingTools(c CapabilityConfig, got []string) []string {
 }
 
 func stateFor(set ArtifactSet, active []activeArtifact, tx string) installState {
-	st := installState{SchemaVersion: 1, Client: set.ClientID, BundleVersion: set.BundleVersion, ContractVersion: set.ContractVersion, ArtifactFormatVersion: set.ArtifactFormatVersion, CapabilityConfig: set.CapabilityConfig, CapabilityConfigSHA256: set.CapabilityConfigSHA256, PreviousTransaction: tx, ContractSHA256: set.SourceIdentity.ContractSHA256, SuiteSHA256: set.SourceIdentity.ConformanceSuiteSHA256}
+	st := installState{SchemaVersion: installerStateSchema, Client: set.ClientID, BundleVersion: set.BundleVersion, ContractVersion: set.ContractVersion, ArtifactFormatVersion: set.ArtifactFormatVersion, CapabilityConfig: set.CapabilityConfig, CapabilityConfigSHA256: set.CapabilityConfigSHA256, PreviousTransaction: tx, ContractSHA256: set.SourceIdentity.ContractSHA256, SuiteSHA256: set.SourceIdentity.ConformanceSuiteSHA256}
 	for _, a := range active {
 		st.Owned = append(st.Owned, ownedState{a.Path, a.Kind, a.ManagedDigest})
 	}
@@ -1068,7 +1101,8 @@ func stateDigest(st installState) string {
 	return digest(b)
 }
 func compatibleState(st installState, c conformance.ClientFamily) error {
-	if st.SchemaVersion != 1 || st.Client != c || !validClient(c) || st.BundleVersion != BundleVersion || st.ContractVersion != ContractVersion || st.ArtifactFormatVersion != artifactFormatVersions[c] || st.ContractSHA256 != currentContractSHA256 || st.SuiteSHA256 != currentSuiteSHA256 || !validConfigState(st.CapabilityConfig.Memory) || !validConfigState(st.CapabilityConfig.Documents) || !validConfigState(st.CapabilityConfig.Todoist) || st.CapabilityConfigSHA256 != capabilityConfigDigest(st.CapabilityConfig) || st.DigestSHA256 != stateDigest(st) || len(st.Owned) < 1 || len(st.Owned) > 16 {
+	formatVersion, supported := artifactFormatVersion(c)
+	if st.SchemaVersion != installerStateSchema || st.Client != c || !supported || st.BundleVersion != BundleVersion || st.ContractVersion != ContractVersion || st.ArtifactFormatVersion != formatVersion || st.ContractSHA256 != currentContractSHA256 || st.SuiteSHA256 != currentSuiteSHA256 || !validConfigState(st.CapabilityConfig.Memory) || !validConfigState(st.CapabilityConfig.Documents) || !validConfigState(st.CapabilityConfig.Todoist) || st.CapabilityConfigSHA256 != capabilityConfigDigest(st.CapabilityConfig) || st.DigestSHA256 != stateDigest(st) || len(st.Owned) < 1 || len(st.Owned) > 16 {
 		return fmt.Errorf("incompatible installation state")
 	}
 	seenOwned := map[string]bool{}
@@ -1494,7 +1528,7 @@ func restoreBackup(r *rootContext, tx string, m backupManifest, failAfter int, p
 func removeCodex(current []byte) ([]byte, error) {
 	begins, ends := markerLines(current, codexBegin), markerLines(current, codexEnd)
 	if len(begins) != 1 || len(ends) != 1 {
-		return nil, fmt.Errorf("Codex managed markers invalid")
+		return nil, fmt.Errorf("invalid Codex managed markers")
 	}
 	b := begins[0][0]
 	e := ends[0][1]
@@ -1558,18 +1592,17 @@ func openValidatedRoot(name string) (*rootContext, error) {
 	if err != nil {
 		return nil, err
 	}
-	mutation, err := openMutationRoot(name)
-	if err != nil {
-		read.Close()
-		return nil, err
-	}
 	readInfo, err := read.Stat(".")
 	if err != nil {
-		mutation.Close()
 		read.Close()
 		return nil, err
 	}
 	rd, ri := platformFileIdentity(readInfo)
+	mutation, err := openMutationRoot(name, rd, ri)
+	if err != nil {
+		read.Close()
+		return nil, err
+	}
 	md, mi, err := mutation.identity()
 	if err != nil || rd != md || ri != mi {
 		mutation.Close()
@@ -1589,7 +1622,7 @@ func safeRead(rootName, p string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	return readRoot(r, p)
 }
 func readOptional(r *rootContext, p string) ([]byte, bool, error) {
@@ -1725,13 +1758,9 @@ func safeToken(s string) bool {
 	}
 	return true
 }
-func lockPath(c conformance.ClientFamily) string {
-	return ".personal-memory-integration/locks/" + string(c) + ".lock"
-}
 func validClient(c conformance.ClientFamily) bool {
 	return c == conformance.ClientCodex || c == conformance.ClientClaude || c == conformance.ClientChatGPT || c == conformance.ClientGenericMCP
 }
-func targetIdentity(root string) string { return digest([]byte(filepath.Clean(root))) }
 func activeOverridePaths(set ArtifactSet) ([]string, error) {
 	prefix := "overrides/" + strings.ReplaceAll(string(set.ClientID), "_", "-") + "/"
 	out := make([]string, 0, len(set.OverridePaths))

@@ -173,19 +173,19 @@ Todoist is independent of fact memory and document search. When Todoist is disab
 `render` writes the validated source artifact inventory without activating client-native paths or writing installer state:
 
 ```bash
-mkdir -p ./rendered-generic
+mkdir -p "$(pwd)/rendered-generic"
 ./memory-integration render \
   --client generic_mcp \
-  --target-root ./rendered-generic
+  --target-root "$(pwd)/rendered-generic"
 ```
 
 For ChatGPT, render or install into a dedicated export directory:
 
 ```bash
-mkdir -p ./chatgpt-export
+mkdir -p "$(pwd)/chatgpt-export"
 ./memory-integration install \
   --client chatgpt \
-  --target-root ./chatgpt-export \
+  --target-root "$(pwd)/chatgpt-export" \
   --capability memory=available \
   --capability documents=disabled \
   --capability todoist=disabled \
@@ -221,10 +221,10 @@ cat >./memory-tools.json <<'JSON'
 }
 JSON
 
-mkdir -p ./personal-memory-policy
+mkdir -p "$(pwd)/personal-memory-policy"
 ./memory-integration install \
   --client generic_mcp \
-  --target-root ./personal-memory-policy \
+  --target-root "$(pwd)/personal-memory-policy" \
   --capability memory=available \
   --capability documents=available \
   --capability todoist=disabled \
@@ -256,7 +256,7 @@ mcp_servers:
 
 If MCP OAuth is enabled on the Personal Memory server, use `auth: oauth` instead of the static header and run `hermes mcp login personal_memory`. After editing the configuration, start a new session or use `/reload-mcp`. Hermes prefixes registered tools with the server name, for example `mcp_personal_memory_recall_facts`; discovery evidence for this bundle still records the raw server tool name `recall_facts`.
 
-Hermes loads `.hermes.md` first, then `AGENTS.md`, then `CLAUDE.md` from the active project. Add the canonical policy from the generated `generic-mcp/policy.json` and its tool mapping to the selected project instruction context. Do not add only a pointer that the agent may never read: the policy must be injected by the host wrapper or included in the loaded context. Keep project-specific refinements outside the generated files so an update cannot overwrite them.
+Hermes loads only the first matching project context file from the active project, in this order: `.hermes.md`, `AGENTS.md`, then `CLAUDE.md`. Put the generated canonical policy and tool mapping directly into that selected context file. Do not add only a pointer that the agent may never read: the policy must be injected by the host wrapper or included in the loaded context. Keep project-specific refinements outside the generated files so an update cannot overwrite them.
 
 Verify connectivity and the effective tool filter before declaring a capability available:
 

@@ -108,15 +108,22 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "discovery flags and --discovery-file are mutually exclusive")
 			return 2
 		}
-		data, e := os.ReadFile(*discoveryFile)
+		file, e := os.Open(*discoveryFile)
 		if e != nil {
 			fmt.Fprintln(stderr, "cannot read discovery file")
 			return 1
 		}
-		if e = json.Unmarshal(data, &discovery); e != nil {
+		fromFile, decodeErr := decodeDiscovery(file)
+		closeErr := file.Close()
+		if decodeErr != nil {
 			fmt.Fprintln(stderr, "invalid discovery file")
 			return 2
 		}
+		if closeErr != nil {
+			fmt.Fprintln(stderr, "cannot read discovery file")
+			return 1
+		}
+		discovery = fromFile
 	}
 	client, err := parseClient(*clientValue)
 	if err != nil {
@@ -150,6 +157,31 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return emit(r, e, stdout, stderr)
 	}
 	return 2
+}
+
+func decodeDiscovery(input io.Reader) (integrationbundle.Discovery, error) {
+	const inputLimit = 1 << 20
+	var discovery integrationbundle.Discovery
+	data, err := io.ReadAll(io.LimitReader(input, inputLimit+1))
+	if err != nil {
+		return discovery, err
+	}
+	if len(data) > inputLimit {
+		return discovery, fmt.Errorf("discovery input exceeds limit")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&discovery); err != nil {
+		return discovery, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return discovery, fmt.Errorf("trailing JSON value")
+		}
+		return discovery, err
+	}
+	return discovery, nil
 }
 
 func runConformanceAdapter(args []string, stdin io.Reader, stdout, stderr io.Writer) int {

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"reflect"
 	"regexp"
 	"sort"
@@ -24,20 +25,20 @@ var canonicalInstructionPaths = map[conformance.ClientFamily][]string{
 	conformance.ClientGenericMCP: {"generic-mcp/policy.json"},
 }
 
-var markdownRuleID = regexp.MustCompile(`(?m)^- \[([a-z][a-z0-9_.]+)\] `)
 var markdownPolicyPayload = regexp.MustCompile(`(?m)^<!-- PERSONAL_MEMORY_CANONICAL_POLICY_BASE64 ([A-Za-z0-9+/=]+) -->$`)
 
 type templateData struct {
-	BundleVersion                  string
-	ContractVersion                string
-	Memory                         CapabilityState
-	Documents                      CapabilityState
-	Todoist                        CapabilityState
-	CanonicalPolicyMarkdown        string
-	CanonicalPolicyJSON            string
-	CanonicalPolicyBase64          string
-	OmittedCanonicalPolicyMarkdown string
-	OmittedCanonicalPolicyJSON     string
+	BundleVersion           string
+	ContractVersion         string
+	Memory                  CapabilityState
+	Documents               CapabilityState
+	Todoist                 CapabilityState
+	CanonicalPolicyMarkdown string
+	CanonicalPolicyJSON     string
+	CanonicalPolicyBase64   string
+	MemoryToolsJSON         string
+	DocumentsToolsJSON      string
+	TodoistToolsJSON        string
 }
 
 func (b *Bundle) Render(config CapabilityConfig) ([]ArtifactSet, error) {
@@ -62,10 +63,15 @@ func (b *Bundle) renderUnchecked(config CapabilityConfig) ([]ArtifactSet, error)
 	if err != nil {
 		return nil, fmt.Errorf("marshal canonical policy: %w", err)
 	}
+	memoryTools, documentsTools, todoistTools, err := b.capabilityToolJSON()
+	if err != nil {
+		return nil, err
+	}
 	data := templateData{
 		BundleVersion: b.manifest.BundleVersion, ContractVersion: b.manifest.ContractVersion,
 		Memory: config.Memory, Documents: config.Documents, Todoist: config.Todoist,
 		CanonicalPolicyMarkdown: renderCanonicalPolicyMarkdown(b.policy), CanonicalPolicyJSON: string(policyJSON), CanonicalPolicyBase64: base64.StdEncoding.EncodeToString(policyJSON),
+		MemoryToolsJSON: memoryTools, DocumentsToolsJSON: documentsTools, TodoistToolsJSON: todoistTools,
 	}
 	configDigest := capabilityConfigDigest(config)
 	sets := make([]ArtifactSet, 0, len(b.manifest.Clients))
@@ -150,9 +156,6 @@ func (b *Bundle) ValidateRendered(sets []ArtifactSet) error {
 				return fmt.Errorf("canonical policy in %s/%s does not deep-equal bundle policy", client, artifactPath)
 			}
 			got := policy.AllRuleIDs()
-			if err != nil {
-				return fmt.Errorf("semantic policy coverage for %s/%s: %w", client, artifactPath, err)
-			}
 			if !reflect.DeepEqual(got, want) {
 				return fmt.Errorf("semantic policy coverage for %s/%s is incomplete or reordered", client, artifactPath)
 			}
@@ -215,11 +218,17 @@ func (b *Bundle) renderTemplate(name string, data templateData) ([]byte, error) 
 
 func (b *Bundle) matchesAllowedWrapper(templateName string, content []byte) bool {
 	policyJSON, _ := json.Marshal(b.policy)
+	policyMarkdown := renderCanonicalPolicyMarkdown(b.policy)
+	policyBase64 := base64.StdEncoding.EncodeToString(policyJSON)
+	memoryTools, documentsTools, todoistTools, err := b.capabilityToolJSON()
+	if err != nil {
+		return false
+	}
 	states := []CapabilityState{CapabilityAvailable, CapabilityDisabled, CapabilityUnavailable}
 	for _, memory := range states {
 		for _, documents := range states {
 			for _, todoist := range states {
-				data := templateData{BundleVersion: b.manifest.BundleVersion, ContractVersion: b.manifest.ContractVersion, Memory: memory, Documents: documents, Todoist: todoist, CanonicalPolicyMarkdown: renderCanonicalPolicyMarkdown(b.policy), CanonicalPolicyJSON: string(policyJSON), CanonicalPolicyBase64: base64.StdEncoding.EncodeToString(policyJSON)}
+				data := templateData{BundleVersion: b.manifest.BundleVersion, ContractVersion: b.manifest.ContractVersion, Memory: memory, Documents: documents, Todoist: todoist, CanonicalPolicyMarkdown: policyMarkdown, CanonicalPolicyJSON: string(policyJSON), CanonicalPolicyBase64: policyBase64, MemoryToolsJSON: memoryTools, DocumentsToolsJSON: documentsTools, TodoistToolsJSON: todoistTools}
 				expected, err := b.renderTemplate(templateName, data)
 				if err == nil && bytes.Equal(expected, content) {
 					return true
@@ -253,11 +262,38 @@ func artifactSetDigest(artifacts []Artifact) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func writeFramed(h interface{ Write([]byte) (int, error) }, value []byte) {
+func writeFramed(h io.Writer, value []byte) {
 	var length [8]byte
 	binary.BigEndian.PutUint64(length[:], uint64(len(value)))
 	_, _ = h.Write(length[:])
 	_, _ = h.Write(value)
+}
+
+func (b *Bundle) capabilityToolJSON() (string, string, string, error) {
+	tools := map[conformance.Capability][]string{}
+	for _, mapping := range b.manifest.OptionalCapabilities {
+		tools[mapping.ID] = mapping.Tools
+	}
+	encode := func(capability conformance.Capability) (string, error) {
+		data, err := json.Marshal(tools[capability])
+		if err != nil {
+			return "", fmt.Errorf("marshal %s capability tools: %w", capability, err)
+		}
+		return string(data), nil
+	}
+	memory, err := encode(conformance.CapabilityMemory)
+	if err != nil {
+		return "", "", "", err
+	}
+	documents, err := encode(conformance.CapabilityDocuments)
+	if err != nil {
+		return "", "", "", err
+	}
+	todoist, err := encode(conformance.CapabilityTodoist)
+	if err != nil {
+		return "", "", "", err
+	}
+	return memory, documents, todoist, nil
 }
 
 func capabilityConfigDigest(config CapabilityConfig) string {
