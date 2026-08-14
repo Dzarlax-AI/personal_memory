@@ -131,7 +131,13 @@ Viz does not filter nodes by lifecycle state. Its privacy-safe summaries include
 
 Permanent, disputed, and current canonical records are protected. Age or low recall activity alone is review-only and never makes a record eligible for quarantine. Superseded retention is measured from the server-recorded `lifecycle_transitioned_at`, never the unrelated content `updated_at`. A superseded record without a valid transition timestamp is insufficient evidence for retention eligibility and is reported as malformed/review-only.
 
-`forget_old(dry_run=true)` remains only as a content-free compatibility preview. `dry_run=false` fails before scanning or mutation. Quarantine, restore, and snapshot-gated purge are intentionally not implemented by the analysis stage.
+`forget_old(dry_run=true)` remains only as a content-free compatibility preview. `dry_run=false` fails before scanning or mutation.
+
+## Manifest-bound quarantine and restore
+
+`cmd/maintenance quarantine` and `restore` are explicit operator actions. Each requires `--qdrant-url`, `--collection`, a saved `--manifest`, and a private `--journal`; quarantine additionally accepts repeatable `--point-id` or `--eligible`. Restore accepts only explicit IDs. The command rejects unknown or trailing JSON in a bounded manifest, mismatched schema/policy/batch/collection values, IDs absent from the manifest, duplicate selections, protected or ineligible records, and payload-fingerprint drift.
+
+The service writes only the complete typed maintenance shape: quarantine sets `maintenance_status=quarantined` with a closed reason, timestamp, and manifest batch ID; restore sets `maintenance_status=active` and removes all quarantine-only fields. It re-reads after every dispatched write. Qdrant has no arbitrary payload-fingerprint compare-and-set, so a concurrent writer can leave an irreducible race; any failed post-write verification is recorded as `ambiguous`, not `updated`. Result journals contain only operation, batch ID, point IDs, and closed statuses, use mode `0600`, and are atomically replaced. Purge and snapshots remain later, separate work.
 
 ## Rollout, future writes, and rollback
 

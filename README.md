@@ -299,7 +299,31 @@ go build -o ./maintenance ./cmd/maintenance
   --output /secure/path/memory-maintenance-analysis.json
 ```
 
-The output manifest is created exclusively with mode `0600`. It contains point IDs, closed candidate classes, validated timestamps, policy settings, and metadata fingerprints, but no fact text, unvalidated metadata strings, or vectors. Superseded retention uses the server-recorded lifecycle transition time rather than content `updated_at`. Analysis is read-only: quarantine, restore, and purge are staged follow-up work and are not available in this release.
+The output manifest is created exclusively with mode `0600`. It contains point IDs, closed candidate classes, validated timestamps, policy settings, and metadata fingerprints, but no fact text, unvalidated metadata strings, or vectors. Superseded retention uses the server-recorded lifecycle transition time rather than content `updated_at`.
+
+To quarantine only records named by that saved manifest, use an explicit collection, journal, and either exact IDs or all eligible findings:
+
+```bash
+./maintenance quarantine \
+  --qdrant-url http://127.0.0.1:6333 \
+  --collection memory \
+  --manifest /secure/path/memory-maintenance-analysis.json \
+  --journal /secure/path/memory-maintenance-quarantine.json \
+  --eligible
+```
+
+Restore requires the same explicit inputs and IDs from a compatible manifest:
+
+```bash
+./maintenance restore \
+  --qdrant-url http://127.0.0.1:6333 \
+  --collection memory \
+  --manifest /secure/path/memory-maintenance-analysis.json \
+  --journal /secure/path/memory-maintenance-restore.json \
+  --point-id 12345
+```
+
+Both actions validate the immutable manifest batch and payload fingerprint before writing, create a mode-`0600` content-free result journal, and are idempotent for the same target. Qdrant has no payload-fingerprint compare-and-set: a concurrent change that cannot be verified after the write is reported as `ambiguous`, never as success. Purge, snapshots, and scheduled maintenance remain out of scope.
 
 ### Load operational context at session start
 

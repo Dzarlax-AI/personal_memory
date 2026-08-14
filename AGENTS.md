@@ -46,7 +46,7 @@ cmd/
   server/main.go           — entrypoint, Chi router, graceful shutdown
   indexer/main.go          — standalone RAG indexer binary (cron-friendly)
   memory-integration/      — versioned client bundle install/update/verify/rollback/render and artifact-conformance adapter
-  maintenance/             — read-only lifecycle-aware maintenance analyzer
+  maintenance/             — manifest-bound lifecycle maintenance analyzer/actions
   eval-memory/main.go      — schema-v3 retrieval runner, comparison gate, and TEI materializer
   migrate-memory-lifecycle/ — dry-run/apply/rollback lifecycle migration
 internal/
@@ -194,7 +194,7 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 ### memory/lifecycle and lifecycle_adapter.go
 - `lifecycle.Parse(payload, pointID)` is the single normalization and validation boundary. Only a payload with no lifecycle fields is treated as legacy current; malformed explicit metadata returns a non-sensitive invalid view and must not panic.
 - Lifecycle transitions are explicit, reversible, and idempotent when target invariants pass. `lifecycle_transitioned_at` is server-recorded and preserved across idempotent same-state writes; maintenance retention never substitutes content `updated_at`. `permanent` controls retention protection only, while expired `valid_until` excludes even current facts from current-context flows.
-- Ordinary memory reads accept explicit `maintenance_status=active` and legacy missing status. Quarantined or malformed maintenance records are excluded; `cmd/maintenance analyze` is the content-free read-only inspection path.
+- Ordinary memory reads accept explicit `maintenance_status=active` and legacy missing status. Quarantined or malformed maintenance records are excluded; `cmd/maintenance analyze` is the content-free inspection path, while explicit manifest-bound `quarantine`/`restore` actions produce private content-free journals. No payload-fingerprint CAS exists in Qdrant: an unverifiable concurrent write is ambiguous, not success.
 
 ### qdrant/client.go
 - Collection name is a struct field — `NewClient(url, collection string)` — one client per collection

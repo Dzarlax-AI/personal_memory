@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMutationsWaitForCompletionAndValidateStatus(t *testing.T) {
@@ -532,6 +533,74 @@ func TestReplaceLifecyclePayloadRejectsUnrelatedKeysBeforeRequest(t *testing.T) 
 	}
 	if requests != 0 {
 		t.Fatalf("requests = %d, want 0", requests)
+	}
+}
+
+func TestMaintenanceMutationsUseCompleteTypedStrongBatches(t *testing.T) {
+	var got []struct {
+		wait     string
+		ordering string
+		body     map[string]interface{}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		request := struct {
+			wait     string
+			ordering string
+			body     map[string]interface{}
+		}{wait: r.URL.Query().Get("wait"), ordering: r.URL.Query().Get("ordering")}
+		if err := json.NewDecoder(r.Body).Decode(&request.body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		got = append(got, request)
+		_, _ = w.Write([]byte(`{"status":"ok","result":[{"status":"completed"},{"status":"completed"}]}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "memory")
+	if err := client.QuarantineMaintenance(context.Background(), "12345", time.Date(2026, 8, 14, 10, 0, 0, 0, time.UTC), "expired", "batch"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RestoreMaintenance(context.Background(), "4f08ef2a-42c0-45df-a6c3-5ca86db4ddf8"); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].wait != "true" || got[0].ordering != "strong" || got[1].wait != "true" || got[1].ordering != "strong" {
+		t.Fatalf("requests = %#v", got)
+	}
+	operations := got[0].body["operations"].([]interface{})
+	set := operations[0].(map[string]interface{})["set_payload"].(map[string]interface{})
+	if payload := set["payload"].(map[string]interface{}); !reflect.DeepEqual(payload, map[string]interface{}{"maintenance_status": "quarantined", "quarantined_at": "2026-08-14T10:00:00Z", "quarantine_reason": "expired", "quarantine_batch_id": "batch"}) {
+		t.Fatalf("set payload = %#v", set["payload"])
+	}
+	if point := set["points"].([]interface{})[0]; point != float64(12345) {
+		t.Fatalf("point = %#v", point)
+	}
+	restoreOperations := got[1].body["operations"].([]interface{})
+	restoreSet := restoreOperations[0].(map[string]interface{})["set_payload"].(map[string]interface{})
+	if !reflect.DeepEqual(restoreSet["payload"], map[string]interface{}{"maintenance_status": "active"}) {
+		t.Fatalf("restore set = %#v", restoreSet)
+	}
+	restoreDelete := restoreOperations[1].(map[string]interface{})["delete_payload"].(map[string]interface{})
+	if !reflect.DeepEqual(restoreDelete["keys"], []interface{}{"quarantined_at", "quarantine_reason", "quarantine_batch_id"}) {
+		t.Fatalf("restore delete = %#v", restoreDelete)
+	}
+	for _, invalid := range []func() error{
+		func() error {
+			return client.QuarantineMaintenance(context.Background(), "", time.Now(), "expired", "batch")
+		},
+		func() error {
+			return client.QuarantineMaintenance(context.Background(), "1", time.Time{}, "expired", "batch")
+		},
+		func() error {
+			return client.QuarantineMaintenance(context.Background(), "1", time.Now(), "unknown", "batch")
+		},
+		func() error {
+			return client.QuarantineMaintenance(context.Background(), "1", time.Now(), "expired", "")
+		},
+		func() error { return client.RestoreMaintenance(context.Background(), "") },
+	} {
+		if err := invalid(); err == nil {
+			t.Fatal("expected typed validation error")
+		}
 	}
 }
 
