@@ -10,7 +10,7 @@ UNPKG_BASE := https://unpkg.com
 help:
 	@echo "Targets:"
 	@echo "  make dev-deps  — fetch browser bundles into $(DS_DIR)"
-	@echo "  make build     — build all seven binaries (runs dev-deps first)"
+	@echo "  make build     — build all eight binaries (runs dev-deps first)"
 	@echo "  make test      — verify assets + vet + test + build all binaries"
 	@echo "  make eval-public — run the public retrieval dataset against Qdrant"
 	@echo "  make eval-public-v4 — replay public document-routing evidence"
@@ -39,14 +39,14 @@ verify-assets:
 	fi
 
 build: dev-deps
-	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory ./cmd/conformance-memory ./cmd/memory-integration
+	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory ./cmd/conformance-memory ./cmd/memory-integration ./cmd/maintenance
 
 vet:
 	go vet ./...
 
 test: dev-deps vet
 	go test ./...
-	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory ./cmd/conformance-memory ./cmd/memory-integration
+	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory ./cmd/conformance-memory ./cmd/memory-integration ./cmd/maintenance
 
 QDRANT_TEST_URL ?= http://127.0.0.1:6333
 # eval-memory compare uses this distinct status for an expected gate rejection;

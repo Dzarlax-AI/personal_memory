@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Dzarlax-AI/personal-memory/internal/memory/lifecycle"
+	"github.com/Dzarlax-AI/personal-memory/internal/memory/maintenance"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 	"github.com/go-chi/chi/v5"
 )
@@ -210,7 +211,7 @@ func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) apiFacts(w http.ResponseWriter, r *http.Request) {
-	points, err := h.qdrant.ScrollAll(r.Context(), nil, false)
+	points, err := h.qdrant.ScrollAll(r.Context(), maintenance.ActiveFilter(nil), false)
 	if err != nil {
 		writeInternalError(w, "unable to load facts")
 		return
@@ -218,6 +219,9 @@ func (h *Handler) apiFacts(w http.ResponseWriter, r *http.Request) {
 
 	nodes := make([]factSummary, 0, len(points))
 	for _, p := range points {
+		if !maintenance.IsActive(p.Payload) {
+			continue
+		}
 		nodes = append(nodes, pointToSummary(p))
 	}
 
@@ -238,6 +242,10 @@ func (h *Handler) apiFactDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !found {
+		http.Error(w, "fact not found", http.StatusNotFound)
+		return
+	}
+	if !maintenance.IsActive(point.Payload) {
 		http.Error(w, "fact not found", http.StatusNotFound)
 		return
 	}
@@ -303,7 +311,7 @@ func (h *Handler) scrollGraphPoints(ctx context.Context, maxNodes int, namespace
 
 func (h *Handler) scrollGraphPointsWithLimit(ctx context.Context, maxNodes, maxScanned int, namespace, tag, primaryTag, textState string) ([]qdrant.ScrollPoint, bool, error) {
 	points := make([]qdrant.ScrollPoint, 0, maxNodes+1)
-	filters := qdrantGraphFilters(namespace, tag, primaryTag)
+	filters := maintenance.ActiveFilter(qdrantGraphFilters(namespace, tag, primaryTag))
 	scanned := 0
 	var offset interface{}
 	for {
@@ -316,6 +324,9 @@ func (h *Handler) scrollGraphPointsWithLimit(ctx context.Context, maxNodes, maxS
 			return nil, false, fmt.Errorf("%w: scanned more than %d points; narrow the filters", errGraphScanLimit, maxScanned)
 		}
 		for _, point := range page.Points {
+			if !maintenance.IsActive(point.Payload) {
+				continue
+			}
 			if !graphPointMatches(point, namespace, tag, primaryTag, textState) {
 				continue
 			}
@@ -741,6 +752,15 @@ func (h *Handler) apiUpdateFactTags(w http.ResponseWriter, r *http.Request) {
 	tags, primaryTag, err := normalizeFactTags(req.Tags, req.PrimaryTag)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	point, found, err := h.qdrant.Get(r.Context(), id)
+	if err != nil {
+		writeInternalError(w, "unable to load fact")
+		return
+	}
+	if !found || !maintenance.IsActive(point.Payload) {
+		http.Error(w, "fact not found", http.StatusNotFound)
 		return
 	}
 	if err := h.qdrant.SetPayload(r.Context(), id, map[string]interface{}{"tags": tags, "primary_tag": primaryTag}); err != nil {

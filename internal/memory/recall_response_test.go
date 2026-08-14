@@ -88,9 +88,13 @@ func TestRecallFactsLifecycleModesControlFiltersAndResults(t *testing.T) {
 			if !reflect.DeepEqual(gotTexts, tt.wantTexts) {
 				t.Fatalf("texts = %v, want %v", gotTexts, tt.wantTexts)
 			}
-			_, hasLifecycleFilter := searchFilter["should"]
+			encodedFilter, _ := json.Marshal(searchFilter)
+			hasLifecycleFilter := strings.Contains(string(encodedFilter), `"lifecycle_state"`)
 			if hasLifecycleFilter != tt.wantLifecycle {
 				t.Fatalf("filter = %#v, lifecycle should present=%v", searchFilter, tt.wantLifecycle)
+			}
+			if !strings.Contains(string(encodedFilter), `"maintenance_status"`) {
+				t.Fatalf("filter = %#v, maintenance filter missing", searchFilter)
 			}
 		})
 	}

@@ -287,9 +287,19 @@ With RAG enabled, the client calls `search_documents`. Hierarchical mode first i
 
 ### Maintain stored context safely
 
-> Show me facts older than 180 days that would be removed, but do not delete anything.
+The legacy `forget_old` tool is now a deprecated, read-only compatibility analysis. It emits only counts, never fact text. Calls with `dry_run=false` fail closed and do not delete anything.
 
-`forget_old` defaults to `dry_run=true` and never removes facts marked `permanent=true`. Use exact `point_id` values for deterministic updates or deletions when multiple semantic matches are close.
+For a deterministic content-free report, build and run the operator CLI:
+
+```bash
+go build -o ./maintenance ./cmd/maintenance
+./maintenance analyze \
+  --qdrant-url http://127.0.0.1:6333 \
+  --collection memory \
+  --output /secure/path/memory-maintenance-analysis.json
+```
+
+The output manifest is created exclusively with mode `0600`. It contains point IDs, closed candidate classes, validated timestamps, policy settings, and metadata fingerprints, but no fact text, unvalidated metadata strings, or vectors. Superseded retention uses the server-recorded lifecycle transition time rather than content `updated_at`. Analysis is read-only: quarantine, restore, and purge are staged follow-up work and are not available in this release.
 
 ### Load operational context at session start
 
@@ -319,7 +329,7 @@ The MCP schema accepts tags as one comma-separated string, for example `tags="po
 
 ### Lifetime
 
-- `permanent=true` prevents `forget_old` from deleting a fact; it does not make the fact current or authoritative.
+- `permanent=true` protects a fact from lifecycle-aware maintenance eligibility; it does not make the fact current or authoritative.
 - `valid_until=YYYY-MM-DD` excludes an expired fact from current-context flows.
 - `recall_count` and `last_recalled_at` record how often stored context is used.
 
@@ -360,7 +370,7 @@ The RAG index is separate from the fact collection. Documents are split along Ma
 | `update_fact(new_fact, old_query?, point_id?, tags?, primary_tag?, namespace?, permanent?, lifecycle_state?, canonical?, provenance_source?, provenance_reference?, verified_at?, supersedes?, superseded_by?)` | Replace a fact selected by a safe semantic match or exact ID and optionally replace its lifecycle metadata. |
 | `set_fact_lifecycle(point_id, lifecycle_state, canonical?, provenance_source?, provenance_reference?, verified_at?, supersedes?, superseded_by?)` | Replace lifecycle metadata for an exact point without changing text or embedding. |
 | `delete_fact(query?, point_id?, namespace?)` | Delete a fact selected by a safe semantic match or exact ID. |
-| `forget_old(days=90, namespace?, dry_run=true)` | Preview or remove old non-permanent facts. |
+| `forget_old(days=90, namespace?, dry_run=true)` | Deprecated content-free maintenance preview. Direct deletion is refused. |
 | `import_facts(facts)` | Import a JSON-array string with at most 1,000 entries and 4 MiB. |
 
 ### Memory: read
@@ -438,7 +448,7 @@ Canonical verification:
 make test
 ```
 
-This downloads and checksum-verifies pinned visualization assets, runs `go vet ./...`, runs all Go tests, and builds all six commands.
+This downloads and checksum-verifies pinned visualization assets, runs `go vet ./...`, runs all Go tests, and builds all eight commands.
 
 Individual commands:
 
@@ -446,7 +456,7 @@ Individual commands:
 make dev-deps
 go test ./...
 go test -race ./...
-go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory ./cmd/conformance-memory
+go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory ./cmd/conformance-memory ./cmd/memory-integration ./cmd/maintenance
 docker build -t personal-memory .
 ```
 
@@ -495,12 +505,13 @@ cmd/
   eval-memory/            retrieval evaluation, comparison, and materialization CLI
   migrate-memory-ids/     namespace-aware ID migration
   migrate-memory-lifecycle/ explicit lifecycle migration and rollback
+  maintenance/            read-only lifecycle-aware maintenance analysis
 internal/
   backup/                 Qdrant snapshot loop
   config/                 environment loading and validation
   embeddings/             bounded TEI HTTP client
   embeddingidentity/      fail-closed model and collection identity guard
-  memory/                 memory tools, cache, IDs, recall counter
+  memory/                 memory tools, cache, IDs, recall counter, maintenance policy
   memorymigration/        dry-run/apply migration logic
   lifecyclemigration/     lifecycle dry-run/apply/resume/rollback logic
   middleware/             authentication and request limits

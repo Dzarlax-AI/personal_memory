@@ -293,6 +293,20 @@ func TestFactDetailReturnsPayloadForSelectedStringUUID(t *testing.T) {
 	}
 }
 
+func TestFactDetailHidesQuarantinedRecordByDefault(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		mustWriteTestResponse(t, w, `{"result":{"id":42,"payload":{"text":"hidden","maintenance_status":"quarantined","quarantined_at":"2026-08-14T00:00:00Z","quarantine_reason":"expired","quarantine_batch_id":"batch-1"}}}`)
+	}))
+	defer backend.Close()
+	h := NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65)
+	rr := httptest.NewRecorder()
+	h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/facts/42", nil))
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("GET quarantined detail: got %d (%s), want 404", rr.Code, rr.Body.String())
+	}
+}
+
 func TestDocumentsResponseUsesRelativePathsAndCachesFullScan(t *testing.T) {
 	var scanCalls, countCalls int
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -875,15 +889,11 @@ func TestScrollGraphPointsPushesRepresentableFiltersToQdrant(t *testing.T) {
 	if !ok {
 		t.Fatalf("request filter = %#v, want object", requestBody["filter"])
 	}
-	must, ok := filter["must"].([]interface{})
-	if !ok || len(must) != 3 {
-		t.Fatalf("filter.must = %#v, want namespace/tag/primary_tag conditions", filter["must"])
-	}
 	encoded, err := json.Marshal(filter)
 	if err != nil {
 		t.Fatalf("marshal filter: %v", err)
 	}
-	for _, want := range []string{`"namespace"`, `"tags"`, `"primary_tag"`} {
+	for _, want := range []string{`"namespace"`, `"tags"`, `"primary_tag"`, `"maintenance_status"`, `"active"`} {
 		if !strings.Contains(string(encoded), want) {
 			t.Errorf("Qdrant filter %s does not contain %s", encoded, want)
 		}

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
+	"github.com/Dzarlax-AI/personal-memory/internal/memory/lifecycle"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 )
 
@@ -56,8 +57,23 @@ func TestSetFactLifecycleUsesExactLifecycleOnlyBatch(t *testing.T) {
 	if strings.Contains(string(encodedBatch), "PRIVATE FACT") || strings.Contains(string(encodedBatch), "recall_count") {
 		t.Fatalf("batch leaked unrelated payload: %s", encodedBatch)
 	}
+	if !strings.Contains(string(encodedBatch), "lifecycle_transitioned_at") {
+		t.Fatalf("batch omitted lifecycle transition time: %s", encodedBatch)
+	}
 	if _, found := cache.GetRecall("cached"); found {
 		t.Fatal("cache was not invalidated")
+	}
+}
+
+func TestLifecycleTransitionTimeIsStableForIdempotentStateUpdates(t *testing.T) {
+	const previous = "2026-08-01T00:00:00Z"
+	const now = "2026-08-14T00:00:00Z"
+	current := lifecycle.View{State: lifecycle.Superseded, Valid: true, TransitionedAt: previous}
+	if got := lifecycleTransitionedAt(current, lifecycle.View{State: lifecycle.Superseded, Valid: true}, now); got != previous {
+		t.Fatalf("same-state transition = %q, want %q", got, previous)
+	}
+	if got := lifecycleTransitionedAt(current, lifecycle.View{State: lifecycle.Current, Valid: true}, now); got != now {
+		t.Fatalf("changed-state transition = %q, want %q", got, now)
 	}
 }
 
@@ -175,6 +191,10 @@ func TestStoreFactWritesExplicitLifecyclePayload(t *testing.T) {
 	searches := 0
 	var stored map[string]interface{}
 	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/points/") {
+			http.NotFound(w, r)
+			return
+		}
 		if strings.HasSuffix(r.URL.Path, "/points/search") {
 			searches++
 			_, _ = w.Write([]byte(`{"result":[]}`))
@@ -366,6 +386,10 @@ func TestImportFactsPreservesLifecycleAndDoesNotLogPrivateText(t *testing.T) {
 	defer embedServer.Close()
 	var stored map[string]interface{}
 	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/points/") {
+			http.NotFound(w, r)
+			return
+		}
 		if strings.HasSuffix(r.URL.Path, "/points/search") {
 			_, _ = w.Write([]byte(`{"result":[]}`))
 			return
@@ -421,6 +445,8 @@ func TestImportFactsBatchesEmbeddings(t *testing.T) {
 	upserts := 0
 	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/points/"):
+			http.NotFound(w, r)
 		case strings.HasSuffix(r.URL.Path, "/points/search"):
 			_, _ = w.Write([]byte(`{"result":[]}`))
 		case r.Method == http.MethodPut && r.URL.Path == "/collections/memory/points":
@@ -473,6 +499,8 @@ func TestImportFactsFallsBackToPerItemEmbedding(t *testing.T) {
 	upserts := 0
 	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/points/"):
+			http.NotFound(w, r)
 		case strings.HasSuffix(r.URL.Path, "/points/search"):
 			_, _ = w.Write([]byte(`{"result":[]}`))
 		case r.Method == http.MethodPut && r.URL.Path == "/collections/memory/points":
@@ -503,35 +531,13 @@ func TestImportFactsFallsBackToPerItemEmbedding(t *testing.T) {
 	}
 }
 
-func TestForgetOldRecordsGlobalMutationLockDuration(t *testing.T) {
-	var logs bytes.Buffer
-	previousLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	defer slog.SetDefault(previousLogger)
-
-	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/points/scroll") {
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-		_, _ = w.Write([]byte(`{"result":{"points":[],"next_page_offset":null}}`))
-	}))
-	defer qdrantServer.Close()
-
-	srv := &Server{
-		qdrant: qdrant.NewClient(qdrantServer.URL, "memory"),
-		cache:  NewCache(time.Minute),
-	}
+func TestForgetOldRefusesDirectDeletionBeforeNetwork(t *testing.T) {
+	srv := &Server{qdrant: qdrant.NewClient("http://127.0.0.1:1", "memory"), cache: NewCache(time.Minute)}
 	result, err := srv.forgetOld(context.Background(), toolRequest(map[string]interface{}{
 		"days":    float64(90),
 		"dry_run": false,
 	}))
-	if err != nil || result.IsError {
+	if err != nil || !result.IsError || !strings.Contains(toolResultText(t, result), "direct age-only deletion is disabled") {
 		t.Fatalf("forget_old result=%#v err=%v", result, err)
-	}
-	logOutput := logs.String()
-	for _, field := range []string{"global forget_old mutation lock released", "wait_duration", "held_duration"} {
-		if !strings.Contains(logOutput, field) {
-			t.Fatalf("global lock duration log missing %q: %s", field, logOutput)
-		}
 	}
 }

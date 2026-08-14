@@ -27,6 +27,10 @@ func relatedResponseServer(t *testing.T, searchResponses ...string) (*Server, *i
 	searches := 0
 	writes := 0
 	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/points/") {
+			http.NotFound(w, r)
+			return
+		}
 		if strings.HasSuffix(r.URL.Path, "/points/search") {
 			if searches >= len(searchResponses) {
 				http.Error(w, "unexpected search", http.StatusInternalServerError)
@@ -407,6 +411,10 @@ func TestStoreFactSupersededHeadroomDoesNotMaskLaterBlocker(t *testing.T) {
 	handlerErrors := make(chan error, 1)
 	writes := 0
 	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/points/") {
+			http.NotFound(w, r)
+			return
+		}
 		if !strings.HasSuffix(r.URL.Path, "/points/search") {
 			writes++
 			_, _ = w.Write([]byte(`{"result":{"status":"completed"}}`))

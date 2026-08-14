@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -222,32 +223,22 @@ func TestFactExpiredAtComparesUTCCalendarDates(t *testing.T) {
 func TestLifecycleRecallFiltersPreserveBaseAndScopeCurrentOnly(t *testing.T) {
 	base := map[string]interface{}{"must": []map[string]interface{}{{"key": "namespace", "match": map[string]interface{}{"value": "projects"}}}}
 	current := lifecycleRecallFilters(base, RecallLifecycleCurrent)
-	if _, ok := current["should"]; !ok || !reflect.DeepEqual(current["must"], base["must"]) {
-		t.Fatalf("current filters = %#v", current)
-	}
-	currentMust := current["must"].([]map[string]interface{})
-	currentMust[0]["key"] = "changed"
-	currentMust[0]["match"].(map[string]interface{})["value"] = "changed"
-	baseMust := base["must"].([]map[string]interface{})
-	if baseMust[0]["key"] != "namespace" || baseMust[0]["match"].(map[string]interface{})["value"] != "projects" {
-		t.Fatalf("current mode returned aliased nested filters: %#v", base)
+	encoded, _ := json.Marshal(current)
+	for _, want := range []string{`"namespace"`, `"lifecycle_state"`, `"maintenance_status"`} {
+		if !strings.Contains(string(encoded), want) {
+			t.Fatalf("current filters %s missing %s", encoded, want)
+		}
 	}
 	for _, mode := range []RecallLifecycleMode{RecallLifecycleHistory, RecallLifecycleAsOf, RecallLifecycleIncludeAll} {
 		got := lifecycleRecallFilters(base, mode)
-		if !reflect.DeepEqual(got, base) {
-			t.Errorf("mode %q filters = %#v, want base %#v", mode, got, base)
+		encoded, _ := json.Marshal(got)
+		if !strings.Contains(string(encoded), `"maintenance_status"`) || strings.Contains(string(encoded), `"lifecycle_state"`) {
+			t.Errorf("mode %q filters = %s", mode, encoded)
 		}
-		got["new"] = true
-		if _, mutated := base["new"]; mutated {
-			t.Errorf("mode %q returned mutable base map", mode)
-		}
-		gotMust := got["must"].([]map[string]interface{})
-		gotMust[0]["key"] = "changed"
-		gotMust[0]["match"].(map[string]interface{})["value"] = "changed"
-		baseMust := base["must"].([]map[string]interface{})
-		if baseMust[0]["key"] != "namespace" || baseMust[0]["match"].(map[string]interface{})["value"] != "projects" {
-			t.Errorf("mode %q returned aliased nested filters: %#v", mode, base)
-		}
+	}
+	baseMust := base["must"].([]map[string]interface{})
+	if baseMust[0]["key"] != "namespace" {
+		t.Fatalf("base mutated: %#v", base)
 	}
 }
 

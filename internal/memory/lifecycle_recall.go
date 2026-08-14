@@ -122,9 +122,9 @@ func lifecycleRecallFilters(base map[string]interface{}, mode RecallLifecycleMod
 		filters[key] = cloneLifecycleRecallFilterValue(value)
 	}
 	if mode == "" || mode == RecallLifecycleCurrent {
-		return currentLifecycleFilters(filters)
+		return activeMemoryFilters(currentLifecycleFilters(filters))
 	}
-	return filters
+	return activeMemoryFilters(filters)
 }
 
 func cloneLifecycleRecallFilterValue(value interface{}) interface{} {
