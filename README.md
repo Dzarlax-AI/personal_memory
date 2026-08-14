@@ -327,6 +327,34 @@ Restore requires the same explicit inputs and IDs from a compatible manifest:
 
 Stop `memory-mcp` and every other writer to the collection before either action and keep them stopped until it completes; the CLI requires `--confirm-server-stopped`. This prevents a separate server process from continuing to serve a stale recall-cache entry after maintenance changes. Both actions validate the immutable manifest batch and payload fingerprint before writing, create a mode-`0600` content-free result journal, and are idempotent for the same target. If cancellation occurs after dispatch, the command uses a separate bounded cleanup context to persist the potentially `ambiguous` outcome. Qdrant has no payload-fingerprint compare-and-set: a concurrent change that cannot be verified after the write is reported as `ambiguous`, never as success. Purge, snapshots, and scheduled maintenance remain out of scope.
 
+In the production Compose deployment, the runtime image includes `/personal-memory-maintenance`. Run it as a one-off container on the service's existing `infra` network. Because the image entrypoint normally starts the MCP server, the maintenance command must override the entrypoint explicitly:
+
+```bash
+cd /path/to/personal_ai_stack/deploy/memory
+install -d -m 0700 /root/personal-memory-maintenance
+
+docker compose stop memory-mcp
+test "$(docker inspect -f '{{.State.Running}}' memory-mcp)" = false
+
+docker compose run --rm --no-deps \
+  --entrypoint /personal-memory-maintenance \
+  -v /root/personal-memory-maintenance:/maintenance \
+  memory-mcp quarantine \
+  --qdrant-url http://infra-qdrant:6333 \
+  --collection memory \
+  --manifest /maintenance/manifest.json \
+  --journal /maintenance/quarantine-result.json \
+  --confirm-server-stopped \
+  --eligible
+
+docker compose start memory-mcp
+docker compose ps memory-mcp
+curl -fsS https://mcp.<domain>/health
+docker compose logs --tail=100 memory-mcp
+```
+
+Inspect the private journal before restarting if the one-off command reports an error or an `ambiguous` outcome. A future infrastructure wrapper may automate this exact sequence, but it must not choose candidates or bypass the manifest and stopped-writer confirmations.
+
 ### Load operational context at session start
 
 `get_operational_context` includes all valid, non-expired current permanent facts plus a bounded set of non-permanent current facts. Canonical facts rank first, then recall count; `permanent` affects inclusion and retention, not authority ordering. Automation that needs plain text can call the authenticated endpoint:
