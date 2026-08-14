@@ -46,6 +46,7 @@ cmd/
   server/main.go           — entrypoint, Chi router, graceful shutdown
   indexer/main.go          — standalone RAG indexer binary (cron-friendly)
   memory-integration/      — versioned client bundle install/update/verify/rollback/render and artifact-conformance adapter
+  maintenance/             — read-only lifecycle-aware maintenance analyzer
   eval-memory/main.go      — schema-v3 retrieval runner, comparison gate, and TEI materializer
   migrate-memory-lifecycle/ — dry-run/apply/rollback lifecycle migration
 internal/
@@ -84,7 +85,7 @@ integrationbundle/         — embedded manifest/policy/templates, validated ren
 - `update_fact(old_query, new_fact, tags?, primary_tag?, lifecycle_state?, ...)` — find by similarity or exact ID, replace text, and preserve or explicitly replace lifecycle metadata
 - `set_fact_lifecycle(point_id, lifecycle_state, ...)` — replace validated lifecycle metadata by exact ID without re-embedding
 - `delete_fact(query, namespace?)` — find by similarity and delete
-- `forget_old(days?, namespace?, dry_run?)` — delete old facts; skips `permanent=true`; defaults to dry run
+- `forget_old(days?, namespace?, dry_run?)` — deprecated content-free maintenance preview; direct deletion is refused
 - `import_facts(facts)` — bulk import from JSON string
 
 ### Reading
@@ -191,7 +192,8 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 
 ### memory/lifecycle and lifecycle_adapter.go
 - `lifecycle.Parse(payload, pointID)` is the single normalization and validation boundary. Only a payload with no lifecycle fields is treated as legacy current; malformed explicit metadata returns a non-sensitive invalid view and must not panic.
-- Lifecycle transitions are explicit, reversible, and idempotent when target invariants pass. `permanent` controls retention only, while expired `valid_until` excludes even current facts from current-context flows.
+- Lifecycle transitions are explicit, reversible, and idempotent when target invariants pass. `permanent` controls retention protection only, while expired `valid_until` excludes even current facts from current-context flows.
+- Ordinary memory reads accept explicit `maintenance_status=active` and legacy missing status. Quarantined or malformed maintenance records are excluded; `cmd/maintenance analyze` is the content-free read-only inspection path.
 
 ### qdrant/client.go
 - Collection name is a struct field — `NewClient(url, collection string)` — one client per collection

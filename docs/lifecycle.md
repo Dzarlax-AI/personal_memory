@@ -90,7 +90,7 @@ Changing a lifecycle state does not automatically create, edit, or validate the 
 
 ## Retention and expiry
 
-`permanent=true` is retention-only: it prevents `forget_old` from deleting the fact. It does not make the fact current, canonical, valid, verified, or visible in default context.
+`permanent=true` is retention-only: lifecycle-aware maintenance treats the fact as protected. It does not make the fact current, canonical, valid, verified, or visible in default context. Direct age-only deletion through `forget_old` is deprecated and refused.
 
 `valid_until=YYYY-MM-DD` is independent of lifecycle classification. Once expired, even a valid canonical `current` fact is excluded from current-context flows. Expired facts remain available to inventory surfaces such as list, export, stats, and Viz.
 
@@ -113,6 +113,8 @@ Changing a lifecycle state does not automatically create, edit, or validate the 
 
 All `recall_facts` modes exclude malformed lifecycle metadata and facts expired at the applicable reference date. Legacy facts qualify as valid current facts. The `current`, `history`, and `include_all` modes use the current UTC date as their expiry reference. The `as_of` mode uses its supplied date instead: a fact is valid through its `valid_until` date and is excluded only when `as_of` is later. `as_of` does not reconstruct historical intervals, infer a fact's state on that date, or use lifecycle transition history; it changes only the expiry reference.
 
+All ordinary memory read surfaces also require valid maintenance status `active`; absence of maintenance metadata is legacy active. Explicitly quarantined or malformed maintenance records are not ordinary context. The read-only analyzer can still inspect every record so it can report quarantined and malformed metadata safely.
+
 The broad modes (`history`, `as_of`, and `include_all`) expose all valid, non-expired lifecycle states. Current, historical, and superseded facts have the `include` decision with the safe reason codes `current_context`, `historical_context`, and `superseded_context` respectively. A disputed fact is always visibly uncertain: its decision is `uncertain` with reason code `disputed`. In default `current` mode, current facts are included with `current_truth`; when at least one canonical current candidate is present, ordinary and legacy-current candidates are demoted with `canonical_preference`.
 
 The structured `recall_facts` response exposes each fact's unchanged `semantic_score`, original `semantic_rank`, lifecycle-adjusted `final_rank`, normalized `lifecycle` view, presentation `decision`, and closed, privacy-safe `reason_codes`. `point_id` is available only in structured content; the backward-compatible text fallback omits point IDs and lifecycle relationship IDs. Lifecycle ranking operates on a bounded semantic candidate pool (at least 20 candidates, normally four times the requested limit, capped by the service search limit multiplier), then returns the requested limit. Canonical preference can therefore reorder only candidates already in that pool; it cannot retrieve an otherwise absent canonical fact, and it never changes vector similarity scores.
@@ -122,6 +124,14 @@ Cache entries are isolated by lifecycle mode and by the `as_of` date when applic
 `find_related` is an inspection-oriented semantic surface: it keeps all lifecycle states, ranks lifecycle authority tiers, and exposes normalized lifecycle metadata in its output.
 
 Viz does not filter nodes by lifecycle state. Its privacy-safe summaries include the normalized lifecycle block; selected detail responses additionally retain the raw payload unchanged.
+
+## Lifecycle-aware maintenance analysis
+
+`cmd/maintenance analyze` performs one read-only collection scan and writes an exclusive mode-`0600` manifest. Candidate classes are expired, superseded past a configured retention interval, deterministic duplicate candidate, stale/unused review candidate, malformed/orphaned metadata, protected, and already quarantined. Reports contain IDs, closed classes, safe timestamps, policy settings, and payload fingerprints, never fact text or vectors.
+
+Permanent, disputed, and current canonical records are protected. Age or low recall activity alone is review-only and never makes a record eligible for quarantine. A superseded record without a valid `updated_at` is insufficient evidence for retention eligibility and is reported as malformed/review-only.
+
+`forget_old(dry_run=true)` remains only as a content-free compatibility preview. `dry_run=false` fails before scanning or mutation. Quarantine, restore, and snapshot-gated purge are intentionally not implemented by the analysis stage.
 
 ## Rollout, future writes, and rollback
 

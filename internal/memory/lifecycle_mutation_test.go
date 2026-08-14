@@ -503,35 +503,13 @@ func TestImportFactsFallsBackToPerItemEmbedding(t *testing.T) {
 	}
 }
 
-func TestForgetOldRecordsGlobalMutationLockDuration(t *testing.T) {
-	var logs bytes.Buffer
-	previousLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	defer slog.SetDefault(previousLogger)
-
-	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/points/scroll") {
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-		_, _ = w.Write([]byte(`{"result":{"points":[],"next_page_offset":null}}`))
-	}))
-	defer qdrantServer.Close()
-
-	srv := &Server{
-		qdrant: qdrant.NewClient(qdrantServer.URL, "memory"),
-		cache:  NewCache(time.Minute),
-	}
+func TestForgetOldRefusesDirectDeletionBeforeNetwork(t *testing.T) {
+	srv := &Server{qdrant: qdrant.NewClient("http://127.0.0.1:1", "memory"), cache: NewCache(time.Minute)}
 	result, err := srv.forgetOld(context.Background(), toolRequest(map[string]interface{}{
 		"days":    float64(90),
 		"dry_run": false,
 	}))
-	if err != nil || result.IsError {
+	if err != nil || !result.IsError || !strings.Contains(toolResultText(t, result), "direct age-only deletion is disabled") {
 		t.Fatalf("forget_old result=%#v err=%v", result, err)
-	}
-	logOutput := logs.String()
-	for _, field := range []string{"global forget_old mutation lock released", "wait_duration", "held_duration"} {
-		if !strings.Contains(logOutput, field) {
-			t.Fatalf("global lock duration log missing %q: %s", field, logOutput)
-		}
 	}
 }

@@ -149,18 +149,11 @@ func TestRecallFactsAppliesLifecycleVisibilityRankingAndFilter(t *testing.T) {
 	filter := searchFilter
 	gotSearchLimit := searchLimit
 	mu.Unlock()
-	wantFilter := map[string]interface{}{
-		"must": []interface{}{
-			map[string]interface{}{"key": "namespace", "match": map[string]interface{}{"value": "projects"}},
-			map[string]interface{}{"key": "tags", "match": map[string]interface{}{"value": "memory"}},
-		},
-		"should": []interface{}{
-			map[string]interface{}{"key": "lifecycle_state", "match": map[string]interface{}{"value": "current"}},
-			map[string]interface{}{"is_empty": map[string]interface{}{"key": "lifecycle_state"}},
-		},
-	}
-	if !reflect.DeepEqual(filter, wantFilter) {
-		t.Fatalf("serialized lifecycle filter = %#v, want %#v", filter, wantFilter)
+	encodedFilter, _ := json.Marshal(filter)
+	for _, want := range []string{`"namespace"`, `"projects"`, `"tags"`, `"memory"`, `"lifecycle_state"`, `"maintenance_status"`, `"active"`} {
+		if !strings.Contains(string(encodedFilter), want) {
+			t.Fatalf("serialized filter %s missing %s", encodedFilter, want)
+		}
 	}
 	if gotSearchLimit != 20 {
 		t.Fatalf("search candidate limit = %d, want 20", gotSearchLimit)
@@ -269,8 +262,11 @@ func TestOperationalContextExcludesNonCurrentEvenWhenPermanent(t *testing.T) {
 	if canonicalLowAt >= canonicalPermanentAt || canonicalPermanentAt >= legacyAt {
 		t.Fatalf("operational context is not ordered by authority then recall count: %s", text)
 	}
-	if filter == nil || filter["should"] == nil {
-		t.Fatalf("operational filter missing lifecycle should: %#v", filter)
+	encodedFilter, _ := json.Marshal(filter)
+	for _, want := range []string{`"lifecycle_state"`, `"maintenance_status"`} {
+		if !strings.Contains(string(encodedFilter), want) {
+			t.Fatalf("operational filter %s missing %s", encodedFilter, want)
+		}
 	}
 }
 

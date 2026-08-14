@@ -15,6 +15,7 @@ import (
 
 	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
 	"github.com/Dzarlax-AI/personal-memory/internal/memory/lifecycle"
+	"github.com/Dzarlax-AI/personal-memory/internal/memory/maintenance"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -237,10 +238,10 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 	), s.deleteFact)
 
 	srv.AddTool(mcp.NewTool("forget_old",
-		mcp.WithDescription("Delete facts older than N days. Skips permanent facts. Defaults to dry run."),
-		mcp.WithReadOnlyHintAnnotation(false),
-		mcp.WithDestructiveHintAnnotation(true),
-		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithDescription("Deprecated read-only compatibility analysis for old facts. Direct deletion is refused; use the staged maintenance CLI."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithNumber("days", mcp.Description("Age threshold in days (default 90)")),
 		mcp.WithString("namespace", mcp.Description("Filter by namespace")),
@@ -561,6 +562,9 @@ func (s *Server) mutationTarget(ctx context.Context, args map[string]interface{}
 		if namespace != "" && stringFromPayload(point.Payload["namespace"]) != namespace {
 			return qdrant.Point{}, fmt.Sprintf("point_id %s does not belong to namespace %q", id, namespace)
 		}
+		if !activeMemoryPayload(point.Payload) {
+			return qdrant.Point{}, "fact is quarantined or has invalid maintenance metadata; use the maintenance restore workflow"
+		}
 		return point, ""
 	}
 
@@ -572,10 +576,11 @@ func (s *Server) mutationTarget(ctx context.Context, args map[string]interface{}
 	if err != nil {
 		return qdrant.Point{}, fmt.Sprintf("embedding failed: %v", err)
 	}
-	results, err := s.qdrant.Search(ctx, vec, 2, s.buildFilters(nil, namespace), nil)
+	results, err := s.qdrant.Search(ctx, vec, 2, activeMemoryFilters(s.buildFilters(nil, namespace)), nil)
 	if err != nil {
 		return qdrant.Point{}, fmt.Sprintf("search failed: %v", err)
 	}
+	results = activeSearchPoints(results)
 	if len(results) == 0 {
 		return qdrant.Point{}, "no matching fact found"
 	}
@@ -708,13 +713,14 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 
 	dedupLimit := lifecycleCandidateLimit(relatedFactResultLimit)
 	dedupLow := s.dedupThreshold
-	dedupCandidates, dedupErr := s.qdrant.Search(ctx, vec, dedupLimit, s.buildFilters(nil, namespace), &dedupLow)
+	dedupCandidates, dedupErr := s.qdrant.Search(ctx, vec, dedupLimit, activeMemoryFilters(s.buildFilters(nil, namespace)), &dedupLow)
 	var duplicate *RelatedFactCandidate
 	if dedupErr != nil {
 		// Preserve the existing fail-open behavior: availability of duplicate
 		// preflight must not make the memory write path unavailable.
 		slog.Warn("dedup search failed", "error", dedupErr)
 	} else {
+		dedupCandidates = activeSearchPoints(dedupCandidates)
 		duplicate, _ = selectRelatedCandidates(dedupCandidates, s.relatedFactLow, s.dedupThreshold, relatedFactResultLimit)
 		if duplicate == nil && len(dedupCandidates) == dedupLimit {
 			return mcp.NewToolResultError("duplicate preflight inconclusive; candidate limit reached"), nil
@@ -723,10 +729,11 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 
 	relatedFacts := []RelatedFactCandidate{}
 	relatedLow := s.relatedFactLow
-	relatedCandidates, relatedErr := s.qdrant.Search(ctx, vec, lifecycleCandidateLimit(relatedFactResultLimit), s.buildFilters(nil, namespace), &relatedLow)
+	relatedCandidates, relatedErr := s.qdrant.Search(ctx, vec, lifecycleCandidateLimit(relatedFactResultLimit), activeMemoryFilters(s.buildFilters(nil, namespace)), &relatedLow)
 	if relatedErr != nil {
 		slog.Warn("related fact search failed", "error", relatedErr)
 	} else {
+		relatedCandidates = activeSearchPoints(relatedCandidates)
 		var relatedDuplicate *RelatedFactCandidate
 		relatedDuplicate, relatedFacts = selectRelatedCandidates(relatedCandidates, s.relatedFactLow, s.dedupThreshold, relatedFactResultLimit)
 		if duplicate == nil {
@@ -824,6 +831,7 @@ func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
 	}
+	results = activeSearchPoints(results)
 
 	candidates := presentLifecycleRecallCandidates(results, lifecycleOptions, time.Now())
 	if len(candidates) > limit {
@@ -962,6 +970,9 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	if !found {
 		return mcp.NewToolResultError("fact changed during update; retry"), nil
 	}
+	if !activeMemoryPayload(old.Payload) {
+		return mcp.NewToolResultError("fact entered quarantine during update; use the maintenance restore workflow"), nil
+	}
 	if currentNamespace := NormalizeNamespace(stringFromPayload(old.Payload["namespace"])); currentNamespace != oldNamespace {
 		return mcp.NewToolResultError("fact namespace changed during update; retry"), nil
 	}
@@ -1053,6 +1064,9 @@ func (s *Server) setFactLifecycle(ctx context.Context, req mcp.CallToolRequest) 
 	if !found {
 		return mcp.NewToolResultError(fmt.Sprintf("no fact found with point_id %s", pointID)), nil
 	}
+	if !activeMemoryPayload(point.Payload) {
+		return mcp.NewToolResultError("quarantined facts cannot be changed by lifecycle tools; restore the fact first"), nil
+	}
 	namespace := NormalizeNamespace(stringFromPayload(point.Payload["namespace"]))
 	unlockMutation := s.lockFactMutations(namespace)
 	defer unlockMutation()
@@ -1063,6 +1077,9 @@ func (s *Server) setFactLifecycle(ctx context.Context, req mcp.CallToolRequest) 
 	}
 	if !found {
 		return mcp.NewToolResultError(fmt.Sprintf("no fact found with point_id %s", pointID)), nil
+	}
+	if !activeMemoryPayload(point.Payload) {
+		return mcp.NewToolResultError("fact entered quarantine during lifecycle update; restore the fact first"), nil
 	}
 	if NormalizeNamespace(stringFromPayload(point.Payload["namespace"])) != namespace {
 		return mcp.NewToolResultError("fact namespace changed during lifecycle update; retry"), nil
@@ -1109,6 +1126,9 @@ func (s *Server) deleteFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	if !found {
 		return mcp.NewToolResultError("fact changed during delete; retry"), nil
 	}
+	if !activeMemoryPayload(target.Payload) {
+		return mcp.NewToolResultError("fact entered quarantine during delete; use the maintenance workflow"), nil
+	}
 	if NormalizeNamespace(stringFromPayload(target.Payload["namespace"])) != namespace {
 		return mcp.NewToolResultError("fact namespace changed during delete; retry"), nil
 	}
@@ -1135,70 +1155,24 @@ func (s *Server) forgetOld(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	dryRun := boolParam(args, "dry_run", true)
-
 	if !dryRun {
-		if namespace == "" {
-			waitStarted := time.Now()
-			unlockMutation := s.lockFactMutations()
-			lockAcquired := time.Now()
-			defer func() {
-				heldFor := time.Since(lockAcquired)
-				unlockMutation()
-				slog.Info(
-					"global forget_old mutation lock released",
-					"wait_duration", lockAcquired.Sub(waitStarted),
-					"held_duration", heldFor,
-				)
-			}()
-		} else {
-			unlockMutation := s.lockFactMutations(namespace)
-			defer unlockMutation()
-		}
+		return mcp.NewToolResultError("direct age-only deletion is disabled; run maintenance analyze, then explicitly quarantine and snapshot-gated purge"), nil
 	}
-
-	cutoff := time.Now().AddDate(0, 0, -days)
-	filters := s.buildFilters(nil, namespace)
-
-	points, err := s.qdrant.ScrollAll(ctx, filters, false)
+	now := time.Now().UTC()
+	manifest, err := maintenance.Analyze(ctx, s.qdrant, maintenance.Options{
+		Collection: s.qdrant.CollectionName(), Namespace: namespace, ReferenceTime: now,
+		SupersededRetention: 30 * 24 * time.Hour, StaleAfter: time.Duration(days) * 24 * time.Hour, LowRecallThreshold: 1,
+	})
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("scroll failed: %v", err)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("maintenance analysis failed: %v", err)), nil
 	}
-
-	var toDelete []string
-	var details []string
-	for _, p := range points {
-		if perm, ok := p.Payload["permanent"].(bool); ok && perm {
-			continue
-		}
-		createdStr, _ := p.Payload["created_at"].(string)
-		created, err := time.Parse(time.RFC3339, createdStr)
-		if err != nil {
-			continue
-		}
-		if created.Before(cutoff) {
-			text, _ := p.Payload["text"].(string)
-			toDelete = append(toDelete, p.ID)
-			details = append(details, fmt.Sprintf("- %s (created %s)", text, createdStr))
+	eligible := 0
+	for _, finding := range manifest.Findings {
+		if finding.EligibleForQuarantine {
+			eligible++
 		}
 	}
-
-	if dryRun {
-		if len(toDelete) == 0 {
-			return mcp.NewToolResultText("Dry run: nothing to delete."), nil
-		}
-		return mcp.NewToolResultText(fmt.Sprintf("Dry run: would delete %d facts:\n%s", len(toDelete), strings.Join(details, "\n"))), nil
-	}
-
-	if len(toDelete) == 0 {
-		return mcp.NewToolResultText("Nothing to delete."), nil
-	}
-
-	if err := s.qdrant.Delete(ctx, toDelete); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("delete failed: %v", err)), nil
-	}
-
-	s.cache.Invalidate()
-	return mcp.NewToolResultText(fmt.Sprintf("Deleted %d facts.", len(toDelete))), nil
+	return mcp.NewToolResultText(fmt.Sprintf("Deprecated dry-run analysis: scanned=%d findings=%d eligible_for_quarantine=%d. No facts were changed; use cmd/maintenance for a saved content-free manifest.", manifest.Scanned, len(manifest.Findings), eligible)), nil
 }
 
 func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -1326,10 +1300,11 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 				ctx,
 				candidate.vector,
 				dedupLimit,
-				s.buildFilters(nil, candidate.namespace),
+				activeMemoryFilters(s.buildFilters(nil, candidate.namespace)),
 				&dedupLow,
 			)
 			if searchErr == nil {
+				existing = activeSearchPoints(existing)
 				duplicate, _ := selectRelatedCandidates(existing, s.relatedFactLow, s.dedupThreshold, relatedFactResultLimit)
 				if duplicate != nil || len(existing) == dedupLimit {
 					return false
@@ -1409,10 +1384,11 @@ func (s *Server) findRelated(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	}
 
 	low := s.relatedFactLow
-	results, err := s.qdrant.Search(ctx, vec, lifecycleCandidateLimit(limit), s.buildFilters(nil, namespace), &low)
+	results, err := s.qdrant.Search(ctx, vec, lifecycleCandidateLimit(limit), activeMemoryFilters(s.buildFilters(nil, namespace)), &low)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
 	}
+	results = activeSearchPoints(results)
 
 	_, relatedFacts := selectRelatedCandidates(results, s.relatedFactLow, s.dedupThreshold, limit)
 	structured := FindRelatedResult{RelatedFacts: relatedFacts, Count: len(relatedFacts)}
@@ -1427,11 +1403,12 @@ func (s *Server) listFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	namespace := strParam(args, "namespace")
 	tags := tagsParam(args)
 
-	filters := s.buildFilters(tags, namespace)
+	filters := activeMemoryFilters(s.buildFilters(tags, namespace))
 	points, err := s.qdrant.ScrollAll(ctx, filters, false)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("scroll failed: %v", err)), nil
 	}
+	points = activeScrollPoints(points)
 
 	var lines []string
 	for _, p := range points {
@@ -1459,10 +1436,11 @@ func (s *Server) listFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 }
 
 func (s *Server) getStats(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	points, err := s.qdrant.ScrollAll(ctx, nil, false)
+	points, err := s.qdrant.ScrollAll(ctx, activeMemoryFilters(nil), false)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("scroll failed: %v", err)), nil
 	}
+	points = activeScrollPoints(points)
 
 	total := len(points)
 	permanent := 0
@@ -1560,11 +1538,12 @@ func (s *Server) listTags(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	filters := s.buildFilters(nil, namespace)
+	filters := activeMemoryFilters(s.buildFilters(nil, namespace))
 	points, err := s.qdrant.ScrollAll(ctx, filters, false)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("scroll failed: %v", err)), nil
 	}
+	points = activeScrollPoints(points)
 
 	tags := make(map[string]int)
 	for _, p := range points {
@@ -1592,11 +1571,12 @@ func (s *Server) exportFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	filters := s.buildFilters(nil, namespace)
+	filters := activeMemoryFilters(s.buildFilters(nil, namespace))
 	points, err := s.qdrant.ScrollAll(ctx, filters, false)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("scroll failed: %v", err)), nil
 	}
+	points = activeScrollPoints(points)
 
 	var facts []map[string]interface{}
 	for _, p := range points {
@@ -1612,12 +1592,13 @@ func (s *Server) exportFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 }
 
 func (s *Server) getOperationalFacts(ctx context.Context, namespace string, topRecalled int) ([]lifecycleOperationalPoint, error) {
-	filters := currentLifecycleFilters(s.buildFilters(nil, namespace))
+	filters := activeMemoryFilters(currentLifecycleFilters(s.buildFilters(nil, namespace)))
 
 	points, err := s.qdrant.ScrollAll(ctx, filters, false)
 	if err != nil {
 		return nil, err
 	}
+	points = activeScrollPoints(points)
 
 	seen := make(map[string]bool)
 	var permanent []lifecycleOperationalPoint
