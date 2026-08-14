@@ -536,6 +536,59 @@ var lifecyclePayloadKeys = map[string]struct{}{
 	"superseded_by":             {},
 }
 
+type MaintenanceReason string
+
+const (
+	MaintenanceReasonExpired             MaintenanceReason = "expired"
+	MaintenanceReasonSupersededRetention MaintenanceReason = "superseded_retention"
+)
+
+// QuarantineMaintenance applies the only valid quarantined maintenance shape.
+// It intentionally does not accept arbitrary payload fields, avoiding invalid
+// active/quarantined combinations at the Qdrant boundary.
+func (c *Client) QuarantineMaintenance(ctx context.Context, id string, at time.Time, reason MaintenanceReason, batchID string) error {
+	if err := validateMaintenanceTarget(id); err != nil {
+		return err
+	}
+	if at.IsZero() {
+		return fmt.Errorf("quarantine time is required")
+	}
+	atText := at.UTC().Format(time.RFC3339)
+	if _, err := time.Parse(time.RFC3339, atText); err != nil {
+		return fmt.Errorf("quarantine time must use RFC3339 format")
+	}
+	if reason != MaintenanceReasonExpired && reason != MaintenanceReasonSupersededRetention {
+		return fmt.Errorf("quarantine reason is not supported")
+	}
+	if strings.TrimSpace(batchID) == "" || strings.TrimSpace(batchID) != batchID {
+		return fmt.Errorf("quarantine batch ID is required")
+	}
+	return c.replacePayloadBatch(ctx, id, map[string]interface{}{
+		"maintenance_status":  "quarantined",
+		"quarantined_at":      atText,
+		"quarantine_reason":   string(reason),
+		"quarantine_batch_id": batchID,
+	}, nil, "maintenance")
+}
+
+// RestoreMaintenance applies the only valid active maintenance shape. It
+// removes every quarantine-only key in the same strong ordered batch.
+func (c *Client) RestoreMaintenance(ctx context.Context, id string) error {
+	if err := validateMaintenanceTarget(id); err != nil {
+		return err
+	}
+	return c.replacePayloadBatch(ctx, id, map[string]interface{}{
+		"maintenance_status": "active",
+	}, []string{"quarantined_at", "quarantine_reason", "quarantine_batch_id"}, "maintenance")
+}
+
+func validateMaintenanceTarget(id string) error {
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(id) != id {
+		return fmt.Errorf("point ID is required")
+	}
+	return nil
+}
+
 // ReplaceLifecyclePayload applies a complete lifecycle target without
 // rewriting unrelated payload fields or vectors. Qdrant executes batch
 // operations in order; callers can safely retry the same target.
@@ -557,6 +610,10 @@ func (c *Client) ReplaceLifecyclePayload(ctx context.Context, id string, set map
 		}
 	}
 
+	return c.replacePayloadBatch(ctx, id, set, deleteKeys, "lifecycle")
+}
+
+func (c *Client) replacePayloadBatch(ctx context.Context, id string, set map[string]interface{}, deleteKeys []string, kind string) error {
 	pointID := qdrantPointID(id)
 	operations := make([]map[string]interface{}, 0, 2)
 	if len(set) > 0 {
@@ -579,7 +636,7 @@ func (c *Client) ReplaceLifecyclePayload(ctx context.Context, id string, set map
 	requestURL := fmt.Sprintf("%s/collections/%s/points/batch", c.url, c.collection)
 	parsed, err := url.Parse(requestURL)
 	if err != nil {
-		return fmt.Errorf("parse lifecycle batch URL: %w", err)
+		return fmt.Errorf("parse %s batch URL: %w", kind, err)
 	}
 	query := parsed.Query()
 	query.Set("ordering", "strong")

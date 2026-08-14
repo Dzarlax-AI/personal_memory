@@ -31,6 +31,7 @@ RUN CGO_ENABLED=0 go build -o /personal-memory ./cmd/server
 RUN CGO_ENABLED=0 go build -o /personal-memory-indexer ./cmd/indexer
 RUN CGO_ENABLED=0 go build -o /personal-memory-migrate-ids ./cmd/migrate-memory-ids
 RUN CGO_ENABLED=0 go build -o /personal-memory-migrate-lifecycle ./cmd/migrate-memory-lifecycle
+RUN CGO_ENABLED=0 go build -o /personal-memory-maintenance ./cmd/maintenance
 
 FROM alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
 RUN apk add --no-cache ca-certificates
@@ -38,5 +39,6 @@ COPY --from=builder /personal-memory /personal-memory
 COPY --from=builder /personal-memory-indexer /personal-memory-indexer
 COPY --from=builder /personal-memory-migrate-ids /personal-memory-migrate-ids
 COPY --from=builder /personal-memory-migrate-lifecycle /personal-memory-migrate-lifecycle
+COPY --from=builder /personal-memory-maintenance /personal-memory-maintenance
 
 ENTRYPOINT ["/personal-memory"]

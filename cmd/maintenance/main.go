@@ -29,6 +29,27 @@ type analyzeOptions struct {
 	lowRecallThreshold      int
 }
 
+type mutationOptions struct {
+	qdrantURL            string
+	collection           string
+	manifest             string
+	journal              string
+	pointIDs             pointIDs
+	eligible             bool
+	confirmServerStopped bool
+}
+
+type pointIDs []string
+
+func (ids *pointIDs) String() string { return strings.Join(*ids, ",") }
+func (ids *pointIDs) Set(value string) error {
+	if strings.TrimSpace(value) == "" || strings.TrimSpace(value) != value {
+		return fmt.Errorf("point ID is required")
+	}
+	*ids = append(*ids, value)
+	return nil
+}
+
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -39,10 +60,21 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout io.Writer, now func() time.Time) error {
-	if len(args) == 0 || args[0] != "analyze" {
-		return fmt.Errorf("usage: maintenance analyze [flags]")
+	if len(args) == 0 {
+		return fmt.Errorf("usage: maintenance <analyze|quarantine|restore> [flags]")
 	}
-	options, err := parseAnalyzeOptions(args[1:], now())
+	switch args[0] {
+	case "analyze":
+		return runAnalyze(ctx, args[1:], stdout, now)
+	case "quarantine", "restore":
+		return runMutation(ctx, args[0], args[1:], stdout)
+	default:
+		return fmt.Errorf("usage: maintenance <analyze|quarantine|restore> [flags]")
+	}
+}
+
+func runAnalyze(ctx context.Context, args []string, stdout io.Writer, now func() time.Time) error {
+	options, err := parseAnalyzeOptions(args, now())
 	if err != nil {
 		return err
 	}
@@ -52,7 +84,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, now func() time.T
 		StaleAfter:          time.Duration(options.staleDays) * day, LowRecallThreshold: options.lowRecallThreshold,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("analysis could not complete")
 	}
 	if err := maintenance.WriteManifest(options.output, manifest); err != nil {
 		return err
@@ -65,6 +97,46 @@ func run(ctx context.Context, args []string, stdout io.Writer, now func() time.T
 	}
 	_, err = fmt.Fprintf(stdout, "mode=analyze complete=true scanned=%d findings=%d eligible_for_quarantine=%d batch_id=%s\n", manifest.Scanned, len(manifest.Findings), eligible, manifest.BatchID)
 	return err
+}
+
+func runMutation(ctx context.Context, operation string, args []string, stdout io.Writer) error {
+	options, err := parseMutationOptions(operation, args)
+	if err != nil {
+		return err
+	}
+	manifest, err := maintenance.ReadManifest(options.manifest)
+	if err != nil {
+		return err
+	}
+	service, err := maintenance.NewService(qdrant.NewClient(options.qdrantURL, options.collection), options.collection, nil)
+	if err != nil {
+		return fmt.Errorf("maintenance action is not configured")
+	}
+	request := maintenance.Request{Manifest: manifest, JournalPath: options.journal, Selection: maintenance.Selection{PointIDs: []string(options.pointIDs), IncludeEligibleFindings: options.eligible}}
+	var result maintenance.Result
+	if operation == "quarantine" {
+		result, err = service.Quarantine(ctx, request)
+	} else {
+		result, err = service.Restore(ctx, request)
+	}
+	if err != nil {
+		return fmt.Errorf("maintenance action could not complete")
+	}
+	return writeMutationSummary(stdout, operation, result)
+}
+
+func writeMutationSummary(stdout io.Writer, operation string, result maintenance.Result) error {
+	counts := map[maintenance.OutcomeStatus]int{}
+	for _, outcome := range result.Outcomes {
+		counts[outcome.Status]++
+	}
+	if _, err := fmt.Fprintf(stdout, "mode=%s batch_id=%s updated=%d already_applied=%d not_found=%d protected_or_ineligible=%d conflict=%d failed=%d ambiguous=%d\n", operation, result.BatchID, counts[maintenance.OutcomeUpdated], counts[maintenance.OutcomeAlreadyApplied], counts[maintenance.OutcomeNotFound], counts[maintenance.OutcomeProtectedOrIneligible], counts[maintenance.OutcomeConflict], counts[maintenance.OutcomeFailed], counts[maintenance.OutcomeAmbiguous]); err != nil {
+		return err
+	}
+	if counts[maintenance.OutcomeFailed] > 0 || counts[maintenance.OutcomeAmbiguous] > 0 {
+		return fmt.Errorf("maintenance action completed with unresolved outcomes")
+	}
+	return nil
 }
 
 func parseAnalyzeOptions(args []string, now time.Time) (analyzeOptions, error) {
@@ -103,4 +175,38 @@ func parseAnalyzeOptions(args []string, now time.Time) (analyzeOptions, error) {
 		defaults.referenceTime = parsed
 	}
 	return defaults, nil
+}
+
+func parseMutationOptions(operation string, args []string) (mutationOptions, error) {
+	options := mutationOptions{}
+	set := flag.NewFlagSet("maintenance "+operation, flag.ContinueOnError)
+	set.SetOutput(io.Discard)
+	set.StringVar(&options.qdrantURL, "qdrant-url", "", "Qdrant base URL")
+	set.StringVar(&options.collection, "collection", "", "collection name")
+	set.StringVar(&options.manifest, "manifest", "", "saved analysis manifest")
+	set.StringVar(&options.journal, "journal", "", "private result journal path")
+	set.Var(&options.pointIDs, "point-id", "manifest point ID (repeatable)")
+	set.BoolVar(&options.confirmServerStopped, "confirm-server-stopped", false, "confirm memory-mcp and other collection writers are stopped")
+	if operation == "quarantine" {
+		set.BoolVar(&options.eligible, "eligible", false, "select all eligible manifest findings")
+	}
+	if err := set.Parse(args); err != nil {
+		return mutationOptions{}, err
+	}
+	if set.NArg() != 0 {
+		return mutationOptions{}, fmt.Errorf("unexpected arguments")
+	}
+	if strings.TrimSpace(options.qdrantURL) == "" || strings.TrimSpace(options.collection) == "" || strings.TrimSpace(options.manifest) == "" || strings.TrimSpace(options.journal) == "" {
+		return mutationOptions{}, fmt.Errorf("qdrant URL, collection, manifest, and journal are required")
+	}
+	if len(options.pointIDs) == 0 && !options.eligible {
+		return mutationOptions{}, fmt.Errorf("at least one point ID or --eligible is required")
+	}
+	if !options.confirmServerStopped {
+		return mutationOptions{}, fmt.Errorf("--confirm-server-stopped is required")
+	}
+	if operation != "quarantine" && options.eligible {
+		return mutationOptions{}, fmt.Errorf("eligible selection is only supported for quarantine")
+	}
+	return options, nil
 }
