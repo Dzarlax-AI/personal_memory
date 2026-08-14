@@ -23,7 +23,7 @@ func TestParseAnalyzeOptions(t *testing.T) {
 }
 
 func TestParseMutationOptionsRequiresExplicitBoundedInputs(t *testing.T) {
-	valid := []string{"--qdrant-url", "http://127.0.0.1:6333", "--collection", "memory", "--manifest", "report.json", "--journal", "result.json", "--point-id", "42"}
+	valid := []string{"--qdrant-url", "http://127.0.0.1:6333", "--collection", "memory", "--manifest", "report.json", "--journal", "result.json", "--point-id", "42", "--confirm-server-stopped"}
 	got, err := parseMutationOptions("quarantine", valid)
 	if err != nil || got.collection != "memory" || len(got.pointIDs) != 1 {
 		t.Fatalf("options=%#v err=%v", got, err)
@@ -31,6 +31,7 @@ func TestParseMutationOptionsRequiresExplicitBoundedInputs(t *testing.T) {
 	for _, args := range [][]string{
 		{},
 		{"--qdrant-url", "u", "--collection", "c", "--manifest", "m", "--journal", "j"},
+		{"--qdrant-url", "u", "--collection", "c", "--manifest", "m", "--journal", "j", "--point-id", "42"},
 		append(append([]string{}, valid...), "extra"),
 		{"--qdrant-url", "u", "--collection", "c", "--manifest", "m", "--journal", "j", "--point-id", " "},
 	} {
@@ -51,7 +52,7 @@ func TestRunMutationRejectsInvalidManifestWithoutLeakingContents(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout strings.Builder
-	err := run(context.Background(), []string{"quarantine", "--qdrant-url", "http://127.0.0.1:6333", "--collection", "memory", "--manifest", manifest, "--journal", filepath.Join(dir, "journal.json"), "--point-id", "1"}, &stdout, time.Now)
+	err := run(context.Background(), []string{"quarantine", "--qdrant-url", "http://127.0.0.1:6333", "--collection", "memory", "--manifest", manifest, "--journal", filepath.Join(dir, "journal.json"), "--point-id", "1", "--confirm-server-stopped"}, &stdout, time.Now)
 	if err == nil || strings.Contains(err.Error(), private) || stdout.Len() != 0 {
 		t.Fatalf("err=%v stdout=%q", err, stdout.String())
 	}

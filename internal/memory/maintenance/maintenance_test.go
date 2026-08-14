@@ -412,6 +412,31 @@ func TestWriteResultJournalIsAtomicPrivateAndCancellationSafe(t *testing.T) {
 	}
 }
 
+func TestServicePersistsAmbiguousJournalAfterMutationCancelsRequest(t *testing.T) {
+	point := qdrant.Point{ID: "cancelled", Payload: map[string]interface{}{"valid_until": "2026-08-01"}}
+	store := newFakePointStore("memory", map[string]qdrant.Point{point.ID: point})
+	manifest := manifestFor(point, eligibleExpired(point.ID, point))
+	ctx, cancel := context.WithCancel(context.Background())
+	store.afterWrite = func(_ *fakePointStore, _ string) { cancel() }
+	store.afterWriteError = context.Canceled
+	journal := filepath.Join(t.TempDir(), "result.json")
+	service, err := NewService(store, "memory", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Quarantine(ctx, Request{Manifest: manifest, JournalPath: journal, Selection: Selection{PointIDs: []string{point.ID}}})
+	if err != nil {
+		t.Fatalf("journal was not persisted after dispatch cancellation: %v", err)
+	}
+	if len(result.Outcomes) != 1 || result.Outcomes[0].Status != OutcomeAmbiguous {
+		t.Fatalf("result=%#v", result)
+	}
+	data, err := os.ReadFile(journal)
+	if err != nil || !strings.Contains(string(data), `"status": "ambiguous"`) {
+		t.Fatalf("journal=%s err=%v", data, err)
+	}
+}
+
 type maintenanceWrite struct {
 	id         string
 	set        map[string]interface{}
@@ -419,11 +444,12 @@ type maintenanceWrite struct {
 }
 
 type fakePointStore struct {
-	collection     string
-	points         map[string]qdrant.Point
-	mutationErrors map[string]error
-	writes         []maintenanceWrite
-	afterWrite     func(*fakePointStore, string)
+	collection      string
+	points          map[string]qdrant.Point
+	mutationErrors  map[string]error
+	writes          []maintenanceWrite
+	afterWrite      func(*fakePointStore, string)
+	afterWriteError error
 }
 
 func newFakePointStore(collection string, points map[string]qdrant.Point) *fakePointStore {
@@ -467,7 +493,7 @@ func (f *fakePointStore) applyMaintenance(id string, set map[string]interface{},
 	if f.afterWrite != nil {
 		f.afterWrite(f, id)
 	}
-	return nil
+	return f.afterWriteError
 }
 
 func eligibleExpired(id string, point qdrant.Point) Finding {

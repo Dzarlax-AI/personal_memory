@@ -30,12 +30,13 @@ type analyzeOptions struct {
 }
 
 type mutationOptions struct {
-	qdrantURL  string
-	collection string
-	manifest   string
-	journal    string
-	pointIDs   pointIDs
-	eligible   bool
+	qdrantURL            string
+	collection           string
+	manifest             string
+	journal              string
+	pointIDs             pointIDs
+	eligible             bool
+	confirmServerStopped bool
 }
 
 type pointIDs []string
@@ -176,6 +177,7 @@ func parseMutationOptions(operation string, args []string) (mutationOptions, err
 	set.StringVar(&options.manifest, "manifest", "", "saved analysis manifest")
 	set.StringVar(&options.journal, "journal", "", "private result journal path")
 	set.Var(&options.pointIDs, "point-id", "manifest point ID (repeatable)")
+	set.BoolVar(&options.confirmServerStopped, "confirm-server-stopped", false, "confirm memory-mcp and other collection writers are stopped")
 	if operation == "quarantine" {
 		set.BoolVar(&options.eligible, "eligible", false, "select all eligible manifest findings")
 	}
@@ -190,6 +192,9 @@ func parseMutationOptions(operation string, args []string) (mutationOptions, err
 	}
 	if len(options.pointIDs) == 0 && !options.eligible {
 		return mutationOptions{}, fmt.Errorf("at least one point ID or --eligible is required")
+	}
+	if !options.confirmServerStopped {
+		return mutationOptions{}, fmt.Errorf("--confirm-server-stopped is required")
 	}
 	if operation != "quarantine" && options.eligible {
 		return mutationOptions{}, fmt.Errorf("eligible selection is only supported for quarantine")

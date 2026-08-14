@@ -309,6 +309,7 @@ To quarantine only records named by that saved manifest, use an explicit collect
   --collection memory \
   --manifest /secure/path/memory-maintenance-analysis.json \
   --journal /secure/path/memory-maintenance-quarantine.json \
+  --confirm-server-stopped \
   --eligible
 ```
 
@@ -320,10 +321,11 @@ Restore requires the same explicit inputs and IDs from a compatible manifest:
   --collection memory \
   --manifest /secure/path/memory-maintenance-analysis.json \
   --journal /secure/path/memory-maintenance-restore.json \
+  --confirm-server-stopped \
   --point-id 12345
 ```
 
-Both actions validate the immutable manifest batch and payload fingerprint before writing, create a mode-`0600` content-free result journal, and are idempotent for the same target. Qdrant has no payload-fingerprint compare-and-set: a concurrent change that cannot be verified after the write is reported as `ambiguous`, never as success. Purge, snapshots, and scheduled maintenance remain out of scope.
+Stop `memory-mcp` and every other writer to the collection before either action and keep them stopped until it completes; the CLI requires `--confirm-server-stopped`. This prevents a separate server process from continuing to serve a stale recall-cache entry after maintenance changes. Both actions validate the immutable manifest batch and payload fingerprint before writing, create a mode-`0600` content-free result journal, and are idempotent for the same target. If cancellation occurs after dispatch, the command uses a separate bounded cleanup context to persist the potentially `ambiguous` outcome. Qdrant has no payload-fingerprint compare-and-set: a concurrent change that cannot be verified after the write is reported as `ambiguous`, never as success. Purge, snapshots, and scheduled maintenance remain out of scope.
 
 ### Load operational context at session start
 

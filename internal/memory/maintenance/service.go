@@ -17,8 +17,9 @@ import (
 
 const (
 	// MaxSelectionSize bounds a one-off maintenance mutation and its journal.
-	MaxSelectionSize    = 100
-	maxManifestFindings = 10_000
+	MaxSelectionSize     = 100
+	maxManifestFindings  = 10_000
+	resultJournalTimeout = 5 * time.Second
 )
 
 type Operation string
@@ -145,7 +146,16 @@ func (s *Service) run(ctx context.Context, operation Operation, request Request)
 		s.invalidate()
 	}
 	if request.JournalPath != "" {
-		if err := WriteResultJournal(ctx, request.JournalPath, result); err != nil {
+		journalCtx := ctx
+		if dispatched {
+			// Once a mutation was dispatched, cancellation makes its outcome
+			// ambiguous. Preserve that audit record with a separate bounded
+			// cleanup context instead of inheriting the canceled request.
+			var cancel context.CancelFunc
+			journalCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), resultJournalTimeout)
+			defer cancel()
+		}
+		if err := WriteResultJournal(journalCtx, request.JournalPath, result); err != nil {
 			return result, fmt.Errorf("write maintenance result journal: %w", err)
 		}
 	}
