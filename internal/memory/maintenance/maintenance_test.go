@@ -60,7 +60,7 @@ func TestParseStatus(t *testing.T) {
 func TestNamespaceScopedAnalyzeDoesNotInventCrossNamespaceOrphans(t *testing.T) {
 	points := []qdrant.ScrollPoint{{ID: "1", Payload: map[string]interface{}{
 		"namespace": "projects", "lifecycle_state": "superseded", "canonical": false,
-		"supersedes": []interface{}{}, "superseded_by": []interface{}{"2"}, "updated_at": "2026-08-13T00:00:00Z",
+		"supersedes": []interface{}{}, "superseded_by": []interface{}{"2"}, "updated_at": "2026-08-13T00:00:00Z", "lifecycle_transitioned_at": "2026-08-13T00:00:00Z",
 	}}}
 	manifest, err := Analyze(context.Background(), fakeScanner{points: points}, Options{
 		Collection: "memory", Namespace: "projects", ReferenceTime: time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC),
@@ -93,7 +93,7 @@ func TestAnalyzeClassifiesConservativelyAndNeverEmitsText(t *testing.T) {
 	points := []qdrant.ScrollPoint{
 		{ID: "1", Payload: map[string]interface{}{"text": "private expired", "namespace": "projects", "created_at": "2026-01-01T00:00:00Z", "valid_until": "2026-08-01", "recall_count": float64(0)}},
 		{ID: "2", Payload: map[string]interface{}{"text": "protected fact body", "created_at": "2025-01-01T00:00:00Z", "lifecycle_state": "current", "canonical": true, "supersedes": []interface{}{}, "superseded_by": []interface{}{}, "recall_count": float64(0)}},
-		{ID: "3", Payload: map[string]interface{}{"text": "superseded fact body", "created_at": "2025-01-01T00:00:00Z", "updated_at": "2026-06-01T00:00:00Z", "lifecycle_state": "superseded", "canonical": false, "supersedes": []interface{}{}, "superseded_by": []interface{}{"4"}, "recall_count": float64(0)}},
+		{ID: "3", Payload: map[string]interface{}{"text": "superseded fact body", "created_at": "2025-01-01T00:00:00Z", "updated_at": "2026-08-13T00:00:00Z", "lifecycle_transitioned_at": "2026-06-01T00:00:00Z", "lifecycle_state": "superseded", "canonical": false, "supersedes": []interface{}{}, "superseded_by": []interface{}{"4"}, "recall_count": float64(0)}},
 		{ID: "4", Payload: map[string]interface{}{"text": "current", "created_at": "2026-06-01T00:00:00Z", "recall_count": float64(4)}},
 		{ID: "5", Payload: map[string]interface{}{"text": "bad metadata", "valid_until": "tomorrow"}},
 	}
@@ -131,6 +131,62 @@ func TestAnalyzeClassifiesConservativelyAndNeverEmitsText(t *testing.T) {
 	}
 	if !containsClass(byID["5"].Classes, ClassMalformedMetadata) {
 		t.Fatalf("malformed finding = %#v", byID["5"])
+	}
+}
+
+func TestAnalyzeOmitsAllMetadataWhenAnyManifestFieldIsMalformed(t *testing.T) {
+	const secret = "PRIVATE_METADATA_MARKER"
+	manifest, err := Analyze(context.Background(), fakeScanner{points: []qdrant.ScrollPoint{{
+		ID: "1", Payload: map[string]interface{}{
+			"text":               secret,
+			"lifecycle_state":    secret,
+			"created_at":         secret,
+			"updated_at":         secret,
+			"valid_until":        secret,
+			"maintenance_status": secret,
+		},
+	}}}, Options{
+		Collection: "memory", ReferenceTime: time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC),
+		SupersededRetention: 30 * 24 * time.Hour, StaleAfter: 90 * 24 * time.Hour, LowRecallThreshold: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), secret) {
+		t.Fatalf("manifest leaked malformed metadata: %s", encoded)
+	}
+	if len(manifest.Findings) != 1 || !containsClass(manifest.Findings[0].Classes, ClassMalformedMetadata) {
+		t.Fatalf("findings = %#v", manifest.Findings)
+	}
+}
+
+func TestSupersededRetentionUsesLifecycleTransitionTime(t *testing.T) {
+	reference := time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC)
+	points := []qdrant.ScrollPoint{
+		{ID: "old-transition", Payload: map[string]interface{}{"updated_at": "2026-08-13T00:00:00Z", "lifecycle_transitioned_at": "2026-06-01T00:00:00Z", "lifecycle_state": "superseded", "superseded_by": []interface{}{"current"}}},
+		{ID: "new-transition", Payload: map[string]interface{}{"updated_at": "2020-01-01T00:00:00Z", "lifecycle_transitioned_at": "2026-08-13T00:00:00Z", "lifecycle_state": "superseded", "superseded_by": []interface{}{"current"}}},
+		{ID: "current", Payload: map[string]interface{}{}},
+	}
+	manifest, err := Analyze(context.Background(), fakeScanner{points: points}, Options{
+		Collection: "memory", ReferenceTime: reference, SupersededRetention: 30 * 24 * time.Hour,
+		StaleAfter: 90 * 24 * time.Hour, LowRecallThreshold: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]Finding{}
+	for _, finding := range manifest.Findings {
+		byID[finding.PointID] = finding
+	}
+	if !byID["old-transition"].EligibleForQuarantine || !containsClass(byID["old-transition"].Classes, ClassSupersededRetention) {
+		t.Fatalf("old transition = %#v", byID["old-transition"])
+	}
+	if containsClass(byID["new-transition"].Classes, ClassSupersededRetention) || byID["new-transition"].EligibleForQuarantine {
+		t.Fatalf("new transition = %#v", byID["new-transition"])
 	}
 }
 

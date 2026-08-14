@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 )
 
@@ -49,5 +50,51 @@ func TestForgetOldDryRunIsContentFreeAndReadOnly(t *testing.T) {
 	text := toolResultText(t, result)
 	if requests != 1 || strings.Contains(text, "private") || !strings.Contains(text, "eligible_for_quarantine=1") {
 		t.Fatalf("requests=%d output=%q", requests, text)
+	}
+}
+
+func TestOrdinaryWritesDoNotReplaceInactiveDeterministicIDs(t *testing.T) {
+	for _, operation := range []string{"store", "import"} {
+		t.Run(operation, func(t *testing.T) {
+			const fact = "same inactive fact"
+			const namespace = "projects"
+			pointID := PointID(namespace, fact)
+			embedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`[[0.1,0.2]]`))
+			}))
+			defer embedServer.Close()
+			searches, writes := 0, 0
+			qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/points/"+pointID):
+					_, _ = w.Write([]byte(`{"result":{"id":"` + pointID + `","vector":[],"payload":{"text":"same inactive fact","namespace":"projects","maintenance_status":"quarantined","quarantined_at":"2026-08-14T00:00:00Z","quarantine_reason":"expired","quarantine_batch_id":"batch"}}}`))
+				case strings.HasSuffix(r.URL.Path, "/points/search"):
+					searches++
+					_, _ = w.Write([]byte(`{"result":[]}`))
+				case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/points"):
+					writes++
+					_, _ = w.Write([]byte(`{"status":"ok","result":{"status":"completed"}}`))
+				default:
+					t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer qdrantServer.Close()
+			srv := NewServer(qdrant.NewClient(qdrantServer.URL, "memory"), embeddings.NewClient(embedServer.URL), NewCache(time.Minute), "test", .97, .60, .90)
+			if operation == "store" {
+				result, err := srv.storeFact(context.Background(), toolRequest(map[string]interface{}{"fact": fact, "namespace": namespace}))
+				if err != nil || !result.IsError {
+					t.Fatalf("store result=%#v err=%v", result, err)
+				}
+			} else {
+				facts, _ := json.Marshal([]map[string]interface{}{{"text": fact, "namespace": namespace}})
+				result, err := srv.importFacts(context.Background(), toolRequest(map[string]interface{}{"facts": string(facts)}))
+				if err != nil || result.IsError || !strings.Contains(toolResultText(t, result), "Imported 0 facts, skipped 1") {
+					t.Fatalf("import result=%#v err=%v", result, err)
+				}
+			}
+			if searches != 0 || writes != 0 {
+				t.Fatalf("searches=%d writes=%d, want exact inactive refusal", searches, writes)
+			}
+		})
 	}
 }

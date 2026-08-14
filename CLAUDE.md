@@ -117,6 +117,7 @@ lifecycle_state   string    — current, historical, superseded, or disputed; no
 canonical         bool      — explicit current-only authority hint; not globally unique
 provenance        object    — origin source and optional reference; not a trust score
 verified_at       string    — optional RFC3339 verification timestamp
+lifecycle_transitioned_at string — server-recorded RFC3339 time of the latest lifecycle-state transition
 supersedes        []string  — normalized IDs replaced by this fact
 superseded_by     []string  — normalized IDs replacing this fact; required for superseded state
 ```
@@ -186,7 +187,7 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 
 ### memory/lifecycle and lifecycle_adapter.go
 - `lifecycle.Parse(payload, pointID)` is the single normalization and validation boundary. Only a payload with no lifecycle fields is treated as legacy current; malformed explicit metadata returns a non-sensitive invalid view and must not panic.
-- Lifecycle transitions are explicit, reversible, and idempotent when target invariants pass. `permanent` controls retention protection only, while expired `valid_until` excludes even current facts from current-context flows.
+- Lifecycle transitions are explicit, reversible, and idempotent when target invariants pass. `lifecycle_transitioned_at` is server-recorded and preserved across idempotent same-state writes; maintenance retention never substitutes content `updated_at`. `permanent` controls retention protection only, while expired `valid_until` excludes even current facts from current-context flows.
 - Ordinary memory reads accept explicit `maintenance_status=active` and legacy missing status. Quarantined or malformed maintenance records are excluded; `cmd/maintenance analyze` is the content-free read-only inspection path.
 
 ### qdrant/client.go

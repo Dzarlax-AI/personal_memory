@@ -527,12 +527,13 @@ func (c *Client) SetPayload(ctx context.Context, id string, payload map[string]i
 }
 
 var lifecyclePayloadKeys = map[string]struct{}{
-	"lifecycle_state": {},
-	"canonical":       {},
-	"provenance":      {},
-	"verified_at":     {},
-	"supersedes":      {},
-	"superseded_by":   {},
+	"lifecycle_state":           {},
+	"lifecycle_transitioned_at": {},
+	"canonical":                 {},
+	"provenance":                {},
+	"verified_at":               {},
+	"supersedes":                {},
+	"superseded_by":             {},
 }
 
 // ReplaceLifecyclePayload applies a complete lifecycle target without

@@ -299,7 +299,7 @@ go build -o ./maintenance ./cmd/maintenance
   --output /secure/path/memory-maintenance-analysis.json
 ```
 
-The output manifest is created exclusively with mode `0600`. It contains point IDs, closed candidate classes, timestamps, policy settings, and metadata fingerprints, but no fact text or vectors. Analysis is read-only: quarantine, restore, and purge are staged follow-up work and are not available in this release.
+The output manifest is created exclusively with mode `0600`. It contains point IDs, closed candidate classes, validated timestamps, policy settings, and metadata fingerprints, but no fact text, unvalidated metadata strings, or vectors. Superseded retention uses the server-recorded lifecycle transition time rather than content `updated_at`. Analysis is read-only: quarantine, restore, and purge are staged follow-up work and are not available in this release.
 
 ### Load operational context at session start
 

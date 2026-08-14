@@ -80,6 +80,17 @@ func (s *Server) withFactMutationLock(namespace string, mutation func() bool) bo
 	return mutation()
 }
 
+func (s *Server) rejectInactivePointCollision(ctx context.Context, pointID string) error {
+	point, found, err := s.qdrant.Get(ctx, pointID)
+	if err != nil {
+		return fmt.Errorf("exact deterministic point lookup failed: %w", err)
+	}
+	if found && !activeMemoryPayload(point.Payload) {
+		return fmt.Errorf("deterministic point_id belongs to an inactive fact; use the maintenance restore workflow")
+	}
+	return nil
+}
+
 // Start starts the bounded recall-counter worker. It is safe to call once.
 func (s *Server) Start(ctx context.Context) {
 	s.recallCounterMu.Lock()
@@ -711,6 +722,10 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	unlockMutation := s.lockFactMutations(namespace)
 	defer unlockMutation()
 
+	if err := s.rejectInactivePointCollision(ctx, pointID); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
 	dedupLimit := lifecycleCandidateLimit(relatedFactResultLimit)
 	dedupLow := s.dedupThreshold
 	dedupCandidates, dedupErr := s.qdrant.Search(ctx, vec, dedupLimit, activeMemoryFilters(s.buildFilters(nil, namespace)), &dedupLow)
@@ -751,6 +766,7 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		return mcp.NewToolResultStructured(result, formatStoreFactResult(result)), nil
 	}
 
+	createdAt := nowISO()
 	payload := map[string]interface{}{
 		"text":         fact,
 		"user":         s.user,
@@ -758,13 +774,14 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		"tags":         tags,
 		"primary_tag":  primaryTag,
 		"permanent":    permanent,
-		"created_at":   nowISO(),
+		"created_at":   createdAt,
 		"recall_count": 0,
 	}
 	if validUntil != "" {
 		payload["valid_until"] = validUntil
 	}
 	if parsedLifecycle.Present {
+		targetLifecycle.TransitionedAt = createdAt
 		payload = lifecycle.ApplyToPayload(payload, targetLifecycle)
 	}
 
@@ -983,6 +1000,7 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 			return mcp.NewToolResultError("updated text collides with an existing fact; refusing to overwrite"), nil
 		}
 	}
+	currentLifecycle := lifecycleView(old.ID, old.Payload)
 	targetLifecycle, err := validateTarget(old, newID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("lifecycle metadata is invalid for updated point_id: %v", err)), nil
@@ -995,7 +1013,8 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		payload[key] = value
 	}
 	payload["text"] = newFact
-	payload["updated_at"] = nowISO()
+	updatedAt := nowISO()
+	payload["updated_at"] = updatedAt
 	payload["namespace"] = namespace
 	if tags := tagsParam(args); tags != nil {
 		primary := strParam(args, "primary_tag")
@@ -1014,6 +1033,7 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		payload["permanent"] = v
 	}
 	if parsedLifecycle.Present {
+		targetLifecycle.TransitionedAt = lifecycleTransitionedAt(currentLifecycle, targetLifecycle, updatedAt)
 		payload = lifecycle.ApplyToPayload(payload, targetLifecycle)
 	}
 
@@ -1088,6 +1108,7 @@ func (s *Server) setFactLifecycle(ctx context.Context, req mcp.CallToolRequest) 
 	if err := lifecycle.ValidateTransition(point.ID, current, target); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	target.TransitionedAt = lifecycleTransitionedAt(current, target, nowISO())
 	set, deleteKeys := lifecycleMutationPayload(target)
 	err = s.qdrant.ReplaceLifecyclePayload(ctx, point.ID, set, deleteKeys)
 	// Once dispatched, a transport/server error is ambiguous: Qdrant may have
@@ -1290,6 +1311,10 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			continue
 		}
 		itemImported := s.withFactMutationLock(candidate.namespace, func() bool {
+			if err := s.rejectInactivePointCollision(ctx, candidate.pointID); err != nil {
+				slog.Warn("import inactive point collision", "item_index", candidate.itemIndex, "point_id", candidate.pointID, "error", err)
+				return false
+			}
 			// Deduplication is namespace-scoped and lifecycle-aware, matching
 			// store_fact semantics. Search failures preserve the existing
 			// fail-open import behavior, while a saturated non-blocking window
@@ -1334,6 +1359,9 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 				payload["created_at"] = nowISO()
 			}
 			if candidate.hasLifecycle {
+				if candidate.lifecycle.TransitionedAt == "" {
+					candidate.lifecycle.TransitionedAt = nowISO()
+				}
 				payload = lifecycle.ApplyToPayload(payload, candidate.lifecycle)
 			}
 

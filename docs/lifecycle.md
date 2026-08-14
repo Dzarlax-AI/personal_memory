@@ -129,7 +129,7 @@ Viz does not filter nodes by lifecycle state. Its privacy-safe summaries include
 
 `cmd/maintenance analyze` performs one read-only collection scan and writes an exclusive mode-`0600` manifest. Candidate classes are expired, superseded past a configured retention interval, deterministic duplicate candidate, stale/unused review candidate, malformed/orphaned metadata, protected, and already quarantined. Reports contain IDs, closed classes, safe timestamps, policy settings, and payload fingerprints, never fact text or vectors.
 
-Permanent, disputed, and current canonical records are protected. Age or low recall activity alone is review-only and never makes a record eligible for quarantine. A superseded record without a valid `updated_at` is insufficient evidence for retention eligibility and is reported as malformed/review-only.
+Permanent, disputed, and current canonical records are protected. Age or low recall activity alone is review-only and never makes a record eligible for quarantine. Superseded retention is measured from the server-recorded `lifecycle_transitioned_at`, never the unrelated content `updated_at`. A superseded record without a valid transition timestamp is insufficient evidence for retention eligibility and is reported as malformed/review-only.
 
 `forget_old(dry_run=true)` remains only as a content-free compatibility preview. `dry_run=false` fails before scanning or mutation. Quarantine, restore, and snapshot-gated purge are intentionally not implemented by the analysis stage.
 

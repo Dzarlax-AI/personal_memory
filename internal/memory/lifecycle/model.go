@@ -31,15 +31,16 @@ type Provenance struct {
 // Valid is false when explicit lifecycle metadata is malformed. InvalidReason
 // intentionally describes metadata only and must never include fact text.
 type View struct {
-	State         State       `json:"state"`
-	Legacy        bool        `json:"legacy"`
-	Canonical     bool        `json:"canonical"`
-	Provenance    *Provenance `json:"provenance,omitempty"`
-	VerifiedAt    string      `json:"verified_at,omitempty"`
-	Supersedes    []string    `json:"supersedes"`
-	SupersededBy  []string    `json:"superseded_by"`
-	Valid         bool        `json:"valid"`
-	InvalidReason string      `json:"invalid_reason,omitempty"`
+	State          State       `json:"state"`
+	Legacy         bool        `json:"legacy"`
+	Canonical      bool        `json:"canonical"`
+	Provenance     *Provenance `json:"provenance,omitempty"`
+	VerifiedAt     string      `json:"verified_at,omitempty"`
+	TransitionedAt string      `json:"transitioned_at,omitempty"`
+	Supersedes     []string    `json:"supersedes"`
+	SupersededBy   []string    `json:"superseded_by"`
+	Valid          bool        `json:"valid"`
+	InvalidReason  string      `json:"invalid_reason,omitempty"`
 }
 
 // Candidate couples lifecycle metadata with an unmodified vector score.
@@ -62,6 +63,7 @@ type Input struct {
 
 var payloadFields = []string{
 	"lifecycle_state",
+	"lifecycle_transitioned_at",
 	"canonical",
 	"provenance",
 	"verified_at",
@@ -117,6 +119,9 @@ func PayloadFromView(view View) map[string]interface{} {
 	if view.VerifiedAt != "" {
 		payload["verified_at"] = view.VerifiedAt
 	}
+	if view.TransitionedAt != "" {
+		payload["lifecycle_transitioned_at"] = view.TransitionedAt
+	}
 	return payload
 }
 
@@ -157,7 +162,7 @@ func Parse(payload map[string]interface{}, pointID string) (View, error) {
 		SupersededBy: []string{},
 		Valid:        true,
 	}
-	for _, key := range []string{"lifecycle_state", "canonical", "provenance", "verified_at", "supersedes", "superseded_by"} {
+	for _, key := range payloadFields {
 		if _, exists := payload[key]; exists {
 			view.Legacy = false
 			break
@@ -200,6 +205,17 @@ func Parse(payload map[string]interface{}, pointID string) (View, error) {
 			return invalid(view, "verified_at must use RFC3339 format")
 		}
 		view.VerifiedAt = verifiedAt
+	}
+
+	if raw, exists := payload["lifecycle_transitioned_at"]; exists {
+		transitionedAt, ok := raw.(string)
+		if !ok || strings.TrimSpace(transitionedAt) != transitionedAt {
+			return invalid(view, "lifecycle_transitioned_at must use RFC3339 format")
+		}
+		if _, err := time.Parse(time.RFC3339, transitionedAt); err != nil {
+			return invalid(view, "lifecycle_transitioned_at must use RFC3339 format")
+		}
+		view.TransitionedAt = transitionedAt
 	}
 
 	var err error

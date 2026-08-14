@@ -125,6 +125,13 @@ func lifecycleStringParam(args map[string]interface{}, key string) (string, erro
 	return value, nil
 }
 
+func lifecycleTransitionedAt(current, target lifecycle.View, now string) string {
+	if !current.Valid || current.Legacy || current.State != target.State || current.TransitionedAt == "" {
+		return now
+	}
+	return current.TransitionedAt
+}
+
 func lifecycleRelationshipParam(args map[string]interface{}, key string) ([]string, error) {
 	raw, exists := args[key]
 	if !exists || raw == nil {

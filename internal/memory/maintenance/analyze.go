@@ -50,17 +50,18 @@ type PolicySnapshot struct {
 }
 
 type Finding struct {
-	PointID               string           `json:"point_id"`
-	Classes               []CandidateClass `json:"classes"`
-	LifecycleState        string           `json:"lifecycle_state,omitempty"`
-	MaintenanceStatus     Status           `json:"maintenance_status"`
-	CreatedAt             string           `json:"created_at,omitempty"`
-	UpdatedAt             string           `json:"updated_at,omitempty"`
-	ValidUntil            string           `json:"valid_until,omitempty"`
-	QuarantinedAt         string           `json:"quarantined_at,omitempty"`
-	Protected             bool             `json:"protected"`
-	EligibleForQuarantine bool             `json:"eligible_for_quarantine"`
-	Fingerprint           string           `json:"fingerprint"`
+	PointID                 string           `json:"point_id"`
+	Classes                 []CandidateClass `json:"classes"`
+	LifecycleState          string           `json:"lifecycle_state,omitempty"`
+	MaintenanceStatus       Status           `json:"maintenance_status,omitempty"`
+	LifecycleTransitionedAt string           `json:"lifecycle_transitioned_at,omitempty"`
+	CreatedAt               string           `json:"created_at,omitempty"`
+	UpdatedAt               string           `json:"updated_at,omitempty"`
+	ValidUntil              string           `json:"valid_until,omitempty"`
+	QuarantinedAt           string           `json:"quarantined_at,omitempty"`
+	Protected               bool             `json:"protected"`
+	EligibleForQuarantine   bool             `json:"eligible_for_quarantine"`
+	Fingerprint             string           `json:"fingerprint"`
 }
 
 type Manifest struct {
@@ -133,9 +134,9 @@ func classify(point qdrant.ScrollPoint, ids map[string]struct{}, checkOrphans, d
 	payload := point.Payload
 	view := Parse(payload)
 	life, _ := lifecycle.Parse(payload, point.ID)
-	f := Finding{PointID: point.ID, LifecycleState: string(life.State), MaintenanceStatus: view.Status, CreatedAt: stringValue(payload["created_at"]), UpdatedAt: stringValue(payload["updated_at"]), ValidUntil: stringValue(payload["valid_until"]), QuarantinedAt: view.QuarantinedAt, Fingerprint: fingerprint(point)}
+	f := Finding{PointID: point.ID, Fingerprint: fingerprint(point)}
 	malformed := !view.Valid || !life.Valid
-	for _, key := range []string{"namespace", "created_at", "updated_at", "valid_until"} {
+	for _, key := range []string{"namespace", "created_at", "updated_at", "valid_until", "lifecycle_transitioned_at"} {
 		if raw, present := payload[key]; present {
 			if value, ok := raw.(string); !ok || value == "" {
 				malformed = true
@@ -157,25 +158,35 @@ func classify(point qdrant.ScrollPoint, ids map[string]struct{}, checkOrphans, d
 	if view.Valid && view.Status == Quarantined {
 		f.Classes = append(f.Classes, ClassAlreadyQuarantined)
 	}
-	validUntil, validUntilOK := parseDate(f.ValidUntil)
-	if f.ValidUntil != "" && !validUntilOK {
+	createdAtText := stringValue(payload["created_at"])
+	updatedAtText := stringValue(payload["updated_at"])
+	validUntilText := stringValue(payload["valid_until"])
+	transitionedAtText := stringValue(payload["lifecycle_transitioned_at"])
+	validUntil, validUntilOK := parseDate(validUntilText)
+	if validUntilText != "" && !validUntilOK {
 		malformed = true
 	}
 	if validUntilOK && utcDate(options.ReferenceTime).After(validUntil) {
 		f.Classes = append(f.Classes, ClassExpired)
 	}
 	if life.Valid && life.State == lifecycle.Superseded {
-		updatedAt, ok := parseRFC3339(f.UpdatedAt)
+		transitionedAt, ok := parseRFC3339(transitionedAtText)
 		if !ok {
 			malformed = true
-		} else if !options.ReferenceTime.Before(updatedAt.Add(options.SupersededRetention)) {
+		} else if !options.ReferenceTime.Before(transitionedAt.Add(options.SupersededRetention)) {
 			f.Classes = append(f.Classes, ClassSupersededRetention)
 		}
 	}
-	if createdAt, ok := parseRFC3339(f.CreatedAt); f.CreatedAt != "" && !ok {
+	if createdAt, ok := parseRFC3339(createdAtText); createdAtText != "" && !ok {
 		malformed = true
 	} else if ok && !options.ReferenceTime.Before(createdAt.Add(options.StaleAfter)) && recallCount(payload["recall_count"]) <= options.LowRecallThreshold {
 		f.Classes = append(f.Classes, ClassStaleUnused)
+	}
+	if _, ok := parseRFC3339(updatedAtText); updatedAtText != "" && !ok {
+		malformed = true
+	}
+	if _, ok := parseRFC3339(transitionedAtText); transitionedAtText != "" && !ok {
+		malformed = true
 	}
 	if duplicate {
 		f.Classes = append(f.Classes, ClassDuplicateCandidate)
@@ -189,6 +200,14 @@ func classify(point qdrant.ScrollPoint, ids map[string]struct{}, checkOrphans, d
 	}
 	if malformed {
 		f.Classes = append(f.Classes, ClassMalformedMetadata)
+	} else {
+		f.LifecycleState = string(life.State)
+		f.MaintenanceStatus = view.Status
+		f.LifecycleTransitionedAt = transitionedAtText
+		f.CreatedAt = createdAtText
+		f.UpdatedAt = updatedAtText
+		f.ValidUntil = validUntilText
+		f.QuarantinedAt = view.QuarantinedAt
 	}
 	f.Protected = boolValue(payload["permanent"]) || (life.Valid && (life.State == lifecycle.Disputed || (life.State == lifecycle.Current && life.Canonical)))
 	if f.Protected {
