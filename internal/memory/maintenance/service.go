@@ -391,7 +391,7 @@ func WriteResultJournal(ctx context.Context, path string, result Result) error {
 		return fmt.Errorf("create result journal temp file: %w", err)
 	}
 	tempPath := file.Name()
-	defer os.Remove(tempPath)
+	defer func() { _ = os.Remove(tempPath) }()
 	if err := file.Chmod(0o600); err != nil {
 		_ = file.Close()
 		return fmt.Errorf("set result journal permissions: %w", err)

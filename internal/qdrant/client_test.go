@@ -597,6 +597,7 @@ func TestMaintenanceMutationsUseCompleteTypedStrongBatches(t *testing.T) {
 			return client.QuarantineMaintenance(context.Background(), "1", time.Now(), "expired", "")
 		},
 		func() error { return client.RestoreMaintenance(context.Background(), "") },
+		func() error { return client.RestoreMaintenance(context.Background(), " 1") },
 	} {
 		if err := invalid(); err == nil {
 			t.Fatal("expected typed validation error")

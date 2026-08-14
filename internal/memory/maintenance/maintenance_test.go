@@ -208,7 +208,7 @@ func TestQuarantineRestoreServiceIsManifestBoundIdempotentAndContentFree(t *test
 	store := newFakePointStore("memory", map[string]qdrant.Point{
 		"42": {ID: "42", Payload: map[string]interface{}{"text": private, "valid_until": "2026-08-01", "created_at": "2026-01-01T00:00:00Z"}},
 	})
-	manifest := manifestFor(store.points["42"], eligibleExpired("42", store.points["42"]))
+	manifest := manifestFor(eligibleExpired("42", store.points["42"]))
 	invalidations := 0
 	service, err := NewService(store, "memory", func() { invalidations++ })
 	if err != nil {
@@ -237,8 +237,12 @@ func TestQuarantineRestoreServiceIsManifestBoundIdempotentAndContentFree(t *test
 	if err != nil || strings.Contains(string(journalContents), private) || strings.Contains(string(journalContents), "text") {
 		t.Fatalf("journal leaked private content: %s (%v)", journalContents, err)
 	}
-	if info, err := os.Stat(journal); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("journal mode=%v err=%v", info.Mode(), err)
+	info, err := os.Stat(journal)
+	if err != nil {
+		t.Fatalf("stat journal: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("journal mode=%v", info.Mode())
 	}
 
 	result, err = service.Quarantine(context.Background(), request)
@@ -265,7 +269,7 @@ func TestServiceRejectsManifestAndSelectionBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest := manifestFor(point, eligibleExpired("1", point))
+	manifest := manifestFor(eligibleExpired("1", point))
 	for name, request := range map[string]Request{
 		"incomplete":          {Manifest: func() Manifest { m := manifest; m.Complete = false; return m }(), Selection: Selection{PointIDs: []string{"1"}}},
 		"wrong collection":    {Manifest: func() Manifest { m := manifest; m.Collection = "other"; return m }(), Selection: Selection{PointIDs: []string{"1"}}},
@@ -353,7 +357,7 @@ func TestServicePreservesNumericAndStringIDsAndRequiresCompatibleBatchForRestore
 func TestServiceReportsAmbiguousWhenPostWriteVerificationSeesConcurrentDrift(t *testing.T) {
 	point := qdrant.Point{ID: "quarantine", Payload: map[string]interface{}{"valid_until": "2026-08-01"}}
 	store := newFakePointStore("memory", map[string]qdrant.Point{point.ID: point})
-	manifest := manifestFor(point, eligibleExpired(point.ID, point))
+	manifest := manifestFor(eligibleExpired(point.ID, point))
 	invalidations := 0
 	service, err := NewService(store, "memory", func() { invalidations++ })
 	if err != nil {
@@ -366,7 +370,7 @@ func TestServiceReportsAmbiguousWhenPostWriteVerificationSeesConcurrentDrift(t *
 	}
 
 	restorePoint := qdrant.Point{ID: "restore", Payload: map[string]interface{}{"valid_until": "2026-08-01"}}
-	restoreManifest := manifestFor(restorePoint, eligibleExpired(restorePoint.ID, restorePoint))
+	restoreManifest := manifestFor(eligibleExpired(restorePoint.ID, restorePoint))
 	restorePoint.Payload = map[string]interface{}{
 		"valid_until": "2026-08-01", "maintenance_status": "quarantined", "quarantined_at": "2026-08-14T00:00:00Z",
 		"quarantine_reason": "expired", "quarantine_batch_id": restoreManifest.BatchID,
@@ -398,8 +402,12 @@ func TestWriteResultJournalIsAtomicPrivateAndCancellationSafe(t *testing.T) {
 	if err != nil || !strings.Contains(string(data), `"operation": "restore"`) {
 		t.Fatalf("atomic replacement data=%s err=%v", data, err)
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode=%v err=%v", info.Mode(), err)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat journal: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode=%v", info.Mode())
 	}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -415,7 +423,7 @@ func TestWriteResultJournalIsAtomicPrivateAndCancellationSafe(t *testing.T) {
 func TestServicePersistsAmbiguousJournalAfterMutationCancelsRequest(t *testing.T) {
 	point := qdrant.Point{ID: "cancelled", Payload: map[string]interface{}{"valid_until": "2026-08-01"}}
 	store := newFakePointStore("memory", map[string]qdrant.Point{point.ID: point})
-	manifest := manifestFor(point, eligibleExpired(point.ID, point))
+	manifest := manifestFor(eligibleExpired(point.ID, point))
 	ctx, cancel := context.WithCancel(context.Background())
 	store.afterWrite = func(_ *fakePointStore, _ string) { cancel() }
 	store.afterWriteError = context.Canceled
@@ -504,7 +512,7 @@ func fp(point qdrant.Point) string {
 	return fingerprint(qdrant.ScrollPoint{ID: point.ID, Payload: point.Payload})
 }
 
-func manifestFor(point qdrant.Point, finding Finding) Manifest {
+func manifestFor(finding Finding) Manifest {
 	return manifestWithFindings([]Finding{finding})
 }
 

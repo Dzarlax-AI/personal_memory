@@ -68,6 +68,19 @@ func TestReadManifestRejectsTrailingValueAndUnknownFields(t *testing.T) {
 	}
 }
 
+func TestWriteMutationSummaryFailsClosedOnUnresolvedOutcomes(t *testing.T) {
+	for _, status := range []maintenance.OutcomeStatus{maintenance.OutcomeFailed, maintenance.OutcomeAmbiguous} {
+		var output strings.Builder
+		result := maintenance.Result{BatchID: "batch", Outcomes: []maintenance.PointOutcome{{PointID: "1", Status: status}}}
+		if err := writeMutationSummary(&output, "quarantine", result); err == nil {
+			t.Fatalf("status %q returned success: %s", status, output.String())
+		}
+		if !strings.Contains(output.String(), string(status)+"=1") {
+			t.Fatalf("status %q missing from summary: %s", status, output.String())
+		}
+	}
+}
+
 func TestParseAnalyzeOptionsRejectsUnsafeInputs(t *testing.T) {
 	now := time.Now()
 	for _, args := range [][]string{{}, {"--output", "x", "--stale-days", "0"}, {"--output", "x", "--reference-time", "tomorrow"}, {"--output", "x", "extra"}} {

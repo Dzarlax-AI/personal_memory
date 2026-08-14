@@ -122,12 +122,21 @@ func runMutation(ctx context.Context, operation string, args []string, stdout io
 	if err != nil {
 		return fmt.Errorf("maintenance action could not complete")
 	}
+	return writeMutationSummary(stdout, operation, result)
+}
+
+func writeMutationSummary(stdout io.Writer, operation string, result maintenance.Result) error {
 	counts := map[maintenance.OutcomeStatus]int{}
 	for _, outcome := range result.Outcomes {
 		counts[outcome.Status]++
 	}
-	_, err = fmt.Fprintf(stdout, "mode=%s batch_id=%s updated=%d already_applied=%d not_found=%d protected_or_ineligible=%d conflict=%d failed=%d ambiguous=%d\n", operation, result.BatchID, counts[maintenance.OutcomeUpdated], counts[maintenance.OutcomeAlreadyApplied], counts[maintenance.OutcomeNotFound], counts[maintenance.OutcomeProtectedOrIneligible], counts[maintenance.OutcomeConflict], counts[maintenance.OutcomeFailed], counts[maintenance.OutcomeAmbiguous])
-	return err
+	if _, err := fmt.Fprintf(stdout, "mode=%s batch_id=%s updated=%d already_applied=%d not_found=%d protected_or_ineligible=%d conflict=%d failed=%d ambiguous=%d\n", operation, result.BatchID, counts[maintenance.OutcomeUpdated], counts[maintenance.OutcomeAlreadyApplied], counts[maintenance.OutcomeNotFound], counts[maintenance.OutcomeProtectedOrIneligible], counts[maintenance.OutcomeConflict], counts[maintenance.OutcomeFailed], counts[maintenance.OutcomeAmbiguous]); err != nil {
+		return err
+	}
+	if counts[maintenance.OutcomeFailed] > 0 || counts[maintenance.OutcomeAmbiguous] > 0 {
+		return fmt.Errorf("maintenance action completed with unresolved outcomes")
+	}
+	return nil
 }
 
 func parseAnalyzeOptions(args []string, now time.Time) (analyzeOptions, error) {

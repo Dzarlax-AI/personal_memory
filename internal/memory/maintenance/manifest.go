@@ -54,7 +54,7 @@ func ReadManifest(path string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, fmt.Errorf("open manifest")
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(file, MaxManifestBytes+1))
 	if err != nil || int64(len(data)) > MaxManifestBytes {
 		return Manifest{}, fmt.Errorf("read manifest")
