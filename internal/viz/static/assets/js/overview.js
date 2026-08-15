@@ -72,8 +72,9 @@ async function loadQuarantinedFacts() {
     if (requestGeneration !== quarantinedInspectionGeneration || error.name === 'AbortError') return;
     container.innerHTML = '<div class="empty-state">Unable to load quarantined facts. Try the selector again.</div>';
   } finally {
-    if (requestGeneration !== quarantinedInspectionGeneration) return;
-    quarantinedInspectionAbortController = null;
+    if (requestGeneration === quarantinedInspectionGeneration) {
+      quarantinedInspectionAbortController = null;
+    }
   }
 }
 

@@ -34,6 +34,7 @@ type mutationOptions struct {
 	collection            string
 	manifest              string
 	journal               string
+	snapshotArchive       string
 	pointIDs              pointIDs
 	eligible              bool
 	confirmServerStopped  bool
@@ -94,6 +95,7 @@ func runPurge(ctx context.Context, args []string, stdout io.Writer) error {
 		Manifest:             manifest,
 		Selection:            maintenance.Selection{PointIDs: []string(options.pointIDs)},
 		JournalPath:          options.journal,
+		SnapshotArchivePath:  options.snapshotArchive,
 		MinimumQuarantineAge: time.Duration(options.minimumQuarantineDays) * day,
 	})
 	if err != nil {
@@ -257,6 +259,7 @@ func parsePurgeOptions(args []string) (mutationOptions, error) {
 	set.StringVar(&options.collection, "collection", "", "collection name")
 	set.StringVar(&options.manifest, "manifest", "", "saved analysis manifest")
 	set.StringVar(&options.journal, "journal", "", "private result journal path")
+	set.StringVar(&options.snapshotArchive, "snapshot-archive", "", "private recovery snapshot archive path")
 	set.Var(&options.pointIDs, "point-id", "manifest point ID (repeatable)")
 	set.IntVar(&options.minimumQuarantineDays, "minimum-quarantine-days", 0, "minimum completed quarantine days")
 	set.BoolVar(&options.confirmServerStopped, "confirm-server-stopped", false, "confirm memory-mcp and other collection writers are stopped")
@@ -267,8 +270,8 @@ func parsePurgeOptions(args []string) (mutationOptions, error) {
 	if set.NArg() != 0 {
 		return mutationOptions{}, fmt.Errorf("unexpected arguments")
 	}
-	if strings.TrimSpace(options.qdrantURL) == "" || strings.TrimSpace(options.collection) == "" || strings.TrimSpace(options.manifest) == "" || strings.TrimSpace(options.journal) == "" {
-		return mutationOptions{}, fmt.Errorf("qdrant URL, collection, manifest, and journal are required")
+	if strings.TrimSpace(options.qdrantURL) == "" || strings.TrimSpace(options.collection) == "" || strings.TrimSpace(options.manifest) == "" || strings.TrimSpace(options.journal) == "" || strings.TrimSpace(options.snapshotArchive) == "" {
+		return mutationOptions{}, fmt.Errorf("qdrant URL, collection, manifest, journal, and snapshot archive are required")
 	}
 	if len(options.pointIDs) == 0 || len(options.pointIDs) > maintenance.MaxSelectionSize {
 		return mutationOptions{}, fmt.Errorf("explicit point IDs must be non-empty and bounded")

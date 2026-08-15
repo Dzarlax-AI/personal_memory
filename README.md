@@ -331,11 +331,11 @@ Stop `memory-mcp` and every other writer to the collection before either action 
 
 Purge is a manual, destructive operator action. It has no MCP endpoint, dashboard button, scheduler, or automation wrapper. The production commands below are a future runbook for a separate, explicitly approved maintenance window after deployment; this implementation and its testing perform no production purge.
 
-Only a saved, complete analysis manifest may select a record. The manifest marks permanent records, disputed records, and current canonical records as protected. Low recall or age alone is review-only; eligible quarantine candidates are limited to closed candidate classes such as expired, retained superseded, and deterministic duplicate candidates. Quarantine can select `--eligible`, but purge never can: give every purge target as an explicit `--point-id` from that same manifest.
+Only a saved, complete analysis manifest may select a record. The manifest marks permanent records, disputed records, and current canonical records as protected. Low recall, age, or duplicate similarity alone is review-only; eligible quarantine candidates are limited to the expired and retained-superseded classes. Quarantine can select `--eligible`, but purge never can: give every purge target as an explicit `--point-id` from that same manifest.
 
 Keep writers stopped for analysis, quarantine, restore, and purge. Keep the manifest and result journals in a private directory (mode `0700`); the tools create manifests and journals as mode `0600`. A nonzero command result or any `failed`, `ambiguous`, `conflict`, `not_found`, or `protected_or_ineligible` outcome is unresolved: inspect the journal before restarting, correct the cause, then repeat the original explicit selection with the same manifest and the same journal.
 
-After the configured quarantine period has fully elapsed (choose an operator policy such as 30 days; the CLI requires a positive `--minimum-quarantine-days`), purge creates a fresh Qdrant snapshot in the same invocation and proves its exact snapshot identity exists before it deletes anything. It re-proves that identity immediately before every exact-ID deletion. A partial retry reuses the original journal and its original pre-delete snapshot identity; it must not create a post-delete replacement snapshot.
+After the configured quarantine period has fully elapsed (choose an operator policy such as 30 days; the CLI requires a positive `--minimum-quarantine-days`), purge creates a fresh Qdrant snapshot in the same invocation and proves its exact snapshot identity exists before it deletes anything. It also downloads that snapshot to the required private `--snapshot-archive` path, fsyncs it as mode `0600`, and records its SHA-256 in the journal before deletion. Keep this archive outside Qdrant's managed snapshot directory so scheduled `KEEP_SNAPSHOTS` pruning cannot remove the recovery point. Purge re-proves the live snapshot identity immediately before every exact-ID deletion. A partial retry reuses the original journal, snapshot identity, and checksum-verified archive; it must not create a post-delete replacement snapshot.
 
 ```bash
 # All collection writers remain stopped throughout this sequence.
@@ -359,13 +359,14 @@ After the configured quarantine period has fully elapsed (choose an operator pol
   --collection memory \
   --manifest /secure/path/manifest.json \
   --journal /secure/path/purge-result.json \
+  --snapshot-archive /secure/path/purge-recovery.snapshot \
   --confirm-server-stopped \
   --confirm-purge \
   --minimum-quarantine-days 30 \
   --point-id 12345
 ```
 
-The purge journal records the verified snapshot name. Preserve it with the manifest. If a destructive result must be rolled back, restore that verified collection snapshot using the approved Qdrant recovery procedure while writers are stopped, verify the restored collection, then restart the service. Do not delete the recovery snapshot until that decision is closed.
+The purge journal records the verified snapshot name and archive checksum. Preserve the manifest, journal, and independently archived snapshot together. If a destructive result must be rolled back, restore that verified archive using the approved Qdrant recovery procedure while writers are stopped, verify the restored collection, then restart the service. Do not delete the recovery archive until that decision is closed.
 
 For a separate, explicitly approved production maintenance window after deployment, run the one-off command from the existing deployment directory after stopping writers, then inspect its journal and status before restart. This is a future operator procedure, not an action performed by this implementation or its tests:
 
@@ -384,6 +385,7 @@ docker compose run --rm --no-deps \
   --collection memory \
   --manifest /maintenance/manifest.json \
   --journal /maintenance/purge-result.json \
+  --snapshot-archive /maintenance/purge-recovery.snapshot \
   --confirm-server-stopped \
   --confirm-purge \
   --minimum-quarantine-days 30 \

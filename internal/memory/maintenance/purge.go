@@ -20,6 +20,7 @@ type PurgeRequest struct {
 	Manifest             Manifest      `json:"manifest"`
 	Selection            Selection     `json:"selection"`
 	JournalPath          string        `json:"journal_path,omitempty"`
+	SnapshotArchivePath  string        `json:"snapshot_archive_path,omitempty"`
 	MinimumQuarantineAge time.Duration `json:"-"`
 }
 
@@ -27,6 +28,7 @@ type purgePointStore interface {
 	PointStore
 	CreateSnapshotIdentity(context.Context) (qdrant.SnapshotIdentity, error)
 	ListSnapshotIdentities(context.Context) ([]qdrant.SnapshotIdentity, error)
+	EnsureSnapshotArchive(context.Context, qdrant.SnapshotIdentity, string, string) (string, error)
 	DeleteExactStrong(context.Context, string) error
 }
 
@@ -50,6 +52,12 @@ func (s *Service) Purge(ctx context.Context, request PurgeRequest) (Result, erro
 	if strings.TrimSpace(request.JournalPath) == "" {
 		return Result{}, fmt.Errorf("purge journal path is required")
 	}
+	if strings.TrimSpace(request.SnapshotArchivePath) == "" {
+		return Result{}, fmt.Errorf("purge snapshot archive path is required")
+	}
+	if filepath.Clean(request.JournalPath) == filepath.Clean(request.SnapshotArchivePath) {
+		return Result{}, fmt.Errorf("purge journal and snapshot archive paths must differ")
+	}
 	findings, ids, err := validateRequest(Request{Manifest: request.Manifest, Selection: request.Selection}, s.collection)
 	if err != nil {
 		return Result{}, err
@@ -60,12 +68,14 @@ func (s *Service) Purge(ctx context.Context, request PurgeRequest) (Result, erro
 	}
 	resumeEvidence := map[string]bool{}
 	priorStatuses := map[string]OutcomeStatus{}
+	hasResumeEvidence := false
 	if resuming {
 		for _, outcome := range prior.Outcomes {
 			priorStatuses[outcome.PointID] = outcome.Status
 			switch outcome.Status {
 			case OutcomeDispatching, OutcomeDeleted, OutcomeAmbiguous, OutcomeAlreadyApplied:
 				resumeEvidence[outcome.PointID] = true
+				hasResumeEvidence = true
 			}
 		}
 	}
@@ -91,6 +101,7 @@ func (s *Service) Purge(ctx context.Context, request PurgeRequest) (Result, erro
 		var snapshotErr error
 		snapshot, snapshotErr = store.CreateSnapshotIdentity(ctx)
 		mutationDispatched = true
+		result.SnapshotName = snapshot.Name
 		if snapshotErr != nil || strings.TrimSpace(snapshot.Name) == "" {
 			appendStatusForIDs(&result, ids, OutcomeFailed)
 			return s.finishPurge(ctx, request.JournalPath, result, mutationDispatched)
@@ -107,7 +118,7 @@ func (s *Service) Purge(ctx context.Context, request PurgeRequest) (Result, erro
 	listed, err := store.ListSnapshotIdentities(ctx)
 	if err != nil || !containsSnapshot(listed, snapshot) {
 		if resuming {
-			if checkpointErr := s.checkpointPurge(ctx, request.JournalPath, result, mutationDispatched); checkpointErr != nil {
+			if checkpointErr := s.checkpointPurge(ctx, request.JournalPath, result, mutationDispatched || hasResumeEvidence); checkpointErr != nil {
 				return result, checkpointErr
 			}
 			return result, fmt.Errorf("original purge snapshot could not be proved")
@@ -117,9 +128,22 @@ func (s *Service) Purge(ctx context.Context, request PurgeRequest) (Result, erro
 		}
 		return s.finishPurge(ctx, request.JournalPath, result, mutationDispatched)
 	}
+	expectedArchiveSHA256 := ""
+	if resuming {
+		expectedArchiveSHA256 = prior.SnapshotArchiveSHA256
+	}
+	archiveSHA256, err := store.EnsureSnapshotArchive(ctx, snapshot, request.SnapshotArchivePath, expectedArchiveSHA256)
+	if err != nil {
+		for index := range result.Outcomes {
+			result.Outcomes[index].Status = OutcomeFailed
+		}
+		return s.finishPurge(ctx, request.JournalPath, result, mutationDispatched)
+	}
+	result.SnapshotArchiveSHA256 = archiveSHA256
 	// Persist the original snapshot and exact complete selection before the
-	// first destructive dispatch. Failure here guarantees zero deletes.
-	if err := s.checkpointPurge(ctx, request.JournalPath, result, mutationDispatched); err != nil {
+	// first destructive dispatch. The immutable archive lives outside Qdrant's
+	// ordinary snapshot rotation; failure here guarantees zero deletes.
+	if err := s.checkpointPurge(ctx, request.JournalPath, result, mutationDispatched || hasResumeEvidence); err != nil {
 		return result, err
 	}
 
@@ -127,8 +151,10 @@ func (s *Service) Purge(ctx context.Context, request PurgeRequest) (Result, erro
 	for index, id := range ids {
 		finding := findings[id]
 		if ctx.Err() != nil {
-			result.Outcomes[index].Status = OutcomeFailed
-			if err := s.checkpointPurge(ctx, request.JournalPath, result, mutationDispatched || deleteDispatched); err != nil {
+			if !resumeEvidence[id] {
+				result.Outcomes[index].Status = OutcomeFailed
+			}
+			if err := s.checkpointPurge(ctx, request.JournalPath, result, mutationDispatched || deleteDispatched || hasResumeEvidence); err != nil {
 				return result, err
 			}
 			continue
@@ -162,7 +188,7 @@ func (s *Service) purgeOne(ctx context.Context, store purgePointStore, finding F
 	}
 	point, found, err := store.Get(ctx, finding.PointID)
 	if err != nil {
-		return OutcomeFailed, false, nil
+		return OutcomeFailed, false, nil //nolint:nilerr // Closed outcomes intentionally hide store details.
 	}
 	if !found {
 		if resumeEvidence {
@@ -179,7 +205,7 @@ func (s *Service) purgeOne(ctx context.Context, store purgePointStore, finding F
 	}
 	quarantinedAt, err := time.Parse(time.RFC3339, view.QuarantinedAt)
 	if err != nil || quarantinedAt.After(now) || now.Sub(quarantinedAt) < minimumAge {
-		return OutcomeProtectedOrIneligible, false, nil
+		return OutcomeProtectedOrIneligible, false, nil //nolint:nilerr // Invalid metadata is a closed ineligible outcome.
 	}
 	if !matchesFinding(point, finding, true) {
 		return OutcomeConflict, false, nil
@@ -189,12 +215,12 @@ func (s *Service) purgeOne(ctx context.Context, store purgePointStore, finding F
 	// A failed or missing proof is a closed refusal and never reaches Delete.
 	snapshots, err := store.ListSnapshotIdentities(ctx)
 	if err != nil || !containsSnapshot(snapshots, snapshot) {
-		return OutcomeFailed, false, nil
+		return OutcomeFailed, false, nil //nolint:nilerr // Snapshot proof failures stay content-free.
 	}
 	// Re-read after the proof so payload drift cannot silently bypass the gates.
 	point, found, err = store.Get(ctx, finding.PointID)
 	if err != nil {
-		return OutcomeFailed, false, nil
+		return OutcomeFailed, false, nil //nolint:nilerr // Closed outcomes intentionally hide store details.
 	}
 	if !found {
 		if resumeEvidence {
@@ -208,17 +234,17 @@ func (s *Service) purgeOne(ctx context.Context, store purgePointStore, finding F
 	}
 	quarantinedAt, err = time.Parse(time.RFC3339, view.QuarantinedAt)
 	if err != nil || quarantinedAt.After(now) || now.Sub(quarantinedAt) < minimumAge {
-		return OutcomeProtectedOrIneligible, false, nil
+		return OutcomeProtectedOrIneligible, false, nil //nolint:nilerr // Invalid metadata is a closed ineligible outcome.
 	}
 	if err := beforeDelete(); err != nil {
 		return OutcomePending, false, err
 	}
 	if err := store.DeleteExactStrong(ctx, finding.PointID); err != nil {
-		return OutcomeAmbiguous, true, nil
+		return OutcomeAmbiguous, true, nil //nolint:nilerr // A dispatched delete is intentionally reported as ambiguous.
 	}
 	_, found, err = store.Get(ctx, finding.PointID)
 	if err != nil || found {
-		return OutcomeAmbiguous, true, nil
+		return OutcomeAmbiguous, true, nil //nolint:nilerr // Post-delete verification is intentionally content-free.
 	}
 	return OutcomeDeleted, true, nil
 }
@@ -252,7 +278,7 @@ func readCompatiblePurgeJournal(path string, manifest Manifest, selectedIDs []st
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return Result{}, false, fmt.Errorf("decode purge journal")
 	}
-	if result.SchemaVersion != ManifestSchemaVersion || result.PolicyVersion != PolicyVersion || result.BatchID != manifest.BatchID || result.Operation != OperationPurge || strings.TrimSpace(result.SnapshotName) == "" {
+	if result.SchemaVersion != ManifestSchemaVersion || result.PolicyVersion != PolicyVersion || result.BatchID != manifest.BatchID || result.Operation != OperationPurge {
 		return Result{}, false, fmt.Errorf("purge journal is incompatible")
 	}
 	if _, err := time.Parse(time.RFC3339, result.Timestamp); err != nil || len(result.Outcomes) != len(selectedIDs) {
@@ -276,6 +302,25 @@ func readCompatiblePurgeJournal(path string, manifest Manifest, selectedIDs []st
 		default:
 			return Result{}, false, fmt.Errorf("purge journal is incompatible")
 		}
+	}
+	if strings.TrimSpace(result.SnapshotName) == "" {
+		for _, outcome := range result.Outcomes {
+			if outcome.Status != OutcomeFailed {
+				return Result{}, false, fmt.Errorf("purge journal is incompatible")
+			}
+		}
+		return result, false, nil
+	}
+	if result.SnapshotArchiveSHA256 == "" {
+		for _, outcome := range result.Outcomes {
+			if outcome.Status != OutcomeFailed {
+				return Result{}, false, fmt.Errorf("purge journal is incompatible")
+			}
+		}
+		return result, true, nil
+	}
+	if len(result.SnapshotArchiveSHA256) != 64 || strings.ToLower(result.SnapshotArchiveSHA256) != result.SnapshotArchiveSHA256 {
+		return Result{}, false, fmt.Errorf("purge journal is incompatible")
 	}
 	return result, true, nil
 }

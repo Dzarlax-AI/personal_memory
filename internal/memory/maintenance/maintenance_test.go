@@ -445,6 +445,27 @@ func TestServicePersistsAmbiguousJournalAfterMutationCancelsRequest(t *testing.T
 	}
 }
 
+func TestServiceUsesInjectedJournalWriterForQuarantine(t *testing.T) {
+	point := qdrant.Point{ID: "42", Payload: map[string]interface{}{"valid_until": "2026-08-01"}}
+	store := newFakePointStore("memory", map[string]qdrant.Point{point.ID: point})
+	manifest := manifestFor(eligibleExpired(point.ID, point))
+	service, err := NewService(store, "memory", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writes := 0
+	service.writeJournal = func(context.Context, string, Result) error {
+		writes++
+		return fmt.Errorf("injected journal failure")
+	}
+	result, err := service.Quarantine(context.Background(), Request{
+		Manifest: manifest, JournalPath: filepath.Join(t.TempDir(), "result.json"), Selection: Selection{PointIDs: []string{point.ID}},
+	})
+	if err == nil || writes != 1 || len(result.Outcomes) != 1 || result.Outcomes[0].Status != OutcomeUpdated {
+		t.Fatalf("result=%#v writes=%d err=%v", result, writes, err)
+	}
+}
+
 type maintenanceWrite struct {
 	id         string
 	set        map[string]interface{}

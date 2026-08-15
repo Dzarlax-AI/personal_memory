@@ -45,17 +45,17 @@ func TestParseMutationOptionsRequiresExplicitBoundedInputs(t *testing.T) {
 }
 
 func TestParsePurgeOptionsRequiresBothConfirmationsAndBoundedAge(t *testing.T) {
-	valid := []string{"--qdrant-url", "http://127.0.0.1:6333", "--collection", "memory", "--manifest", "report.json", "--journal", "result.json", "--point-id", "42", "--minimum-quarantine-days", "30", "--confirm-server-stopped", "--confirm-purge"}
+	valid := []string{"--qdrant-url", "http://127.0.0.1:6333", "--collection", "memory", "--manifest", "report.json", "--journal", "result.json", "--snapshot-archive", "recovery.snapshot", "--point-id", "42", "--minimum-quarantine-days", "30", "--confirm-server-stopped", "--confirm-purge"}
 	got, err := parsePurgeOptions(valid)
 	if err != nil || got.minimumQuarantineDays != 30 || len(got.pointIDs) != 1 {
 		t.Fatalf("options=%#v err=%v", got, err)
 	}
 	for _, args := range [][]string{
 		{},
-		{"--qdrant-url", "u", "--collection", "c", "--manifest", "m", "--journal", "j", "--point-id", "42", "--minimum-quarantine-days", "30", "--confirm-server-stopped"},
-		{"--qdrant-url", "u", "--collection", "c", "--manifest", "m", "--journal", "j", "--point-id", "42", "--minimum-quarantine-days", "30", "--confirm-purge"},
-		{"--qdrant-url", "u", "--collection", "c", "--manifest", "m", "--journal", "j", "--point-id", "42", "--minimum-quarantine-days", "0", "--confirm-server-stopped", "--confirm-purge"},
-		{"--qdrant-url", "u", "--collection", "c", "--manifest", "m", "--journal", "j", "--point-id", "42", "--minimum-quarantine-days", "36501", "--confirm-server-stopped", "--confirm-purge"},
+		{"--qdrant-url", "u", "--collection", "c", "--manifest", "m", "--journal", "j", "--snapshot-archive", "s", "--point-id", "42", "--minimum-quarantine-days", "30", "--confirm-server-stopped"},
+		{"--qdrant-url", "u", "--collection", "c", "--manifest", "m", "--journal", "j", "--snapshot-archive", "s", "--point-id", "42", "--minimum-quarantine-days", "30", "--confirm-purge"},
+		{"--qdrant-url", "u", "--collection", "c", "--manifest", "m", "--journal", "j", "--snapshot-archive", "s", "--point-id", "42", "--minimum-quarantine-days", "0", "--confirm-server-stopped", "--confirm-purge"},
+		{"--qdrant-url", "u", "--collection", "c", "--manifest", "m", "--journal", "j", "--snapshot-archive", "s", "--point-id", "42", "--minimum-quarantine-days", "36501", "--confirm-server-stopped", "--confirm-purge"},
 	} {
 		if _, err := parsePurgeOptions(args); err == nil {
 			t.Fatalf("expected rejection for %v", args)
@@ -85,7 +85,7 @@ func TestRunPurgeRejectsInvalidManifestWithoutLeakingContents(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout strings.Builder
-	err := run(context.Background(), []string{"purge", "--qdrant-url", "http://127.0.0.1:6333", "--collection", "memory", "--manifest", manifest, "--journal", filepath.Join(dir, "journal.json"), "--point-id", "1", "--minimum-quarantine-days", "30", "--confirm-server-stopped", "--confirm-purge"}, &stdout, time.Now)
+	err := run(context.Background(), []string{"purge", "--qdrant-url", "http://127.0.0.1:6333", "--collection", "memory", "--manifest", manifest, "--journal", filepath.Join(dir, "journal.json"), "--snapshot-archive", filepath.Join(dir, "recovery.snapshot"), "--point-id", "1", "--minimum-quarantine-days", "30", "--confirm-server-stopped", "--confirm-purge"}, &stdout, time.Now)
 	if err == nil || strings.Contains(err.Error(), private) || stdout.Len() != 0 {
 		t.Fatalf("err=%v stdout=%q", err, stdout.String())
 	}

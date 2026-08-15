@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Dzarlax-AI/personal-memory/internal/memory/maintenance"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 	"github.com/go-chi/chi/v5"
 )
@@ -97,8 +98,16 @@ func TestFactListGraphAndDuplicateSummariesHidePayload(t *testing.T) {
 
 func TestFactListMaintenanceStatusFilterIsClosedAndReadOnly(t *testing.T) {
 	var requests []string
+	var filters []interface{}
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests = append(requests, r.URL.String())
+		var requestBody struct {
+			Filter interface{} `json:"filter"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatalf("decode Qdrant scroll request: %v", err)
+		}
+		filters = append(filters, requestBody.Filter)
 		w.Header().Set("Content-Type", "application/json")
 		mustWriteTestResponse(t, w, `{"result":{"points":[
 			{"id":"legacy","payload":{"text":"legacy active"}},
@@ -149,6 +158,20 @@ func TestFactListMaintenanceStatusFilterIsClosedAndReadOnly(t *testing.T) {
 	}
 	if len(requests) != 3 {
 		t.Fatalf("Qdrant requests = %d, want 3 successful filter requests", len(requests))
+	}
+	wantFilters := []interface{}{maintenance.ActiveFilter(nil), maintenance.ActiveFilter(nil), maintenance.QuarantinedFilter(nil)}
+	for index, want := range wantFilters {
+		wantJSON, err := json.Marshal(want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var normalizedWant interface{}
+		if err := json.Unmarshal(wantJSON, &normalizedWant); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(filters[index], normalizedWant) {
+			t.Fatalf("Qdrant filter %d = %#v, want %#v", index, filters[index], normalizedWant)
+		}
 	}
 }
 

@@ -68,13 +68,14 @@ type PointOutcome struct {
 // journal and intentionally excludes collections, namespaces, vectors, and
 // fact text.
 type Result struct {
-	SchemaVersion int            `json:"schema_version"`
-	PolicyVersion string         `json:"policy_version"`
-	BatchID       string         `json:"batch_id"`
-	Operation     Operation      `json:"operation"`
-	SnapshotName  string         `json:"snapshot_name,omitempty"`
-	Outcomes      []PointOutcome `json:"outcomes"`
-	Timestamp     string         `json:"timestamp"`
+	SchemaVersion         int            `json:"schema_version"`
+	PolicyVersion         string         `json:"policy_version"`
+	BatchID               string         `json:"batch_id"`
+	Operation             Operation      `json:"operation"`
+	SnapshotName          string         `json:"snapshot_name,omitempty"`
+	SnapshotArchiveSHA256 string         `json:"snapshot_archive_sha256,omitempty"`
+	Outcomes              []PointOutcome `json:"outcomes"`
+	Timestamp             string         `json:"timestamp"`
 }
 
 // PointStore is the narrowly scoped Qdrant surface required by this service.
@@ -161,7 +162,11 @@ func (s *Service) run(ctx context.Context, operation Operation, request Request)
 			journalCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), resultJournalTimeout)
 			defer cancel()
 		}
-		if err := WriteResultJournal(journalCtx, request.JournalPath, result); err != nil {
+		writer := s.writeJournal
+		if writer == nil {
+			writer = WriteResultJournal
+		}
+		if err := writer(journalCtx, request.JournalPath, result); err != nil {
 			return result, fmt.Errorf("write maintenance result journal: %w", err)
 		}
 	}

@@ -32,7 +32,8 @@ func TestPurgeRequiresVerifiedSnapshotBeforeAnyDelete(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := service.Purge(context.Background(), PurgeRequest{Manifest: manifest, Selection: Selection{PointIDs: []string{point.ID}}, JournalPath: filepath.Join(t.TempDir(), "purge.json"), MinimumQuarantineAge: 30 * 24 * time.Hour})
+			journal := filepath.Join(t.TempDir(), "purge.json")
+			result, err := service.Purge(context.Background(), purgeRequest(manifest, []string{point.ID}, journal))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -40,6 +41,57 @@ func TestPurgeRequiresVerifiedSnapshotBeforeAnyDelete(t *testing.T) {
 				t.Fatalf("deleted=%v result=%#v", store.deleted, result)
 			}
 		})
+	}
+}
+
+func TestPurgeRetriesPreSnapshotFailureWithSameJournal(t *testing.T) {
+	point := quarantinedPoint("42", "2026-07-01T00:00:00Z")
+	finding := eligibleExpired(point.ID, qdrant.Point{ID: point.ID, Payload: underlyingPayload(point.Payload)})
+	manifest := manifestFor(finding)
+	point.Payload["quarantine_batch_id"] = manifest.BatchID
+	store := newFakePurgeStore(map[string]qdrant.Point{point.ID: point})
+	created := store.created
+	store.created = qdrant.SnapshotIdentity{}
+	store.createErr = errors.New("temporarily unavailable")
+	service, _ := NewService(store, "memory", nil)
+	journal := filepath.Join(t.TempDir(), "purge.json")
+
+	first, err := service.Purge(context.Background(), purgeRequest(manifest, []string{point.ID}, journal))
+	if err != nil || first.Outcomes[0].Status != OutcomeFailed || len(store.deleted) != 0 {
+		t.Fatalf("first=%#v deleted=%v err=%v", first, store.deleted, err)
+	}
+	store.created = created
+	store.createErr = nil
+	retry, err := service.Purge(context.Background(), purgeRequest(manifest, []string{point.ID}, journal))
+	if err != nil || retry.Outcomes[0].Status != OutcomeDeleted {
+		t.Fatalf("retry=%#v err=%v", retry, err)
+	}
+	if store.createCalls != 2 || store.archiveCalls != 1 {
+		t.Fatalf("snapshot creates=%d archives=%d", store.createCalls, store.archiveCalls)
+	}
+}
+
+func TestPurgeRetriesArchiveFailureWithoutReplacingSnapshot(t *testing.T) {
+	point := quarantinedPoint("42", "2026-07-01T00:00:00Z")
+	finding := eligibleExpired(point.ID, qdrant.Point{ID: point.ID, Payload: underlyingPayload(point.Payload)})
+	manifest := manifestFor(finding)
+	point.Payload["quarantine_batch_id"] = manifest.BatchID
+	store := newFakePurgeStore(map[string]qdrant.Point{point.ID: point})
+	store.archiveErr = errors.New("archive unavailable")
+	service, _ := NewService(store, "memory", nil)
+	journal := filepath.Join(t.TempDir(), "purge.json")
+
+	first, err := service.Purge(context.Background(), purgeRequest(manifest, []string{point.ID}, journal))
+	if err != nil || first.Outcomes[0].Status != OutcomeFailed || len(store.deleted) != 0 {
+		t.Fatalf("first=%#v deleted=%v err=%v", first, store.deleted, err)
+	}
+	store.archiveErr = nil
+	retry, err := service.Purge(context.Background(), purgeRequest(manifest, []string{point.ID}, journal))
+	if err != nil || retry.Outcomes[0].Status != OutcomeDeleted {
+		t.Fatalf("retry=%#v err=%v", retry, err)
+	}
+	if store.createCalls != 1 || store.archiveCalls != 2 {
+		t.Fatalf("snapshot creates=%d archives=%d", store.createCalls, store.archiveCalls)
 	}
 }
 
@@ -56,7 +108,7 @@ func TestPurgePartialRetryAndPrivacy(t *testing.T) {
 	store.deleteErrors[second.ID] = errors.New("secret delete failure")
 	journal := filepath.Join(t.TempDir(), "purge.json")
 	service, _ := NewService(store, "memory", nil)
-	result, err := service.Purge(context.Background(), PurgeRequest{Manifest: manifest, Selection: Selection{PointIDs: []string{first.ID, second.ID}}, JournalPath: journal, MinimumQuarantineAge: 30 * 24 * time.Hour})
+	result, err := service.Purge(context.Background(), purgeRequest(manifest, []string{first.ID, second.ID}, journal))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +127,7 @@ func TestPurgePartialRetryAndPrivacy(t *testing.T) {
 		t.Fatalf("snapshot was not re-proved before both deletes: list calls=%d", store.listCalls)
 	}
 	delete(store.deleteErrors, second.ID)
-	retry, err := service.Purge(context.Background(), PurgeRequest{Manifest: manifest, Selection: Selection{PointIDs: []string{first.ID, second.ID}}, JournalPath: journal, MinimumQuarantineAge: 30 * 24 * time.Hour})
+	retry, err := service.Purge(context.Background(), purgeRequest(manifest, []string{first.ID, second.ID}, journal))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +153,8 @@ func TestPurgeDoesNotTreatArbitraryAbsenceAsAlreadyApplied(t *testing.T) {
 	manifest := manifestFor(finding)
 	store := newFakePurgeStore(map[string]qdrant.Point{})
 	service, _ := NewService(store, "memory", nil)
-	result, err := service.Purge(context.Background(), PurgeRequest{Manifest: manifest, Selection: Selection{PointIDs: []string{point.ID}}, JournalPath: filepath.Join(t.TempDir(), "purge.json"), MinimumQuarantineAge: 30 * 24 * time.Hour})
+	journal := filepath.Join(t.TempDir(), "purge.json")
+	result, err := service.Purge(context.Background(), purgeRequest(manifest, []string{point.ID}, journal))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +174,7 @@ func TestPurgeRejectsIncompatibleExistingJournalBeforeSnapshotOrDelete(t *testin
 		t.Fatal(err)
 	}
 	service, _ := NewService(store, "memory", nil)
-	if _, err := service.Purge(context.Background(), PurgeRequest{Manifest: manifest, Selection: Selection{PointIDs: []string{point.ID}}, JournalPath: journal, MinimumQuarantineAge: 30 * 24 * time.Hour}); err == nil {
+	if _, err := service.Purge(context.Background(), purgeRequest(manifest, []string{point.ID}, journal)); err == nil {
 		t.Fatal("accepted incompatible journal")
 	}
 	if store.createCalls != 0 || len(store.deleted) != 0 {
@@ -140,7 +193,7 @@ func TestPurgeRejectsMalformedExistingJournalBeforeSnapshotOrDelete(t *testing.T
 		t.Fatal(err)
 	}
 	service, _ := NewService(store, "memory", nil)
-	if _, err := service.Purge(context.Background(), PurgeRequest{Manifest: manifest, Selection: Selection{PointIDs: []string{point.ID}}, JournalPath: journal, MinimumQuarantineAge: 30 * 24 * time.Hour}); err == nil {
+	if _, err := service.Purge(context.Background(), purgeRequest(manifest, []string{point.ID}, journal)); err == nil {
 		t.Fatal("accepted malformed journal")
 	}
 	if store.createCalls != 0 || len(store.deleted) != 0 {
@@ -160,7 +213,7 @@ func TestPurgeCancellationPersistsAmbiguousJournalAndInvalidates(t *testing.T) {
 	invalidations := 0
 	service, _ := NewService(store, "memory", func() { invalidations++ })
 	journal := filepath.Join(t.TempDir(), "purge.json")
-	result, err := service.Purge(ctx, PurgeRequest{Manifest: manifest, Selection: Selection{PointIDs: []string{point.ID}}, JournalPath: journal, MinimumQuarantineAge: 30 * 24 * time.Hour})
+	result, err := service.Purge(ctx, purgeRequest(manifest, []string{point.ID}, journal))
 	if err != nil {
 		t.Fatalf("cleanup journal failed: %v", err)
 	}
@@ -198,7 +251,7 @@ func TestPurgeCheckpointsSnapshotSelectionAndDispatchBeforeDelete(t *testing.T) 
 		}
 	}
 	service, _ := NewService(store, "memory", nil)
-	result, err := service.Purge(context.Background(), PurgeRequest{Manifest: manifest, Selection: Selection{PointIDs: []string{point.ID}}, JournalPath: journal, MinimumQuarantineAge: 30 * 24 * time.Hour})
+	result, err := service.Purge(context.Background(), purgeRequest(manifest, []string{point.ID}, journal))
 	if err != nil || result.Outcomes[0].Status != OutcomeDeleted {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
@@ -212,7 +265,8 @@ func TestPurgeInitialJournalFailureDeletesNothing(t *testing.T) {
 	store := newFakePurgeStore(map[string]qdrant.Point{point.ID: point})
 	service, _ := NewService(store, "memory", nil)
 	service.writeJournal = func(context.Context, string, Result) error { return errors.New("disk unavailable") }
-	_, err := service.Purge(context.Background(), PurgeRequest{Manifest: manifest, Selection: Selection{PointIDs: []string{point.ID}}, JournalPath: filepath.Join(t.TempDir(), "purge.json"), MinimumQuarantineAge: 30 * 24 * time.Hour})
+	journal := filepath.Join(t.TempDir(), "purge.json")
+	_, err := service.Purge(context.Background(), purgeRequest(manifest, []string{point.ID}, journal))
 	if err == nil || len(store.deleted) != 0 {
 		t.Fatalf("err=%v deleted=%v", err, store.deleted)
 	}
@@ -234,7 +288,7 @@ func TestPurgeFailedFinalCheckpointLeavesDispatchEvidenceForRetry(t *testing.T) 
 		}
 		return WriteResultJournal(ctx, path, result)
 	}
-	_, err := service.Purge(context.Background(), PurgeRequest{Manifest: manifest, Selection: Selection{PointIDs: []string{point.ID}}, JournalPath: journal, MinimumQuarantineAge: 30 * 24 * time.Hour})
+	_, err := service.Purge(context.Background(), purgeRequest(manifest, []string{point.ID}, journal))
 	if err == nil || len(store.deleted) != 1 {
 		t.Fatalf("err=%v deleted=%v writes=%d", err, store.deleted, writes)
 	}
@@ -243,7 +297,18 @@ func TestPurgeFailedFinalCheckpointLeavesDispatchEvidenceForRetry(t *testing.T) 
 		t.Fatalf("journal=%s err=%v", data, readErr)
 	}
 	service.writeJournal = WriteResultJournal
-	retry, err := service.Purge(context.Background(), PurgeRequest{Manifest: manifest, Selection: Selection{PointIDs: []string{point.ID}}, JournalPath: journal, MinimumQuarantineAge: 30 * 24 * time.Hour})
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	store.onList = cancel
+	canceled, err := service.Purge(canceledCtx, purgeRequest(manifest, []string{point.ID}, journal))
+	if err != nil || canceled.Outcomes[0].Status != OutcomeDispatching {
+		t.Fatalf("canceled retry=%#v err=%v", canceled, err)
+	}
+	data, readErr = os.ReadFile(journal)
+	if readErr != nil || !strings.Contains(string(data), `"status": "dispatching"`) {
+		t.Fatalf("canceled journal=%s err=%v", data, readErr)
+	}
+	store.onList = nil
+	retry, err := service.Purge(context.Background(), purgeRequest(manifest, []string{point.ID}, journal))
 	if err != nil || retry.Outcomes[0].Status != OutcomeAlreadyApplied {
 		t.Fatalf("retry=%#v err=%v", retry, err)
 	}
@@ -283,7 +348,8 @@ func TestPurgeRefusesAgeBatchFingerprintAndProtected(t *testing.T) {
 			store := newFakePurgeStore(map[string]qdrant.Point{p.ID: p})
 			service, _ := NewService(store, "memory", nil)
 			service.now = func() time.Time { return now }
-			result, err := service.Purge(context.Background(), PurgeRequest{Manifest: m, Selection: Selection{PointIDs: []string{p.ID}}, JournalPath: filepath.Join(t.TempDir(), "purge.json"), MinimumQuarantineAge: 30 * 24 * time.Hour})
+			journal := filepath.Join(t.TempDir(), "purge.json")
+			result, err := service.Purge(context.Background(), purgeRequest(m, []string{p.ID}, journal))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -304,6 +370,7 @@ func TestPurgeRequiresExplicitIDsAndPositiveBoundedAge(t *testing.T) {
 		{Manifest: manifest, Selection: Selection{IncludeEligibleFindings: true}, MinimumQuarantineAge: 30 * 24 * time.Hour},
 		{Manifest: manifest, Selection: Selection{PointIDs: []string{point.ID}}, MinimumQuarantineAge: 0},
 		{Manifest: manifest, Selection: Selection{PointIDs: []string{point.ID}}, MinimumQuarantineAge: maxPurgeQuarantineAge + time.Hour},
+		{Manifest: manifest, Selection: Selection{PointIDs: []string{point.ID}}, JournalPath: "same", SnapshotArchivePath: "same", MinimumQuarantineAge: 30 * 24 * time.Hour},
 	} {
 		if _, err := service.Purge(context.Background(), request); err == nil {
 			t.Fatalf("accepted request=%#v", request)
@@ -313,6 +380,16 @@ func TestPurgeRequiresExplicitIDsAndPositiveBoundedAge(t *testing.T) {
 
 func quarantinedPoint(id, at string) qdrant.Point {
 	return qdrant.Point{ID: id, Payload: map[string]interface{}{"text": "fact text", "namespace": "projects", "valid_until": "2026-08-01", "maintenance_status": "quarantined", "quarantined_at": at, "quarantine_reason": "expired", "quarantine_batch_id": "placeholder"}}
+}
+
+func purgeRequest(manifest Manifest, ids []string, journal string) PurgeRequest {
+	return PurgeRequest{
+		Manifest:             manifest,
+		Selection:            Selection{PointIDs: ids},
+		JournalPath:          journal,
+		SnapshotArchivePath:  journal + ".snapshot",
+		MinimumQuarantineAge: 30 * 24 * time.Hour,
+	}
 }
 
 func underlyingPayload(payload map[string]interface{}) map[string]interface{} {
@@ -332,12 +409,16 @@ type fakePurgeStore struct {
 	deleteErrors       map[string]error
 	deleted            []string
 	listCalls          int
+	archiveCalls       int
+	archiveErr         error
+	archiveSHA256      string
 	onDelete           func()
+	onList             func()
 }
 
 func newFakePurgeStore(points map[string]qdrant.Point) *fakePurgeStore {
 	identity := qdrant.SnapshotIdentity{Name: "fresh.snapshot"}
-	return &fakePurgeStore{fakePointStore: newFakePointStore("memory", points), created: identity, snapshots: []qdrant.SnapshotIdentity{identity}, deleteErrors: map[string]error{}}
+	return &fakePurgeStore{fakePointStore: newFakePointStore("memory", points), created: identity, snapshots: []qdrant.SnapshotIdentity{identity}, deleteErrors: map[string]error{}, archiveSHA256: strings.Repeat("a", 64)}
 }
 func (f *fakePurgeStore) CreateSnapshotIdentity(context.Context) (qdrant.SnapshotIdentity, error) {
 	f.createCalls++
@@ -345,7 +426,20 @@ func (f *fakePurgeStore) CreateSnapshotIdentity(context.Context) (qdrant.Snapsho
 }
 func (f *fakePurgeStore) ListSnapshotIdentities(context.Context) ([]qdrant.SnapshotIdentity, error) {
 	f.listCalls++
+	if f.onList != nil {
+		f.onList()
+	}
 	return f.snapshots, f.listErr
+}
+func (f *fakePurgeStore) EnsureSnapshotArchive(_ context.Context, _ qdrant.SnapshotIdentity, _ string, expectedSHA256 string) (string, error) {
+	f.archiveCalls++
+	if f.archiveErr != nil {
+		return "", f.archiveErr
+	}
+	if expectedSHA256 != "" && expectedSHA256 != f.archiveSHA256 {
+		return "", errors.New("archive checksum mismatch")
+	}
+	return f.archiveSHA256, nil
 }
 func (f *fakePurgeStore) DeleteExactStrong(_ context.Context, id string) error {
 	f.deleted = append(f.deleted, id)
