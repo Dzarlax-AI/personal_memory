@@ -44,6 +44,25 @@ func TestParseMutationOptionsRequiresExplicitBoundedInputs(t *testing.T) {
 	}
 }
 
+func TestParsePurgeOptionsRequiresBothConfirmationsAndBoundedAge(t *testing.T) {
+	valid := []string{"--qdrant-url", "http://127.0.0.1:6333", "--collection", "memory", "--manifest", "report.json", "--journal", "result.json", "--point-id", "42", "--minimum-quarantine-days", "30", "--confirm-server-stopped", "--confirm-purge"}
+	got, err := parsePurgeOptions(valid)
+	if err != nil || got.minimumQuarantineDays != 30 || len(got.pointIDs) != 1 {
+		t.Fatalf("options=%#v err=%v", got, err)
+	}
+	for _, args := range [][]string{
+		{},
+		{"--qdrant-url", "u", "--collection", "c", "--manifest", "m", "--journal", "j", "--point-id", "42", "--minimum-quarantine-days", "30", "--confirm-server-stopped"},
+		{"--qdrant-url", "u", "--collection", "c", "--manifest", "m", "--journal", "j", "--point-id", "42", "--minimum-quarantine-days", "30", "--confirm-purge"},
+		{"--qdrant-url", "u", "--collection", "c", "--manifest", "m", "--journal", "j", "--point-id", "42", "--minimum-quarantine-days", "0", "--confirm-server-stopped", "--confirm-purge"},
+		{"--qdrant-url", "u", "--collection", "c", "--manifest", "m", "--journal", "j", "--point-id", "42", "--minimum-quarantine-days", "36501", "--confirm-server-stopped", "--confirm-purge"},
+	} {
+		if _, err := parsePurgeOptions(args); err == nil {
+			t.Fatalf("expected rejection for %v", args)
+		}
+	}
+}
+
 func TestRunMutationRejectsInvalidManifestWithoutLeakingContents(t *testing.T) {
 	dir := t.TempDir()
 	manifest := filepath.Join(dir, "manifest.json")
@@ -53,6 +72,20 @@ func TestRunMutationRejectsInvalidManifestWithoutLeakingContents(t *testing.T) {
 	}
 	var stdout strings.Builder
 	err := run(context.Background(), []string{"quarantine", "--qdrant-url", "http://127.0.0.1:6333", "--collection", "memory", "--manifest", manifest, "--journal", filepath.Join(dir, "journal.json"), "--point-id", "1", "--confirm-server-stopped"}, &stdout, time.Now)
+	if err == nil || strings.Contains(err.Error(), private) || stdout.Len() != 0 {
+		t.Fatalf("err=%v stdout=%q", err, stdout.String())
+	}
+}
+
+func TestRunPurgeRejectsInvalidManifestWithoutLeakingContents(t *testing.T) {
+	dir := t.TempDir()
+	manifest := filepath.Join(dir, "manifest.json")
+	const private = "PRIVATE_PURGE_FACT_TEXT_MUST_NOT_LEAK"
+	if err := os.WriteFile(manifest, []byte(`{"unknown":"`+private+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout strings.Builder
+	err := run(context.Background(), []string{"purge", "--qdrant-url", "http://127.0.0.1:6333", "--collection", "memory", "--manifest", manifest, "--journal", filepath.Join(dir, "journal.json"), "--point-id", "1", "--minimum-quarantine-days", "30", "--confirm-server-stopped", "--confirm-purge"}, &stdout, time.Now)
 	if err == nil || strings.Contains(err.Error(), private) || stdout.Len() != 0 {
 		t.Fatalf("err=%v stdout=%q", err, stdout.String())
 	}
@@ -77,6 +110,23 @@ func TestWriteMutationSummaryFailsClosedOnUnresolvedOutcomes(t *testing.T) {
 		}
 		if !strings.Contains(output.String(), string(status)+"=1") {
 			t.Fatalf("status %q missing from summary: %s", status, output.String())
+		}
+	}
+}
+
+func TestWritePurgeSummarySucceedsOnlyForDeletedOrEvidenceBackedApplied(t *testing.T) {
+	for _, outcomes := range [][]maintenance.PointOutcome{
+		{{PointID: "1", Status: maintenance.OutcomeDeleted}, {PointID: "2", Status: maintenance.OutcomeAlreadyApplied}},
+	} {
+		var output strings.Builder
+		if err := writeMutationSummary(&output, "purge", maintenance.Result{BatchID: "batch", Outcomes: outcomes}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	for _, status := range []maintenance.OutcomeStatus{maintenance.OutcomePending, maintenance.OutcomeDispatching, maintenance.OutcomeConflict, maintenance.OutcomeProtectedOrIneligible, maintenance.OutcomeNotFound, maintenance.OutcomeFailed, maintenance.OutcomeAmbiguous, maintenance.OutcomeUpdated} {
+		var output strings.Builder
+		if err := writeMutationSummary(&output, "purge", maintenance.Result{BatchID: "batch", Outcomes: []maintenance.PointOutcome{{PointID: "1", Status: status}}}); err == nil {
+			t.Fatalf("purge status %q returned success: %s", status, output.String())
 		}
 	}
 }

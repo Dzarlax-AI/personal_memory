@@ -74,6 +74,11 @@ func IsActive(payload map[string]interface{}) bool {
 	return view.Valid && view.Status == Active
 }
 
+func IsQuarantined(payload map[string]interface{}) bool {
+	view := Parse(payload)
+	return view.Valid && view.Status == Quarantined
+}
+
 func ActiveFilter(base map[string]interface{}) map[string]interface{} {
 	active := map[string]interface{}{"should": []map[string]interface{}{
 		{"key": "maintenance_status", "match": map[string]interface{}{"value": string(Active)}},
@@ -83,6 +88,19 @@ func ActiveFilter(base map[string]interface{}) map[string]interface{} {
 		return active
 	}
 	return map[string]interface{}{"must": []interface{}{clone(base), active}}
+}
+
+// QuarantinedFilter narrows Qdrant scans for the explicit, operator-only
+// maintenance inspection surface. Callers must still validate with Parse:
+// Qdrant payload filtering alone cannot distinguish malformed records.
+func QuarantinedFilter(base map[string]interface{}) map[string]interface{} {
+	quarantined := map[string]interface{}{"must": []map[string]interface{}{{
+		"key": "maintenance_status", "match": map[string]interface{}{"value": string(Quarantined)},
+	}}}
+	if len(base) == 0 {
+		return quarantined
+	}
+	return map[string]interface{}{"must": []interface{}{clone(base), quarantined}}
 }
 
 func clone(value interface{}) interface{} {

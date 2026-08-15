@@ -605,6 +605,48 @@ func TestMaintenanceMutationsUseCompleteTypedStrongBatches(t *testing.T) {
 	}
 }
 
+func TestPurgePrimitivesUseTypedSnapshotsAndExactStrongDelete(t *testing.T) {
+	var deleteBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/collections/memory/snapshots":
+			_, _ = w.Write([]byte(`{"status":"ok","result":{"name":"fresh.snapshot"}}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/collections/memory/snapshots":
+			_, _ = w.Write([]byte(`{"status":"ok","result":[{"name":"fresh.snapshot"}]}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/delete":
+			if r.URL.Query().Get("wait") != "true" || r.URL.Query().Get("ordering") != "strong" {
+				t.Fatalf("query=%s", r.URL.RawQuery)
+			}
+			if err := json.NewDecoder(r.Body).Decode(&deleteBody); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = w.Write([]byte(`{"status":"ok","result":{"status":"completed"}}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client := NewClient(server.URL, "memory")
+	snapshot, err := client.CreateSnapshotIdentity(context.Background())
+	if err != nil || snapshot.Name != "fresh.snapshot" {
+		t.Fatalf("snapshot=%#v err=%v", snapshot, err)
+	}
+	snapshots, err := client.ListSnapshotIdentities(context.Background())
+	if err != nil || len(snapshots) != 1 || snapshots[0] != snapshot {
+		t.Fatalf("snapshots=%#v err=%v", snapshots, err)
+	}
+	if err := client.DeleteExactStrong(context.Background(), "42"); err != nil {
+		t.Fatal(err)
+	}
+	points := deleteBody["points"].([]interface{})
+	if len(points) != 1 || points[0] != float64(42) {
+		t.Fatalf("points=%#v", points)
+	}
+	if err := client.DeleteExactStrong(context.Background(), " "); err == nil {
+		t.Fatal("accepted invalid exact ID")
+	}
+}
+
 func TestGetRetrievesExactPoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/collections/memory/points/exact-id" {

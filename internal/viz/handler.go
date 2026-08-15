@@ -211,21 +211,50 @@ func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) apiFacts(w http.ResponseWriter, r *http.Request) {
-	points, err := h.qdrant.ScrollAll(r.Context(), maintenance.ActiveFilter(nil), false)
+	status, err := factListMaintenanceStatus(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	filters := maintenance.ActiveFilter(nil)
+	include := maintenance.IsActive
+	if status == maintenance.Quarantined {
+		filters = maintenance.QuarantinedFilter(nil)
+		include = maintenance.IsQuarantined
+	}
+	points, err := h.qdrant.ScrollAll(r.Context(), filters, false)
 	if err != nil {
 		writeInternalError(w, "unable to load facts")
 		return
 	}
 
-	nodes := make([]factSummary, 0, len(points))
+	nodes := make([]interface{}, 0, len(points))
 	for _, p := range points {
-		if !maintenance.IsActive(p.Payload) {
+		if !include(p.Payload) {
 			continue
 		}
-		nodes = append(nodes, pointToSummary(p))
+		if status == maintenance.Quarantined {
+			nodes = append(nodes, pointToQuarantinedSummary(p))
+		} else {
+			nodes = append(nodes, pointToSummary(p))
+		}
 	}
 
 	writeJSON(w, map[string]interface{}{"nodes": nodes})
+}
+
+// factListMaintenanceStatus is deliberately closed: ordinary Viz views use
+// active facts, and quarantined records are available only through the
+// explicit read-only operator inspection request.
+func factListMaintenanceStatus(r *http.Request) (maintenance.Status, error) {
+	values, present := r.URL.Query()["maintenance_status"]
+	if !present {
+		return maintenance.Active, nil
+	}
+	if len(values) != 1 || (values[0] != string(maintenance.Active) && values[0] != string(maintenance.Quarantined)) {
+		return "", fmt.Errorf("maintenance_status must be active or quarantined")
+	}
+	return maintenance.Status(values[0]), nil
 }
 
 // apiFactDetail is intentionally separate from the list endpoint: raw payload
@@ -537,6 +566,18 @@ type factSummary struct {
 	Lifecycle   lifecycle.View `json:"lifecycle"`
 }
 
+// quarantinedFactSummary is intentionally list-only. It exposes only the
+// normalized maintenance metadata needed for authenticated operator review;
+// it does not create a mutation path or make malformed maintenance payloads
+// look valid.
+type quarantinedFactSummary struct {
+	factSummary
+	MaintenanceStatus maintenance.Status `json:"maintenance_status"`
+	QuarantinedAt     string             `json:"quarantined_at"`
+	QuarantineReason  string             `json:"quarantine_reason"`
+	QuarantineBatchID string             `json:"quarantine_batch_id"`
+}
+
 // factDetail extends the privacy-safe summary with the complete payload for
 // one explicitly selected fact. It must only be used by apiFactDetail.
 type factDetail struct {
@@ -560,6 +601,17 @@ func pointToSummary(p qdrant.ScrollPoint) factSummary {
 		Permanent:   payloadBool(p.Payload["permanent"]),
 		RecallCount: payloadInt(p.Payload["recall_count"]),
 		Lifecycle:   lifecycleView,
+	}
+}
+
+func pointToQuarantinedSummary(p qdrant.ScrollPoint) quarantinedFactSummary {
+	view := maintenance.Parse(p.Payload)
+	return quarantinedFactSummary{
+		factSummary:       pointToSummary(p),
+		MaintenanceStatus: view.Status,
+		QuarantinedAt:     view.QuarantinedAt,
+		QuarantineReason:  view.QuarantineReason,
+		QuarantineBatchID: view.QuarantineBatchID,
 	}
 }
 

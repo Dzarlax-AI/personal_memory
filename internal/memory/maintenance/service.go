@@ -27,12 +27,16 @@ type Operation string
 const (
 	OperationQuarantine Operation = "quarantine"
 	OperationRestore    Operation = "restore"
+	OperationPurge      Operation = "purge"
 )
 
 type OutcomeStatus string
 
 const (
 	OutcomeUpdated               OutcomeStatus = "updated"
+	OutcomeDeleted               OutcomeStatus = "deleted"
+	OutcomePending               OutcomeStatus = "pending"
+	OutcomeDispatching           OutcomeStatus = "dispatching"
 	OutcomeAlreadyApplied        OutcomeStatus = "already_applied"
 	OutcomeNotFound              OutcomeStatus = "not_found"
 	OutcomeProtectedOrIneligible OutcomeStatus = "protected_or_ineligible"
@@ -68,6 +72,7 @@ type Result struct {
 	PolicyVersion string         `json:"policy_version"`
 	BatchID       string         `json:"batch_id"`
 	Operation     Operation      `json:"operation"`
+	SnapshotName  string         `json:"snapshot_name,omitempty"`
 	Outcomes      []PointOutcome `json:"outcomes"`
 	Timestamp     string         `json:"timestamp"`
 }
@@ -82,10 +87,11 @@ type PointStore interface {
 }
 
 type Service struct {
-	points     PointStore
-	collection string
-	now        func() time.Time
-	invalidate func()
+	points       PointStore
+	collection   string
+	now          func() time.Time
+	invalidate   func()
+	writeJournal func(context.Context, string, Result) error
 }
 
 func NewService(points PointStore, collection string, invalidate func()) (*Service, error) {
@@ -101,7 +107,7 @@ func NewService(points PointStore, collection string, invalidate func()) (*Servi
 	if points.CollectionName() != "" && collection != points.CollectionName() {
 		return nil, fmt.Errorf("configured collection does not match point store")
 	}
-	return &Service{points: points, collection: collection, now: time.Now, invalidate: invalidate}, nil
+	return &Service{points: points, collection: collection, now: time.Now, invalidate: invalidate, writeJournal: WriteResultJournal}, nil
 }
 
 func (s *Service) Quarantine(ctx context.Context, request Request) (Result, error) {

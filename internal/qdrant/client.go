@@ -52,6 +52,12 @@ type Point struct {
 	Score   float64                `json:"score,omitempty"`
 }
 
+// SnapshotIdentity is the typed, opaque identity Qdrant returns for a
+// collection snapshot. It deliberately contains no collection URL or data.
+type SnapshotIdentity struct {
+	Name string `json:"name"`
+}
+
 // parsePointID converts a Qdrant point ID (int or string) to string.
 func parsePointID(v interface{}) string {
 	switch id := v.(type) {
@@ -497,6 +503,27 @@ func (c *Client) Delete(ctx context.Context, ids []string) error {
 	return c.mutate(ctx, http.MethodPost, url, body, true, false)
 }
 
+// DeleteExactStrong removes exactly one named point. It is intentionally
+// separate from Delete so destructive maintenance flows cannot accidentally
+// broaden their target set or weaken ordering/wait semantics.
+func (c *Client) DeleteExactStrong(ctx context.Context, id string) error {
+	if err := validateMaintenanceTarget(id); err != nil {
+		return err
+	}
+	requestURL := fmt.Sprintf("%s/collections/%s/points/delete", c.url, c.collection)
+	parsed, err := url.Parse(requestURL)
+	if err != nil {
+		return fmt.Errorf("parse exact delete URL: %w", err)
+	}
+	query := parsed.Query()
+	query.Set("wait", "true")
+	query.Set("ordering", "strong")
+	parsed.RawQuery = query.Encode()
+	return c.mutate(ctx, http.MethodPost, parsed.String(), map[string]interface{}{
+		"points": []interface{}{qdrantPointID(id)},
+	}, true, false)
+}
+
 // DeleteByFilter removes all points matching the filter in a single request.
 func (c *Client) DeleteByFilter(ctx context.Context, filter map[string]interface{}) error {
 	url := fmt.Sprintf("%s/collections/%s/points/delete", c.url, c.collection)
@@ -644,12 +671,21 @@ func (c *Client) replacePayloadBatch(ctx context.Context, id string, set map[str
 	return c.mutate(ctx, http.MethodPost, parsed.String(), map[string]interface{}{"operations": operations}, true, false)
 }
 
-// CreateSnapshot triggers a snapshot creation.
+// CreateSnapshot triggers a snapshot creation. New maintenance flows should
+// use CreateSnapshotIdentity so snapshot identity cannot be accidentally
+// reduced to an untyped string before it is journaled.
 func (c *Client) CreateSnapshot(ctx context.Context) (string, error) {
+	snapshot, err := c.CreateSnapshotIdentity(ctx)
+	return snapshot.Name, err
+}
+
+// CreateSnapshotIdentity triggers snapshot creation and returns its opaque
+// typed identity.
+func (c *Client) CreateSnapshotIdentity(ctx context.Context) (SnapshotIdentity, error) {
 	url := fmt.Sprintf("%s/collections/%s/snapshots", c.url, c.collection)
 	respBody, err := c.postJSON(ctx, url, nil)
 	if err != nil {
-		return "", err
+		return SnapshotIdentity{}, err
 	}
 
 	var result struct {
@@ -658,19 +694,32 @@ func (c *Client) CreateSnapshot(ctx context.Context) (string, error) {
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("decode snapshot response: %w", err)
+		return SnapshotIdentity{}, fmt.Errorf("decode snapshot response: %w", err)
 	}
 	if err := validateMutationResponse(respBody, false); err != nil {
-		return "", fmt.Errorf("create snapshot: %w", err)
+		return SnapshotIdentity{}, fmt.Errorf("create snapshot: %w", err)
 	}
 	if result.Result.Name == "" {
-		return "", fmt.Errorf("create snapshot: qdrant response did not include a snapshot name")
+		return SnapshotIdentity{}, fmt.Errorf("create snapshot: qdrant response did not include a snapshot name")
 	}
-	return result.Result.Name, nil
+	return SnapshotIdentity{Name: result.Result.Name}, nil
 }
 
 // ListSnapshots returns all snapshot names.
 func (c *Client) ListSnapshots(ctx context.Context) ([]string, error) {
+	snapshots, err := c.ListSnapshotIdentities(ctx)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(snapshots))
+	for i, snapshot := range snapshots {
+		names[i] = snapshot.Name
+	}
+	return names, nil
+}
+
+// ListSnapshotIdentities returns typed opaque snapshot identities.
+func (c *Client) ListSnapshotIdentities(ctx context.Context) ([]SnapshotIdentity, error) {
 	url := fmt.Sprintf("%s/collections/%s/snapshots", c.url, c.collection)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -699,11 +748,14 @@ func (c *Client) ListSnapshots(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 
-	names := make([]string, len(result.Result))
+	snapshots := make([]SnapshotIdentity, len(result.Result))
 	for i, s := range result.Result {
-		names[i] = s.Name
+		if s.Name == "" {
+			return nil, fmt.Errorf("snapshot list included an empty snapshot name")
+		}
+		snapshots[i] = SnapshotIdentity{Name: s.Name}
 	}
-	return names, nil
+	return snapshots, nil
 }
 
 // DeleteSnapshot removes a snapshot by name.

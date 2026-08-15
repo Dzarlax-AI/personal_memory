@@ -2,6 +2,18 @@
     <h2 class="section-title">Knowledge Map</h2>
     <div class="section-sub">Size reflects fact count. Color = namespace.</div>
     <div class="treemap" id="treemap"></div>
+    <section class="maintenance-inspection" aria-labelledby="maintenance-inspection-heading">
+      <h2 class="section-title" id="maintenance-inspection-heading">Maintenance inspection</h2>
+      <div class="section-sub">Authenticated, read-only operator view. It never changes or purges facts.</div>
+      <div class="filter-toolbar">
+        <label for="maintenance-status-filter">Facts</label>
+        <select id="maintenance-status-filter">
+          <option value="">Active facts (default dashboard)</option>
+          <option value="quarantined">Quarantined facts</option>
+        </select>
+      </div>
+      <div id="quarantined-facts" aria-live="polite"></div>
+    </section>
     <section class="activity-section" id="activity-section" aria-labelledby="activity-heading" hidden>
       <div class="activity-heading-row">
         <h2 class="section-title" id="activity-heading">Activity</h2>

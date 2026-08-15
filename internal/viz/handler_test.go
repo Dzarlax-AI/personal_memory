@@ -95,6 +95,92 @@ func TestFactListGraphAndDuplicateSummariesHidePayload(t *testing.T) {
 	}
 }
 
+func TestFactListMaintenanceStatusFilterIsClosedAndReadOnly(t *testing.T) {
+	var requests []string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.String())
+		w.Header().Set("Content-Type", "application/json")
+		mustWriteTestResponse(t, w, `{"result":{"points":[
+			{"id":"legacy","payload":{"text":"legacy active"}},
+			{"id":"active","payload":{"text":"explicit active","maintenance_status":"active"}},
+			{"id":"quarantined","payload":{"text":"operator only","maintenance_status":"quarantined","quarantined_at":"2026-08-01T00:00:00Z","quarantine_reason":"expired","quarantine_batch_id":"batch-1"}},
+			{"id":"malformed","payload":{"text":"must remain hidden","maintenance_status":"quarantined","quarantined_at":"not-a-time","quarantine_reason":"expired","quarantine_batch_id":"batch-1"}}
+		],"next_page_offset":null}}`)
+	}))
+	defer backend.Close()
+
+	h := NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65)
+	for _, tc := range []struct {
+		path     string
+		wantIDs  []string
+		wantCode int
+	}{
+		{path: "/api/facts", wantIDs: []string{"legacy", "active"}, wantCode: http.StatusOK},
+		{path: "/api/facts?maintenance_status=active", wantIDs: []string{"legacy", "active"}, wantCode: http.StatusOK},
+		{path: "/api/facts?maintenance_status=quarantined", wantIDs: []string{"quarantined"}, wantCode: http.StatusOK},
+		{path: "/api/facts?maintenance_status=unknown", wantCode: http.StatusBadRequest},
+		{path: "/api/facts?maintenance_status=active&maintenance_status=quarantined", wantCode: http.StatusBadRequest},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			if rr.Code != tc.wantCode {
+				t.Fatalf("GET %s: got %d (%s), want %d", tc.path, rr.Code, rr.Body.String(), tc.wantCode)
+			}
+			if tc.wantCode != http.StatusOK {
+				return
+			}
+			var body struct {
+				Nodes []struct {
+					ID string `json:"id"`
+				} `json:"nodes"`
+			}
+			if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			got := make([]string, len(body.Nodes))
+			for i, node := range body.Nodes {
+				got[i] = node.ID
+			}
+			if !reflect.DeepEqual(got, tc.wantIDs) {
+				t.Fatalf("IDs = %#v, want %#v", got, tc.wantIDs)
+			}
+		})
+	}
+	if len(requests) != 3 {
+		t.Fatalf("Qdrant requests = %d, want 3 successful filter requests", len(requests))
+	}
+}
+
+func TestQuarantinedFactListReturnsNormalizedMaintenanceMetadata(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		mustWriteTestResponse(t, w, `{"result":{"points":[{"id":42,"payload":{"text":"operator only","maintenance_status":"quarantined","quarantined_at":"2026-08-01T00:00:00Z","quarantine_reason":"expired","quarantine_batch_id":"batch-1"}}],"next_page_offset":null}}`)
+	}))
+	defer backend.Close()
+	rr := httptest.NewRecorder()
+	NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65).Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/facts?maintenance_status=quarantined", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET quarantined facts: got %d (%s)", rr.Code, rr.Body.String())
+	}
+	var body struct {
+		Nodes []map[string]interface{} `json:"nodes"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Nodes) != 1 {
+		t.Fatalf("nodes = %#v, want one quarantined fact", body.Nodes)
+	}
+	node := body.Nodes[0]
+	for key, want := range map[string]interface{}{"id": "42", "maintenance_status": "quarantined", "quarantined_at": "2026-08-01T00:00:00Z", "quarantine_reason": "expired", "quarantine_batch_id": "batch-1"} {
+		if got := node[key]; got != want {
+			t.Errorf("%s = %#v, want %#v", key, got, want)
+		}
+	}
+	assertJSONOmitsKeys(t, rr.Body.Bytes(), "payload", "secret")
+}
+
 func TestFactSummaryAndDetailJSONContracts(t *testing.T) {
 	payload := map[string]interface{}{
 		"text": "visible fact", "namespace": "projects", "tags": []interface{}{"personal-memory"},
@@ -1142,6 +1228,14 @@ func TestStaticUIContractsForLazyLoadingAccessibilityAndResilience(t *testing.T)
 	require(t, overview, "No facts have been stored yet")
 	require(t, overview, "activity-section').hidden = true")
 	require(t, overview, "Loading knowledge map")
+	require(t, overview, "maintenance_status=quarantined")
+	require(t, overview, "operator-only inspection")
+	forbid(t, overview, "api/facts?maintenance_status=active")
+	require(t, overview, "quarantinedInspectionAbortController")
+	require(t, overview, "quarantinedInspectionGeneration")
+	require(t, overview, "signal: quarantinedInspectionAbortController.signal")
+	require(t, overview, "requestGeneration !== quarantinedInspectionGeneration")
+	require(t, overview, "quarantinedInspectionAbortController.abort()")
 
 	graph := read(t, "assets/js/graph.js")
 	require(t, graph, "api/facts/${encodeURIComponent(id)}")
@@ -1208,6 +1302,8 @@ func TestStaticUIContractsForLazyLoadingAccessibilityAndResilience(t *testing.T)
 	require(t, overviewView, "id=\"activity-section\"")
 	require(t, overviewView, "id=\"heatmap-grid\"")
 	require(t, overviewView, "role=\"list\"")
+	require(t, overviewView, "id=\"maintenance-status-filter\"")
+	require(t, overviewView, "value=\"quarantined\"")
 	documentsView := read(t, "views/documents.html")
 	require(t, documentsView, "id=\"docs-refresh\"")
 	shell := read(t, "shell.html")
