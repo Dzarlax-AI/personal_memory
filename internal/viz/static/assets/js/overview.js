@@ -206,7 +206,9 @@ function navigateToGraph(namespace, projectTag) {
   activateTab('graph');
   const sel = document.getElementById('ns-filter');
   if (sel) sel.value = graphFilter.namespace;
-  document.getElementById('lifecycle-filter').value = '';
-  document.getElementById('authority-filter').value = '';
+  const lifecycleFilter = document.getElementById('lifecycle-filter');
+  if (lifecycleFilter) lifecycleFilter.value = '';
+  const authorityFilter = document.getElementById('authority-filter');
+  if (authorityFilter) authorityFilter.value = '';
   if (typeof loadGraph === 'function') loadGraph();
 }

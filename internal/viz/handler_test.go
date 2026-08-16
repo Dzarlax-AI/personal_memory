@@ -428,6 +428,11 @@ func TestFactHistoryIsDeterministicActiveOnlyAndDoesNotTraverseInvalidNodes(t *t
 		t.Fatalf("history = %d (%s)", rr.Code, rr.Body.String())
 	}
 	assertJSONOmitsKeys(t, rr.Body.Bytes(), "payload", "reference", "must not leak", "must not be fetched")
+	for _, secret := range []string{"must not leak", "must not be fetched"} {
+		if strings.Contains(rr.Body.String(), secret) {
+			t.Fatalf("history response leaked %q: %s", secret, rr.Body.String())
+		}
+	}
 	if slicesContain(fetched, "hidden-child") {
 		t.Fatalf("invalid node was traversed: fetched %#v", fetched)
 	}
@@ -582,6 +587,43 @@ func TestFactHistoryCapsTotalRelationshipsAndMalformedArrays(t *testing.T) {
 	}
 	if len(malformed.Nodes) != 1 || len(malformed.Links) != 0 || fetches != before+1 {
 		t.Fatalf("malformed response=%#v fetches=%d, want one non-traversed node", malformed, fetches-before)
+	}
+}
+
+func TestFactHistoryChargesLinkLimitAfterMirroredEdgeDeduplication(t *testing.T) {
+	children := make([]string, hardHistoryFetchedNodes-1)
+	for i := range children {
+		children[i] = fmt.Sprintf("child-%02d", i)
+	}
+	childrenJSON, err := json.Marshal(children)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		w.Header().Set("Content-Type", "application/json")
+		if id == "root" {
+			mustWriteTestResponse(t, w, `{"result":{"id":"root","payload":{"text":"root","lifecycle_state":"current","supersedes":%s}}}`, childrenJSON)
+			return
+		}
+		extra := make([]string, 10)
+		for i := range extra {
+			extra[i] = fmt.Sprintf("leaf-%s-%02d", id, i)
+		}
+		extraJSON, marshalErr := json.Marshal(extra)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		mustWriteTestResponse(t, w, `{"result":{"id":%q,"payload":{"text":%q,"lifecycle_state":"historical","superseded_by":["root"],"supersedes":%s}}}`, id, id, extraJSON)
+	}))
+	defer backend.Close()
+
+	response, found, err := NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65).loadFactHistory(context.Background(), "root")
+	if err != nil || !found {
+		t.Fatalf("load history: found=%v err=%v", found, err)
+	}
+	if len(response.Links) != hardHistoryLinks || !response.Truncated {
+		t.Fatalf("links=%d truncated=%v, want %d unique links and truncation", len(response.Links), response.Truncated, hardHistoryLinks)
 	}
 }
 

@@ -77,7 +77,6 @@ func (h *Handler) loadFactHistory(ctx context.Context, rootID string) (historyRe
 	adjacency := make(map[string][]string)
 	linkIndexes := make(map[string]int)
 	fetched := 0
-	processedRelationships := 0
 
 	for len(queue) > 0 {
 		if err := ctx.Err(); err != nil {
@@ -118,7 +117,7 @@ func (h *Handler) loadFactHistory(ctx context.Context, rootID string) (historyRe
 			continue
 		}
 
-		if processedRelationships >= hardHistoryLinks {
+		if len(linkIndexes) >= hardHistoryLinks {
 			if len(view.Supersedes) > 0 || len(view.SupersededBy) > 0 {
 				response.Truncated = true
 			}
@@ -128,42 +127,34 @@ func (h *Handler) loadFactHistory(ctx context.Context, rootID string) (historyRe
 		// payload permutation cannot change which logical relationships survive.
 		supersedes := sortedUniqueIDs(view.Supersedes)
 		supersededBy := sortedUniqueIDs(view.SupersededBy)
-		relations := make([]historyRelation, 0, min(hardHistoryLinks-processedRelationships, len(supersedes)+len(supersededBy)))
+		relations := make([]historyRelation, 0, len(supersedes)+len(supersededBy))
 		for _, target := range supersedes {
-			if processedRelationships >= hardHistoryLinks {
-				response.Truncated = true
-				break
-			}
 			relations = append(relations, historyRelation{
 				link: historyLink{From: point.ID, To: target, Type: "supersedes"}, targetID: target,
 			})
-			processedRelationships++
 		}
 		for _, target := range supersededBy {
-			if processedRelationships >= hardHistoryLinks {
-				response.Truncated = true
-				break
-			}
 			// A.superseded_by=[B] and B.supersedes=[A] describe the same
 			// directed logical edge B -> A. Canonicalizing here prevents the
 			// mirrored storage representation from looking like a cycle.
 			relations = append(relations, historyRelation{
 				link: historyLink{From: target, To: point.ID, Type: "supersedes"}, targetID: target,
 			})
-			processedRelationships++
 		}
 		sort.Slice(relations, func(i, j int) bool {
 			return historyLinkLess(relations[i].link, relations[j].link)
 		})
 		for _, relation := range relations {
-			if len(response.Links) >= hardHistoryLinks {
-				response.Truncated = true
-				break
-			}
 			link := relation.link
 			identity := historyLinkIdentity(link)
 			if _, exists := linkIndexes[identity]; exists {
 				continue
+			}
+			// Mirrored supersedes/superseded_by metadata describes one logical
+			// edge. Charge the response budget only after canonical deduplication.
+			if len(linkIndexes) >= hardHistoryLinks {
+				response.Truncated = true
+				break
 			}
 			if link.From == link.To || historyPathExists(adjacency, link.To, link.From) {
 				link.Status = "cycle"

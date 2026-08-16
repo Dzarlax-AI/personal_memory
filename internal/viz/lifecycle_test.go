@@ -45,7 +45,7 @@ func TestPrivacySafeReferenceRejectsPathAndOversizedForms(t *testing.T) {
 	for i := range long {
 		long[i] = 'x'
 	}
-	for _, value := range []string{"/etc/passwd", `C:\\Users\\me\\secret`, `\\\\server\\share\\secret`, "file:///tmp/secret", string(long)} {
+	for _, value := range []string{"/etc/passwd", `C:\Users\me\secret`, `\\server\share\secret`, "file:///tmp/secret", string(long)} {
 		if _, ok := privacySafeReference(value); ok {
 			t.Errorf("privacySafeReference(%q) accepted unsafe value", value)
 		}
