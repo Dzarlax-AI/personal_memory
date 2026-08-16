@@ -6,6 +6,9 @@ let graphPromise = null;
 let graphResultsShown = 50;
 let detailRequest = 0;
 let detailReturnFocus = null;
+let detailReturnFactID = '';
+let detailAbortController = null;
+let historyAbortController = null;
 const pendingTagSaves = new Set();
 let graphAbortController = null;
 let graphRequest = 0;
@@ -32,6 +35,8 @@ async function loadGraph(maxNodes = 1000) {
     const selectedTag = requestFilter.projectTag || originalTagFilter(document.getElementById('tag-filter'));
     const selectedPrimaryTag = requestFilter.primaryTag || '';
     const selectedText = requestFilter.text || document.getElementById('text-filter').value;
+    const selectedLifecycle = requestFilter.lifecycle || document.getElementById('lifecycle-filter').value;
+    const selectedAuthority = requestFilter.authority || document.getElementById('authority-filter').value;
     try { await loadFacts(); } catch (_) { /* graph can still supply filters */ }
     if (request !== graphRequest) return null;
     const params = new URLSearchParams({ threshold, max_nodes: String(maxNodes) });
@@ -39,6 +44,8 @@ async function loadGraph(maxNodes = 1000) {
     if (selectedPrimaryTag) params.set('primary_tag', selectedPrimaryTag);
     else if (selectedTag) params.set('tag', selectedTag);
     if (selectedText) params.set('text', selectedText);
+    if (selectedLifecycle) params.set('lifecycle_state', selectedLifecycle);
+    if (selectedAuthority) params.set('authority', selectedAuthority);
     const res = await fetch(`${BASE}/api/graph?${params}`, { signal: graphAbortController.signal });
     if (!res.ok) {
       const error = new Error(await responseMessage(res));
@@ -65,6 +72,8 @@ async function loadGraph(maxNodes = 1000) {
       tagLabel.style.display = 'none';
     }
     graphFilter.text = selectedText;
+    graphFilter.lifecycle = selectedLifecycle;
+    graphFilter.authority = selectedAuthority;
     graphResultsShown = 50;
     graphLoaded = true;
     renderGraphVis(graphDataCache, request);
@@ -112,6 +121,8 @@ function graphFilteredNodes(graphData) {
   else if (graphFilter.projectTag) filtered = filtered.filter(node => tagsList(node.tags).includes(graphFilter.projectTag));
   if (graphFilter.text === 'missing') filtered = filtered.filter(node => node.text_missing);
   if (graphFilter.text === 'present') filtered = filtered.filter(node => !node.text_missing);
+  if (graphFilter.lifecycle) filtered = filtered.filter(node => normalizedLifecycle(node).state === graphFilter.lifecycle);
+  if (graphFilter.authority) filtered = filtered.filter(node => matchesAuthorityFilter(node, graphFilter.authority));
   return filtered;
 }
 
@@ -173,7 +184,9 @@ function renderGraphResults(nodes) {
   nodes.slice(0, graphResultsShown).forEach(node => {
     const button = document.createElement('button');
     button.type = 'button'; button.className = 'graph-result';
-    button.textContent = `${normalizeNamespace(node.namespace)} · ${factText(node).slice(0, 110)}${factText(node).length > 110 ? '…' : ''}`;
+    button.dataset.factId = String(node.id);
+    const text = factText(node);
+    button.innerHTML = `<span class="graph-result-text">${escapeHtml(normalizeNamespace(node.namespace))} · ${escapeHtml(text.slice(0, 110))}${text.length > 110 ? '…' : ''}</span><span class="lifecycle-badges">${lifecycleBadgeHTML(node)}${authorityBadgesHTML(node)}</span>`;
     button.addEventListener('click', () => showDetail(node.id, button));
     list.appendChild(button);
   });
@@ -182,18 +195,25 @@ function renderGraphResults(nodes) {
 }
 
 async function showDetail(id, opener) {
-  detailReturnFocus = opener || document.activeElement;
   const panel = document.getElementById('detail-panel');
+  if (!panel.classList.contains('visible')) {
+    detailReturnFocus = opener || document.activeElement;
+    detailReturnFactID = String(id);
+  }
   const state = document.getElementById('detail-state');
   const content = document.getElementById('detail-content');
   const save = document.getElementById('save-tags');
   const request = ++detailRequest;
+  abortDetailRequests();
+  detailAbortController = new AbortController();
   selectedFact = null;
   content.hidden = true; save.disabled = true;
   state.textContent = 'Loading fact details…';
+  renderHistoryState('loading', 'Loading semantic history…');
   panel.classList.add('visible'); panel.focus();
+  loadFactHistory(id, request);
   try {
-    const res = await fetch(`${BASE}/api/facts/${encodeURIComponent(id)}`);
+    const res = await fetch(`${BASE}/api/facts/${encodeURIComponent(id)}`, { signal: detailAbortController.signal });
     if (!res.ok) throw new Error(await responseMessage(res));
     const fact = await res.json();
     if (request !== detailRequest) return;
@@ -204,7 +224,7 @@ async function showDetail(id, opener) {
     save.disabled = pendingTagSaves.has(fact.id);
     if (save.disabled) document.getElementById('tag-save-status').textContent = 'Saving changes…';
   } catch (error) {
-    if (request !== detailRequest) return;
+    if (request !== detailRequest || error.name === 'AbortError') return;
     state.textContent = `Could not load fact details: ${error.message || error}`;
     const retry = document.createElement('button');
     retry.type = 'button'; retry.className = 'toolbar-btn'; retry.textContent = 'Retry';
@@ -213,19 +233,133 @@ async function showDetail(id, opener) {
   }
 }
 
+function abortDetailRequests() {
+  if (detailAbortController) detailAbortController.abort();
+  if (historyAbortController) historyAbortController.abort();
+  detailAbortController = null;
+  historyAbortController = null;
+}
+
+function renderHistoryState(kind, message, retry) {
+  const status = document.getElementById('history-status');
+  const content = document.getElementById('history-content');
+  status.textContent = message;
+  status.className = `history-status history-${kind}`;
+  content.replaceChildren();
+  if (retry) {
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'toolbar-btn'; button.textContent = 'Retry history';
+    button.addEventListener('click', retry);
+    content.appendChild(button);
+  }
+}
+
+async function loadFactHistory(id, request) {
+  if (request !== detailRequest) return;
+  if (historyAbortController) historyAbortController.abort();
+  historyAbortController = new AbortController();
+  renderHistoryState('loading', 'Loading semantic history…');
+  try {
+    const res = await fetch(`${BASE}/api/facts/${encodeURIComponent(id)}/history`, { signal: historyAbortController.signal });
+    if (!res.ok) throw new Error(await responseMessage(res));
+    const history = await res.json();
+    if (request !== detailRequest) return;
+    renderHistory(history, id, request);
+  } catch (error) {
+    if (request !== detailRequest || error.name === 'AbortError') return;
+    renderHistoryState('error', `Could not load semantic history: ${error.message || error}`, () => loadFactHistory(id, request));
+  } finally {
+    if (request === detailRequest) historyAbortController = null;
+  }
+}
+
+function historyStatusLabel(status) {
+  return ({ resolved: 'Resolved', missing: 'Missing fact', unavailable: 'Unavailable', cycle: 'Cycle detected' })[status] || 'Unavailable';
+}
+
+function renderHistory(history, rootID, request) {
+  if (request !== detailRequest) return;
+  const status = document.getElementById('history-status');
+  const content = document.getElementById('history-content');
+  const nodes = Array.isArray(history.nodes) ? history.nodes : [];
+  const links = Array.isArray(history.links) ? history.links : [];
+  content.replaceChildren();
+  if (nodes.length === 0 && links.length === 0) {
+    renderHistoryState('empty', 'No semantic history is recorded for this fact.');
+    return;
+  }
+  status.className = 'history-status history-ready';
+  status.textContent = history.truncated ? 'History is truncated to the safe response limit.' : `${links.length} semantic relationship${links.length === 1 ? '' : 's'}.`;
+  const nodeByID = new Map(nodes.map(node => [String(node.id), node]));
+  const root = nodeByID.get(String(rootID)) || nodes[0];
+  if (root) content.appendChild(historyNodeControl(root, true));
+  const relatedNodes = nodes.filter(node => !root || String(node.id) !== String(root.id));
+  if (relatedNodes.length) {
+    const resolved = document.createElement('div');
+    resolved.className = 'history-resolved-nodes';
+    const heading = document.createElement('div');
+    heading.className = 'history-subheading'; heading.textContent = 'Resolved related facts';
+    resolved.appendChild(heading);
+    relatedNodes.forEach(node => resolved.appendChild(historyNodeControl(node, false)));
+    content.appendChild(resolved);
+  }
+  if (links.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'history-empty'; empty.textContent = 'No lifecycle relationships are recorded.';
+    content.appendChild(empty);
+  }
+  links.forEach(link => {
+    const row = document.createElement('div');
+    const linkStatus = ['resolved', 'missing', 'unavailable', 'cycle'].includes(link.status) ? link.status : 'unavailable';
+    row.className = `history-link history-link-${linkStatus}`;
+    const relation = document.createElement('div');
+    relation.className = 'history-relation';
+    relation.textContent = `${String(link.from)} ${link.type === 'supersedes' ? 'supersedes' : String(link.type || 'relates to')} ${String(link.to)}`;
+    const badge = document.createElement('span');
+    badge.className = `history-link-status status-${linkStatus}`;
+    badge.textContent = historyStatusLabel(linkStatus);
+    row.append(relation, badge);
+    if (linkStatus !== 'resolved') {
+      const explanation = document.createElement('div');
+      explanation.className = 'history-explanation';
+      explanation.textContent = linkStatus === 'missing' ? 'The referenced fact no longer exists.'
+        : linkStatus === 'cycle' ? 'This relationship would loop back through the history graph.'
+          : 'The referenced fact is not available in this view.';
+      row.appendChild(explanation);
+    }
+    content.appendChild(row);
+  });
+}
+
+function historyNodeControl(node, isRoot) {
+  const button = document.createElement('button');
+  button.type = 'button'; button.className = 'history-node';
+  const text = factText(node);
+  button.innerHTML = `<span class="history-node-label">${isRoot ? 'Selected fact' : 'Open fact'}</span><span>${escapeHtml(text.slice(0, 120))}${text.length > 120 ? '…' : ''}</span><span class="lifecycle-badges">${lifecycleBadgeHTML(node)}${authorityBadgesHTML(node)}</span>`;
+  button.addEventListener('click', () => showDetail(node.id, button));
+  return button;
+}
+
 function renderDetail(fact) {
   const id = String(fact.id || '');
   document.getElementById('detail-text').textContent = factText(fact);
   document.getElementById('detail-text').classList.toggle('missing-text', Boolean(fact.text_missing));
+  document.getElementById('detail-lifecycle').innerHTML = `${lifecycleBadgeHTML(fact)}${authorityBadgesHTML(fact)}`;
   document.getElementById('detail-meta').innerHTML = `<span>ID: ${escapeHtml(id.slice(0, 12))}${id.length > 12 ? '...' : ''}</span><br><span style="color:${nsColor(fact.namespace)}">${escapeHtml(normalizeNamespace(fact.namespace))}</span>${primaryTag(fact) ? `<span class="tag-chip">primary: ${escapeHtml(normalizeTagDisplay(primaryTag(fact)))}</span>` : ''}${tagOptions([fact]).map(tag => `<span class="tag-chip">#${escapeHtml(tag.display)}</span>`).join('')}<br><span>Created: ${escapeHtml((fact.created_at || '').slice(0, 10))}</span><span>Recalls: ${Number(fact.recall_count || 0)}</span>${fact.permanent ? '<span style="color:var(--orange)">Permanent</span>' : ''}`;
   document.getElementById('detail-tags').value = tagsList(fact.tags).join(', ');
   document.getElementById('detail-primary-tag').value = primaryTag(fact) || '';
   document.getElementById('tag-save-status').textContent = '';
-  const payloadDetails = document.getElementById('payload-details');
-  const keys = Array.isArray(fact.payload_keys) ? fact.payload_keys : [];
-  document.getElementById('payload-keys').textContent = keys.join(', ');
-  document.getElementById('payload-json').textContent = JSON.stringify(fact.payload || {}, null, 2);
-  payloadDetails.style.display = keys.length ? '' : 'none';
+  const lifecycle = normalizedLifecycle(fact);
+  document.getElementById('detail-authority').textContent = authoritySignalSummary(fact);
+  document.getElementById('detail-provenance').innerHTML = provenanceDisplayHTML(fact);
+  document.getElementById('detail-verified').textContent = lifecycle.verified_at || 'Not verified';
+  document.getElementById('detail-transitioned').textContent = lifecycle.transitioned_at || 'Not recorded';
+  document.getElementById('detail-updated').textContent = fact.updated_at || 'Not recorded';
+  document.getElementById('detail-last-recalled').textContent = fact.last_recalled_at || 'Never';
+  document.getElementById('detail-text-source').textContent = fact.text_source || 'Not recorded';
+  if (!lifecycle.valid && lifecycle.invalid_reason) {
+    document.getElementById('detail-transitioned').textContent = `Invalid: ${lifecycle.invalid_reason}`;
+  }
 }
 
 function syncCachedFactTags(id, tags, primaryTagValue) {
@@ -251,9 +385,16 @@ function hideDetail() {
   const panel = document.getElementById('detail-panel');
   if (!panel.classList.contains('visible')) return;
   detailRequest++;
+  abortDetailRequests();
   selectedFact = null;
   panel.classList.remove('visible');
-  if (detailReturnFocus?.focus) detailReturnFocus.focus();
+  const liveResult = [...document.querySelectorAll('.graph-result[data-fact-id]')]
+    .find(button => button.dataset.factId === detailReturnFactID && button.isConnected && !button.hidden);
+  const fallback = document.getElementById('graph-container');
+  const focusTarget = liveResult || (detailReturnFocus?.isConnected && !detailReturnFocus.hidden ? detailReturnFocus : fallback);
+  if (focusTarget?.focus) focusTarget.focus();
+  detailReturnFocus = null;
+  detailReturnFactID = '';
 }
 
 async function saveSelectedTags() {
@@ -299,7 +440,7 @@ document.getElementById('detail-close').addEventListener('click', hideDetail);
 document.getElementById('save-tags').addEventListener('click', saveSelectedTags);
 document.addEventListener('keydown', event => { if (event.key === 'Escape') hideDetail(); });
 document.getElementById('graph-results-more').addEventListener('click', () => { graphResultsShown += 50; renderGraphResults(graphFilteredNodes(graphDataCache)); });
-document.getElementById('reset-graph-filters').addEventListener('click', () => { graphFilter = { namespace: '', projectTag: '', primaryTag: '', text: '' }; document.getElementById('ns-filter').value = ''; document.getElementById('tag-filter').value = ''; document.getElementById('text-filter').value = ''; document.getElementById('threshold').value = '0.85'; document.getElementById('threshold-val').textContent = '0.85'; graphLoaded = false; loadGraph(); });
+document.getElementById('reset-graph-filters').addEventListener('click', () => { graphFilter = { namespace: '', projectTag: '', primaryTag: '', text: '', lifecycle: '', authority: '' }; document.getElementById('ns-filter').value = ''; document.getElementById('tag-filter').value = ''; document.getElementById('text-filter').value = ''; document.getElementById('lifecycle-filter').value = ''; document.getElementById('authority-filter').value = ''; document.getElementById('threshold').value = '0.85'; document.getElementById('threshold-val').textContent = '0.85'; graphLoaded = false; loadGraph(); });
 document.getElementById('threshold').addEventListener('input', event => { document.getElementById('threshold-val').textContent = event.target.value; });
 document.getElementById('threshold').addEventListener('change', () => { graphLoaded = false; loadGraph(); });
-['ns-filter', 'tag-filter', 'text-filter'].forEach(id => document.getElementById(id).addEventListener(id === 'tag-filter' ? 'input' : 'change', () => { graphFilter = { namespace: document.getElementById('ns-filter').value, projectTag: originalTagFilter(document.getElementById('tag-filter')), primaryTag: '', text: document.getElementById('text-filter').value }; graphLoaded = false; loadGraph(); }));
+['ns-filter', 'tag-filter', 'text-filter', 'lifecycle-filter', 'authority-filter'].forEach(id => document.getElementById(id).addEventListener(id === 'tag-filter' ? 'input' : 'change', () => { graphFilter = { namespace: document.getElementById('ns-filter').value, projectTag: originalTagFilter(document.getElementById('tag-filter')), primaryTag: '', text: document.getElementById('text-filter').value, lifecycle: document.getElementById('lifecycle-filter').value, authority: document.getElementById('authority-filter').value }; graphLoaded = false; loadGraph(); }));

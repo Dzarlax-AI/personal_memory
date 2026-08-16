@@ -202,9 +202,13 @@ function renderHeatmap(nodes) {
 }
 
 function navigateToGraph(namespace, projectTag) {
-  graphFilter = { namespace: graphNamespaceFilter(namespace), projectTag: '', primaryTag: projectTag || '', text: '' };
+  graphFilter = { namespace: graphNamespaceFilter(namespace), projectTag: '', primaryTag: projectTag || '', text: '', lifecycle: '', authority: '' };
   activateTab('graph');
   const sel = document.getElementById('ns-filter');
   if (sel) sel.value = graphFilter.namespace;
+  const lifecycleFilter = document.getElementById('lifecycle-filter');
+  if (lifecycleFilter) lifecycleFilter.value = '';
+  const authorityFilter = document.getElementById('authority-filter');
+  if (authorityFilter) authorityFilter.value = '';
   if (typeof loadGraph === 'function') loadGraph();
 }

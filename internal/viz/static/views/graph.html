@@ -12,6 +12,23 @@
         <option value="missing">Missing</option>
         <option value="present">Present</option>
       </select>
+      <label for="lifecycle-filter">Lifecycle</label>
+      <select id="lifecycle-filter">
+        <option value="">All</option>
+        <option value="current">Current</option>
+        <option value="historical">Historical</option>
+        <option value="superseded">Superseded</option>
+        <option value="disputed">Disputed</option>
+        <option value="invalid">Invalid metadata</option>
+      </select>
+      <label for="authority-filter">Authority</label>
+      <select id="authority-filter">
+        <option value="">All</option>
+        <option value="canonical">Canonical</option>
+        <option value="verified">Verified</option>
+        <option value="legacy">Legacy</option>
+        <option value="has-provenance">Has provenance</option>
+      </select>
       <label for="threshold">Similarity</label>
       <input type="range" id="threshold" min="0.50" max="0.99" step="0.01" value="0.85">
       <output class="threshold-val" id="threshold-val" for="threshold">0.85</output>
@@ -33,7 +50,17 @@
       <div id="detail-state" class="detail-state" role="status" aria-live="polite"></div>
       <div id="detail-content" hidden>
         <div class="fact-text" id="detail-text"></div>
+        <div class="lifecycle-badges" id="detail-lifecycle"></div>
         <div class="meta" id="detail-meta"></div>
+        <dl class="curated-detail" id="curated-detail">
+          <dt>Authority</dt><dd id="detail-authority"></dd>
+          <dt>Provenance</dt><dd id="detail-provenance"></dd>
+          <dt>Verified</dt><dd id="detail-verified"></dd>
+          <dt>Lifecycle changed</dt><dd id="detail-transitioned"></dd>
+          <dt>Updated</dt><dd id="detail-updated"></dd>
+          <dt>Last recalled</dt><dd id="detail-last-recalled"></dd>
+          <dt>Text source</dt><dd id="detail-text-source"></dd>
+        </dl>
       <div class="tag-editor">
         <label for="detail-tags">Tags</label>
         <div class="tag-editor-row">
@@ -44,11 +71,11 @@
         <input id="detail-primary-tag" type="text" autocomplete="off">
         <div id="tag-save-status" class="save-status" role="status" aria-live="polite"></div>
       </div>
-      <details class="payload-details" id="payload-details" style="display:none">
-        <summary>Payload</summary>
-        <div id="payload-keys"></div>
-        <pre id="payload-json"></pre>
-      </details>
+      <section class="history-region" aria-labelledby="history-heading">
+        <h4 id="history-heading">Semantic history</h4>
+        <div id="history-status" class="history-status" role="status" aria-live="polite"></div>
+        <div id="history-content"></div>
+      </section>
       </div>
     </section>
   </div>

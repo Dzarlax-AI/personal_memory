@@ -68,7 +68,7 @@ function renderForgottenList() {
 function forgottenHTML(fact) {
   const text = factText(fact);
   const primary = primaryTag(fact);
-  return `<article class="forgotten-item"><div class="fact-text">${escapeHtml(text.slice(0, 200))}${text.length > 200 ? '...' : ''}</div><div class="meta-col"><span style="color:${nsColor(fact.namespace)}">${escapeHtml(normalizeNamespace(fact.namespace))}</span><span>${escapeHtml(primary || 'no primary tag')}</span><span>${escapeHtml((fact.created_at || '').slice(0, 10))}</span>${fact.permanent ? '<span style="color:var(--orange)">permanent</span>' : ''}</div></article>`;
+  return `<article class="forgotten-item"><div class="fact-text">${escapeHtml(text.slice(0, 200))}${text.length > 200 ? '...' : ''}<div class="lifecycle-badges">${lifecycleBadgeHTML(fact)}${authorityBadgesHTML(fact)}</div></div><div class="meta-col"><span style="color:${nsColor(fact.namespace)}">${escapeHtml(normalizeNamespace(fact.namespace))}</span><span>${escapeHtml(primary || 'no primary tag')}</span><span>${escapeHtml((fact.created_at || '').slice(0, 10))}</span>${fact.permanent ? '<span style="color:var(--orange)">permanent</span>' : ''}</div></article>`;
 }
 
 ['forgotten-ns-filter', 'forgotten-tag-filter', 'forgotten-sort', 'forgotten-permanent-only'].forEach(id => {

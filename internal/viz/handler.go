@@ -109,6 +109,7 @@ type Handler struct {
 	qdrant           *qdrant.Client
 	defaultThreshold float64
 	defaultMaxEdges  int
+	historyTimeout   time.Duration
 
 	docChunks *qdrant.Client
 	docsDir   string
@@ -137,6 +138,7 @@ func NewHandler(qc *qdrant.Client, defaultThreshold float64) *Handler {
 		qdrant:           qc,
 		defaultThreshold: defaultThreshold,
 		defaultMaxEdges:  500,
+		historyTimeout:   vizComputationTimeout,
 	}
 	html, err := buildShellHTML()
 	if err != nil {
@@ -161,6 +163,7 @@ func (h *Handler) Router() chi.Router {
 	r := chi.NewRouter()
 
 	r.Get("/api/facts", h.apiFacts)
+	r.Get("/api/facts/{id}/history", h.apiFactHistory)
 	r.Get("/api/facts/{id}", h.apiFactDetail)
 	r.Get("/api/graph", h.apiGraph)
 	r.Get("/api/duplicates", h.apiDuplicates)
@@ -257,8 +260,8 @@ func factListMaintenanceStatus(r *http.Request) (maintenance.Status, error) {
 	return maintenance.Status(values[0]), nil
 }
 
-// apiFactDetail is intentionally separate from the list endpoint: raw payload
-// data is only returned after a user has selected one specific fact.
+// apiFactDetail is intentionally separate from the list endpoint, but still
+// returns an allowlisted DTO rather than the underlying Qdrant payload.
 func (h *Handler) apiFactDetail(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if id == "" {
@@ -301,10 +304,20 @@ func (h *Handler) apiGraph(w http.ResponseWriter, r *http.Request) {
 	tag := r.URL.Query().Get("tag")
 	primaryTag := r.URL.Query().Get("primary_tag")
 	textState := r.URL.Query().Get("text")
+	lifecycleState, err := closedSingleParam(r, "lifecycle_state", "", "current", "historical", "superseded", "disputed", "invalid")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	authority, err := closedSingleParam(r, "authority", "", "canonical", "verified", "legacy", "has-provenance")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), vizComputationTimeout)
 	defer cancel()
-	points, tooMany, err := h.scrollGraphPoints(ctx, maxNodes, namespace, tag, primaryTag, textState)
+	points, tooMany, err := h.scrollGraphPointsFiltered(ctx, maxNodes, namespace, tag, primaryTag, textState, lifecycleState, authority)
 	if err != nil {
 		writeGraphComputationError(w, err)
 		return
@@ -335,10 +348,18 @@ func (h *Handler) apiGraph(w http.ResponseWriter, r *http.Request) {
 // filter matches. The extra point is only used to report that the requested
 // computation would exceed its explicit bound.
 func (h *Handler) scrollGraphPoints(ctx context.Context, maxNodes int, namespace, tag, primaryTag, textState string) ([]qdrant.ScrollPoint, bool, error) {
-	return h.scrollGraphPointsWithLimit(ctx, maxNodes, hardGraphScanPoints, namespace, tag, primaryTag, textState)
+	return h.scrollGraphPointsFiltered(ctx, maxNodes, namespace, tag, primaryTag, textState, "", "")
+}
+
+func (h *Handler) scrollGraphPointsFiltered(ctx context.Context, maxNodes int, namespace, tag, primaryTag, textState, lifecycleState, authority string) ([]qdrant.ScrollPoint, bool, error) {
+	return h.scrollGraphPointsWithFiltersAndLimit(ctx, maxNodes, hardGraphScanPoints, namespace, tag, primaryTag, textState, lifecycleState, authority)
 }
 
 func (h *Handler) scrollGraphPointsWithLimit(ctx context.Context, maxNodes, maxScanned int, namespace, tag, primaryTag, textState string) ([]qdrant.ScrollPoint, bool, error) {
+	return h.scrollGraphPointsWithFiltersAndLimit(ctx, maxNodes, maxScanned, namespace, tag, primaryTag, textState, "", "")
+}
+
+func (h *Handler) scrollGraphPointsWithFiltersAndLimit(ctx context.Context, maxNodes, maxScanned int, namespace, tag, primaryTag, textState, lifecycleState, authority string) ([]qdrant.ScrollPoint, bool, error) {
 	points := make([]qdrant.ScrollPoint, 0, maxNodes+1)
 	filters := maintenance.ActiveFilter(qdrantGraphFilters(namespace, tag, primaryTag))
 	scanned := 0
@@ -356,7 +377,7 @@ func (h *Handler) scrollGraphPointsWithLimit(ctx context.Context, maxNodes, maxS
 			if !maintenance.IsActive(point.Payload) {
 				continue
 			}
-			if !graphPointMatches(point, namespace, tag, primaryTag, textState) {
+			if !graphPointMatchesWithLifecycle(point, namespace, tag, primaryTag, textState, lifecycleState, authority) {
 				continue
 			}
 			points = append(points, point)
@@ -369,6 +390,22 @@ func (h *Handler) scrollGraphPointsWithLimit(ctx context.Context, maxNodes, maxS
 		}
 		offset = page.RawOffset
 	}
+}
+
+func closedSingleParam(r *http.Request, name, fallback string, allowed ...string) (string, error) {
+	values, present := r.URL.Query()[name]
+	if !present {
+		return fallback, nil
+	}
+	if len(values) != 1 {
+		return "", fmt.Errorf("%s must be provided at most once", name)
+	}
+	for _, value := range allowed {
+		if values[0] == value {
+			return value, nil
+		}
+	}
+	return "", fmt.Errorf("invalid %s", name)
 }
 
 func qdrantGraphFilters(namespace, tag, primaryTag string) map[string]interface{} {
@@ -458,6 +495,35 @@ func graphPointMatches(p qdrant.ScrollPoint, namespace, tag, primaryTag, textSta
 		return false
 	}
 	return true
+}
+
+func graphPointMatchesWithLifecycle(p qdrant.ScrollPoint, namespace, tag, primaryTag, textState, lifecycleState, authority string) bool {
+	if !graphPointMatches(p, namespace, tag, primaryTag, textState) {
+		return false
+	}
+	view, _ := lifecycle.Parse(p.Payload, p.ID)
+	state := string(view.State)
+	if !view.Valid {
+		state = "invalid"
+	}
+	if lifecycleState != "" && state != lifecycleState {
+		return false
+	}
+	if authority != "" && !view.Valid {
+		return false
+	}
+	switch authority {
+	case "canonical":
+		return view.Canonical
+	case "verified":
+		return view.VerifiedAt != ""
+	case "legacy":
+		return view.Legacy
+	case "has-provenance":
+		return view.Provenance != nil
+	default:
+		return true
+	}
 }
 
 func payloadNamespaceMissing(raw interface{}) bool {
@@ -552,18 +618,18 @@ func strongestDuplicates(ctx context.Context, points []qdrant.ScrollPoint, thres
 
 // factSummary is the only fact shape returned by collection/list endpoints.
 // Keep it intentionally small: lifecycle is normalized metadata, while raw
-// payload and unrelated diagnostics stay limited to explicit detail requests.
+// payload and unrelated diagnostics are never returned by collection views.
 type factSummary struct {
-	ID          string         `json:"id"`
-	Text        string         `json:"text"`
-	TextMissing bool           `json:"text_missing"`
-	Namespace   string         `json:"namespace"`
-	Tags        []string       `json:"tags"`
-	PrimaryTag  string         `json:"primary_tag"`
-	CreatedAt   string         `json:"created_at"`
-	Permanent   bool           `json:"permanent"`
-	RecallCount int            `json:"recall_count"`
-	Lifecycle   lifecycle.View `json:"lifecycle"`
+	ID          string       `json:"id"`
+	Text        string       `json:"text"`
+	TextMissing bool         `json:"text_missing"`
+	Namespace   string       `json:"namespace"`
+	Tags        []string     `json:"tags"`
+	PrimaryTag  string       `json:"primary_tag"`
+	CreatedAt   string       `json:"created_at"`
+	Permanent   bool         `json:"permanent"`
+	RecallCount int          `json:"recall_count"`
+	Lifecycle   lifecycleDTO `json:"lifecycle"`
 }
 
 // quarantinedFactSummary is intentionally list-only. It exposes only the
@@ -578,13 +644,13 @@ type quarantinedFactSummary struct {
 	QuarantineBatchID string             `json:"quarantine_batch_id"`
 }
 
-// factDetail extends the privacy-safe summary with the complete payload for
-// one explicitly selected fact. It must only be used by apiFactDetail.
+// factDetail extends the privacy-safe summary with a small allowlist of
+// operational timestamps and text-origin metadata used by the editor.
 type factDetail struct {
 	factSummary
-	TextSource  string                 `json:"text_source"`
-	PayloadKeys []string               `json:"payload_keys"`
-	Payload     map[string]interface{} `json:"payload"`
+	UpdatedAt      string `json:"updated_at"`
+	LastRecalledAt string `json:"last_recalled_at"`
+	TextSource     string `json:"text_source"`
 }
 
 func pointToSummary(p qdrant.ScrollPoint) factSummary {
@@ -600,7 +666,7 @@ func pointToSummary(p qdrant.ScrollPoint) factSummary {
 		CreatedAt:   payloadStringValue(p.Payload, "created_at", "created", "timestamp", "date"),
 		Permanent:   payloadBool(p.Payload["permanent"]),
 		RecallCount: payloadInt(p.Payload["recall_count"]),
-		Lifecycle:   lifecycleView,
+		Lifecycle:   lifecycleSummaryDTO(lifecycleView),
 	}
 }
 
@@ -618,12 +684,30 @@ func pointToQuarantinedSummary(p qdrant.ScrollPoint) quarantinedFactSummary {
 func pointToDetail(p qdrant.Point) factDetail {
 	summary := pointToSummary(qdrant.ScrollPoint{ID: p.ID, Payload: p.Payload})
 	_, source := payloadText(p.Payload)
+	summary.Lifecycle = lifecycleDetailDTO(mustParseLifecycle(p.Payload, p.ID))
 	return factDetail{
-		factSummary: summary,
-		TextSource:  source,
-		PayloadKeys: payloadKeys(p.Payload),
-		Payload:     p.Payload,
+		factSummary:    summary,
+		UpdatedAt:      payloadStringValue(p.Payload, "updated_at"),
+		LastRecalledAt: payloadStringValue(p.Payload, "last_recalled_at"),
+		TextSource:     safeTextSource(source),
 	}
+}
+
+func safeTextSource(source string) string {
+	for _, key := range []string{"text", "fact", "content", "memory", "body", "note", "value"} {
+		if source == key {
+			return source
+		}
+	}
+	if source != "" {
+		return "nested"
+	}
+	return ""
+}
+
+func mustParseLifecycle(payload map[string]interface{}, pointID string) lifecycle.View {
+	view, _ := lifecycle.Parse(payload, pointID)
+	return view
 }
 
 func payloadStringSlice(raw interface{}) []string {
@@ -748,15 +832,6 @@ func isTextLikeKey(key string) bool {
 		}
 	}
 	return false
-}
-
-func payloadKeys(payload map[string]interface{}) []string {
-	keys := make([]string, 0, len(payload))
-	for key := range payload {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 func writeJSON(w http.ResponseWriter, data interface{}) {

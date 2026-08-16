@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Implementation Plan: GitHub Issue #31 — Lifecycle provenance and history in Viz</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f4f6f8; --surface: #fff; --text: #172033; --muted: #5f6b7a; --border: #d9dee7; --accent: #2563eb; --warn: #b45309; --risk: #b91c1c; --ok: #047857; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #0d1117; --surface: #161b22; --text: #e6edf3; --muted: #9da7b3; --border: #30363d; --accent: #58a6ff; --warn: #f59e0b; --risk: #f87171; --ok: #34d399; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; }
+    main { max-width: 1080px; margin: 0 auto; padding: 32px 20px 56px; }
+    header, section { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 22px; margin: 16px 0; }
+    h1, h2, h3 { line-height: 1.2; }
+    h1 { margin-top: 0; }
+    h2 { margin-top: 0; font-size: 1.25rem; }
+    h3 { font-size: 1rem; margin-bottom: 6px; }
+    p, li { max-width: 92ch; }
+    code { background: color-mix(in srgb, var(--border) 45%, transparent); padding: 2px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); font-size: 12px; font-weight: 700; }
+    .meta { color: var(--muted); }
+    .callout { border-left: 4px solid var(--accent); }
+    .risk { border-left: 4px solid var(--risk); }
+    .approval { border-left: 4px solid var(--warn); }
+    .done { color: var(--ok); font-weight: 650; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; vertical-align: top; padding: 9px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-size: 0.85rem; }
+    ul, ol { padding-left: 22px; }
+    li + li { margin-top: 6px; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="badge">Одобрено и реализовано</span>
+    <h1>GitHub Issue #31: lifecycle provenance и history в Viz</h1>
+    <p class="meta">План подготовлен 2026-08-16 для <code>Dzarlax-AI/personal_memory</code>. Scope: read-only lifecycle inspection в существующем embedded dashboard.</p>
+  </header>
+
+  <section>
+    <h2>1. Краткое резюме</h2>
+    <p>Сделать lifecycle-состояние, provenance и связи supersession понятными из защищённого Viz UI. Реализация добавит компактные индикаторы и совместимые фильтры, privacy-safe detail DTO и отдельную ограниченную цепочку истории. Изменение не будет редактировать lifecycle, автоматически решать конфликты или выполнять maintenance-действия.</p>
+    <p><strong>Рекомендуемый продуктовый фокус:</strong> начать с Graph results/detail panel, потому что это уже единственное место, где пользователь выбирает конкретный факт и получает отдельный detail response. Lifecycle badges также появятся в существующих списках, где факт уже показывается.</p>
+  </section>
+
+  <section>
+    <h2>2. Текущее поведение</h2>
+    <ul>
+      <li><code>internal/memory/lifecycle</code> нормализует <code>current</code>, <code>historical</code>, <code>superseded</code> и <code>disputed</code>, legacy-current, canonical, provenance, verification и relationship IDs.</li>
+      <li><code>GET /viz/api/facts</code>, graph и duplicates уже включают нормализованный <code>lifecycle.View</code> в compact summary, но frontend почти нигде его не визуализирует.</li>
+      <li><code>GET /viz/api/facts/{id}</code> поддерживает numeric legacy ID и string ID, скрывает quarantined records, но возвращает полный raw Qdrant payload выбранного факта.</li>
+      <li>Graph имеет namespace/tag/text filters, keyboard-доступный results list и отдельную detail panel с tag editor.</li>
+      <li>Нет bounded traversal по <code>supersedes</code>/<code>superseded_by</code>, нет lifecycle/authority filters, нет UI для missing links, cycles или truncated history.</li>
+      <li>Viz остаётся за существующей связкой Traefik Authentik ForwardAuth + application-verified proxy secret; route-level auth в handler не добавляется.</li>
+    </ul>
+  </section>
+
+  <section class="callout">
+    <h2>3. Желаемое поведение и API-контракт</h2>
+    <h3>Compact lifecycle presentation</h3>
+    <ul>
+      <li>Каждый показанный факт получает текстовый lifecycle badge; цвет не является единственным способом различения.</li>
+      <li>Дополнительные authority signals показываются явно: <code>canonical</code>, <code>verified</code>, <code>legacy</code>, provenance source и invalid metadata.</li>
+      <li>Provenance не называется trust score: source и canonical/verified остаются отдельными сигналами.</li>
+    </ul>
+    <h3>Privacy-safe detail</h3>
+    <ul>
+      <li><code>GET /viz/api/facts/{id}</code> перестаёт возвращать unrestricted <code>payload</code>. DTO содержит approved summary, <code>updated_at</code>, <code>last_recalled_at</code>, normalized lifecycle и только безопасные detail fields.</li>
+      <li>List summary не возвращает provenance reference. Detail может вернуть reference только после отказа от absolute filesystem paths, UNC/file URIs и oversized values; иначе возвращает <code>reference_redacted=true</code>.</li>
+      <li>Tag editor продолжает работать через существующий explicit PATCH и не требует raw payload.</li>
+    </ul>
+    <h3>Bounded history endpoint</h3>
+    <ul>
+      <li>Добавить <code>GET /viz/api/facts/{id}/history</code> с детерминированным BFS по обеим relationship-сторонам.</li>
+      <li>Жёстко ограничить число fetched/returned nodes и queued relationship IDs; рекомендуемый initial bound — 32 узла, оформленный константой и покрытый тестами.</li>
+      <li>Ответ содержит privacy-safe nodes, typed links и состояния <code>resolved</code>, <code>missing</code>, <code>unavailable</code>, <code>cycle</code>; отдельный <code>truncated</code> сообщает о сработавшем bound.</li>
+      <li>Quarantined/malformed-maintenance records не раскрываются через history. Invalid lifecycle metadata показывается как invalid node, но не используется для дальнейшего traversal.</li>
+    </ul>
+    <h3>Совместимые фильтры</h3>
+    <ul>
+      <li>Расширить Graph закрытыми query parameters и controls: lifecycle state и authority signal (<code>canonical</code>, <code>verified</code>, <code>legacy</code>, <code>has-provenance</code>).</li>
+      <li>Фильтры работают одновременно с namespace, tag, primary tag и text state и учитываются до <code>max_nodes</code> результата.</li>
+      <li>Неизвестные или повторённые closed-enum параметры возвращают 400, а не молча игнорируются.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>4. Вероятные изменения файлов</h2>
+    <table>
+      <thead><tr><th>Файл</th><th>Причина</th></tr></thead>
+      <tbody>
+        <tr><td><code>internal/viz/handler.go</code></td><td>Routes, closed filters, approved DTOs, safe detail response и подключение history resolver.</td></tr>
+        <tr><td><code>internal/viz/lifecycle.go</code> (новый)</td><td>Изолировать presentation/redaction, filter matching и bounded relationship traversal от уже крупного handler.</td></tr>
+        <tr><td><code>internal/viz/handler_test.go</code></td><td>HTTP/API regressions, legacy IDs, privacy contract, filters и embedded UI contracts.</td></tr>
+        <tr><td><code>internal/viz/lifecycle_test.go</code> (новый)</td><td>Table-driven tests для safe provenance, cycles, missing links, bounds, invalid lifecycle и deterministic ordering.</td></tr>
+        <tr><td><code>internal/viz/static/assets/js/shared.js</code></td><td>Reusable lifecycle/authority labels, badges и safe formatting.</td></tr>
+        <tr><td><code>internal/viz/static/assets/js/graph.js</code></td><td>Новые filters, privacy-safe detail rendering, history loading/navigation, loading/error/truncated states.</td></tr>
+        <tr><td><code>internal/viz/static/assets/js/duplicates.js</code>, <code>forgotten.js</code>, возможно <code>timeline.js</code></td><td>Компактные lifecycle indicators в существующих fact summaries; timeline — только если индикатор помещается без ухудшения usability.</td></tr>
+        <tr><td><code>internal/viz/static/views/graph.html</code></td><td>Lifecycle/authority controls и semantic history region внутри detail panel.</td></tr>
+        <tr><td><code>internal/viz/static/assets/styles.css</code></td><td>State badges, history chain, focus/error states и responsive panel для 390 px.</td></tr>
+        <tr><td><code>docs/ai-plans/2026-08-16-lifecycle-provenance-history-viz.html</code></td><td>После реализации записать фактический diff, checks, limitations и follow-ups.</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Не ожидаются:</strong> Qdrant schema/data migration, новые environment variables, deployment config, auth changes или lifecycle write paths.</p>
+  </section>
+
+  <section>
+    <h2>5. Этапы реализации</h2>
+    <ol>
+      <li>Зафиксировать privacy-safe Viz DTO отдельно от storage-facing <code>lifecycle.View</code>; добавить provenance redaction и timestamp fallbacks без raw payload.</li>
+      <li>Добавить закрытый parsing lifecycle/authority filters и применить его в bounded graph scan вместе с существующими фильтрами.</li>
+      <li>Реализовать history resolver с sorted relationships, visited set, cycle/missing/unavailable edges, strict fetch/node bounds и request context cancellation.</li>
+      <li>Добавить history route и handler-level maintenance/privacy enforcement.</li>
+      <li>Добавить reusable frontend presentation helpers и lifecycle badges в существующие fact summaries.</li>
+      <li>Расширить Graph controls и сохраняемый <code>graphFilter</code>, включая reset и server request parameters.</li>
+      <li>Переделать detail panel на curated lifecycle/provenance/timestamps и lazy history view; сохранить tag editing, retry, stale-request protection, Escape и focus return.</li>
+      <li>Добавить automated tests, выполнить manual responsive/keyboard/privacy QA и обновить этот план фактическими результатами.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>6. Проверки</h2>
+    <h3>Автоматические</h3>
+    <ul>
+      <li><code>gofmt -w</code> только для изменённых Go-файлов.</li>
+      <li><code>go test ./internal/viz ./internal/memory/lifecycle -count=1</code>.</li>
+      <li><code>make test</code> — включает <code>go vet ./...</code> и полный <code>go test ./...</code>.</li>
+      <li><code>go test -race ./internal/viz -count=1</code> для concurrent/cancellation regressions.</li>
+      <li>Embedded UI contract tests проверяют required controls, states, no raw payload rendering, asset composition и balanced CSS. Если локальный <code>node</code> доступен, дополнительно выполнить <code>node --check</code> для изменённых JS-файлов.</li>
+    </ul>
+    <h3>Обязательные test cases</h3>
+    <ul>
+      <li>current/historical/superseded/disputed/legacy/invalid lifecycle presentation;</li>
+      <li>canonical, verified, provenance-present filters вместе с namespace/tag;</li>
+      <li>numeric legacy и UUID point IDs;</li>
+      <li>linear chain, branching, cycle, self-reference rejection, missing ID, quarantined target, malformed target и 32-node truncation;</li>
+      <li>absolute path/file URI/oversized provenance reference redaction и отсутствие unrelated payload fields;</li>
+      <li>history Qdrant error/cancellation не превращаются в empty successful result;</li>
+      <li>existing graph, duplicates, forgotten, documents, maintenance inspection и tag PATCH regressions.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>7. Manual QA</h2>
+    <ul>
+      <li>Открыть representative current, historical, superseded и disputed facts; проверить badge, source, verification и timestamps.</li>
+      <li>Пройти history chain, включая missing/cycle/truncated states, и вернуться к исходному opener.</li>
+      <li>Использовать только клавиатуру: filters, Graph results, detail, history links, tag editor, close/retry.</li>
+      <li>Проверить desktop и viewport 390 px: panel не выходит за экран, контент scrollable, controls не перекрываются.</li>
+      <li>Проверить combined namespace + tag + lifecycle + authority filters и Reset.</li>
+      <li>Убедиться, что DevTools responses не содержат raw payload, credentials, absolute document paths или quarantined fact content.</li>
+      <li>Подтвердить, что unauthenticated production access по-прежнему перехватывается Authentik, а protected routes работают после входа.</li>
+    </ul>
+  </section>
+
+  <section class="risk">
+    <h2>8. Риски и edge cases</h2>
+    <ul>
+      <li><strong>N+1 traversal:</strong> exact Get нужен для каждого relationship ID. Strict node/fetch bounds, deterministic BFS и cancellation ограничивают стоимость.</li>
+      <li><strong>Privacy regression:</strong> нынешний detail возвращает raw payload. Новый allowlist DTO и negative JSON assertions обязательны; provenance reference проходит отдельную redaction.</li>
+      <li><strong>Broken relationship metadata:</strong> missing, cycles и malformed states должны быть данными для инспекции, а не panic или бесконечным traversal.</li>
+      <li><strong>Filter semantics:</strong> provenance — не authority score. UI использует только явные signals и не делает выводов о truth из similarity.</li>
+      <li><strong>Large datasets:</strong> lifecycle filters, которые нельзя безопасно push-down в Qdrant из-за legacy/malformed cases, остаются частью bounded local scan и могут вернуть 422 с просьбой сузить фильтры.</li>
+      <li><strong>Existing payload inspection:</strong> удаление raw payload из detail является намеренным privacy hardening и изменяет внутренний Viz API. Перед реализацией это изменение входит в approval данного плана.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>9. Rollback и ограничения</h2>
+    <p>Rollback — развернуть предыдущий immutable application image. Изменение read-only и не меняет Qdrant payloads, schema или lifecycle relationships, поэтому data restore и migration rollback не нужны. Tag PATCH остаётся существующим независимым write path.</p>
+    <p>Не входят в scope: lifecycle editing, merge/delete/truth adjudication, maintenance mutations, graph-based automatic contradiction detection, отдельный auth layer, новый frontend framework и публичная release documentation из issue #32.</p>
+  </section>
+
+  <section>
+    <h2>10. Предположения и открытые вопросы</h2>
+    <ul>
+      <li><strong>Рекомендация:</strong> history размещается внутри существующей Graph detail panel, а не создаёт новый top-level tab.</li>
+      <li><strong>Рекомендация:</strong> raw payload удаляется из detail response; approved fields и payload-key diagnostics при необходимости остаются явно перечисленными.</li>
+      <li><strong>Рекомендация:</strong> 32 resolved nodes — первоначальный hard bound. Это operator inspection, не полноценный graph export.</li>
+      <li>Если во время реализации выяснится, что Qdrant exact Get latency делает 32 последовательных запроса неприемлемыми, отдельный batch-get client method допустим только как scoped internal optimization с тем же response bound.</li>
+      <li>Полноценная screen-reader сессия и production Authentik check зависят от доступной среды; пропущенные проверки будут явно записаны в этот файл после реализации.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>11. Фактический результат</h2>
+    <p><strong>Статус:</strong> план одобрен пользователем и реализован в изолированном worktree <code>/private/tmp/personal-memory-issue-31</code> на ветке <code>issue-31-lifecycle-viz</code>. Commit, PR и deploy не выполнялись.</p>
+    <ul>
+      <li>Добавлены privacy-safe lifecycle DTO и curated fact detail response без raw Qdrant payload.</li>
+      <li>Добавлены закрытые Graph filters для lifecycle state и явных authority signals.</li>
+      <li>Добавлен bounded deterministic history API с двунаправленным обходом, cycle/missing/unavailable states, cancellation и строгими node/link/fetch limits.</li>
+      <li>Provenance source/reference проходят size, path, URL, control-character и traversal redaction.</li>
+      <li>Graph detail показывает lifecycle, authority, safe provenance, timestamps и lazy independently retryable history; lifecycle badges добавлены в существующие fact summaries.</li>
+      <li>Сохранены tag editing, stale-request protection, Escape и focus return; после перерендера результатов focus target восстанавливается по stable fact ID.</li>
+      <li>Добавлены responsive styles для узкого viewport и keyboard/live-region states.</li>
+    </ul>
+    <h3>Выполненные проверки</h3>
+    <ul>
+      <li><code>go test ./internal/viz ./internal/memory/lifecycle -count=1</code> — passed.</li>
+      <li><code>go test -race ./internal/viz -count=1</code> — passed до финального frontend-only focus fix.</li>
+      <li><code>make test</code> — passed после финального fix; включает browser asset checksum, <code>go vet ./...</code>, полный <code>go test ./...</code> и сборку всех binaries.</li>
+      <li><code>node --check</code> для всех изменённых JavaScript-файлов и <code>git diff --check</code> — passed.</li>
+    </ul>
+    <h3>Ограничения и follow-up</h3>
+    <ul>
+      <li>Rendered browser и screen-reader QA не выполнялись; responsive/keyboard behavior проверены статически и contract tests.</li>
+      <li>Production Authentik и deployment path не менялись и должны проверяться отдельно в deployment/soak scope.</li>
+      <li>Lifecycle mutations, merge/delete и automatic truth adjudication по-прежнему вне scope.</li>
+    </ul>
+  </section>
+
+  <section class="approval">
+    <h2>12. Approval gate</h2>
+    <p><strong>Одобрено пользователем до изменения production code.</strong></p>
+    <p>Approval включал два намеренных решения: (1) Graph detail panel является основным lifecycle/history UX; (2) unrestricted raw Qdrant payload удаляется из Viz detail API в пользу allowlist DTO.</p>
+  </section>
+</main>
+</body>
+</html>
