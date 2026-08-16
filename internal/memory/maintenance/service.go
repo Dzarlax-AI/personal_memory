@@ -27,12 +27,16 @@ type Operation string
 const (
 	OperationQuarantine Operation = "quarantine"
 	OperationRestore    Operation = "restore"
+	OperationPurge      Operation = "purge"
 )
 
 type OutcomeStatus string
 
 const (
 	OutcomeUpdated               OutcomeStatus = "updated"
+	OutcomeDeleted               OutcomeStatus = "deleted"
+	OutcomePending               OutcomeStatus = "pending"
+	OutcomeDispatching           OutcomeStatus = "dispatching"
 	OutcomeAlreadyApplied        OutcomeStatus = "already_applied"
 	OutcomeNotFound              OutcomeStatus = "not_found"
 	OutcomeProtectedOrIneligible OutcomeStatus = "protected_or_ineligible"
@@ -64,12 +68,14 @@ type PointOutcome struct {
 // journal and intentionally excludes collections, namespaces, vectors, and
 // fact text.
 type Result struct {
-	SchemaVersion int            `json:"schema_version"`
-	PolicyVersion string         `json:"policy_version"`
-	BatchID       string         `json:"batch_id"`
-	Operation     Operation      `json:"operation"`
-	Outcomes      []PointOutcome `json:"outcomes"`
-	Timestamp     string         `json:"timestamp"`
+	SchemaVersion         int            `json:"schema_version"`
+	PolicyVersion         string         `json:"policy_version"`
+	BatchID               string         `json:"batch_id"`
+	Operation             Operation      `json:"operation"`
+	SnapshotName          string         `json:"snapshot_name,omitempty"`
+	SnapshotArchiveSHA256 string         `json:"snapshot_archive_sha256,omitempty"`
+	Outcomes              []PointOutcome `json:"outcomes"`
+	Timestamp             string         `json:"timestamp"`
 }
 
 // PointStore is the narrowly scoped Qdrant surface required by this service.
@@ -82,10 +88,11 @@ type PointStore interface {
 }
 
 type Service struct {
-	points     PointStore
-	collection string
-	now        func() time.Time
-	invalidate func()
+	points       PointStore
+	collection   string
+	now          func() time.Time
+	invalidate   func()
+	writeJournal func(context.Context, string, Result) error
 }
 
 func NewService(points PointStore, collection string, invalidate func()) (*Service, error) {
@@ -101,7 +108,7 @@ func NewService(points PointStore, collection string, invalidate func()) (*Servi
 	if points.CollectionName() != "" && collection != points.CollectionName() {
 		return nil, fmt.Errorf("configured collection does not match point store")
 	}
-	return &Service{points: points, collection: collection, now: time.Now, invalidate: invalidate}, nil
+	return &Service{points: points, collection: collection, now: time.Now, invalidate: invalidate, writeJournal: WriteResultJournal}, nil
 }
 
 func (s *Service) Quarantine(ctx context.Context, request Request) (Result, error) {
@@ -155,7 +162,11 @@ func (s *Service) run(ctx context.Context, operation Operation, request Request)
 			journalCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), resultJournalTimeout)
 			defer cancel()
 		}
-		if err := WriteResultJournal(journalCtx, request.JournalPath, result); err != nil {
+		writer := s.writeJournal
+		if writer == nil {
+			writer = WriteResultJournal
+		}
+		if err := writer(journalCtx, request.JournalPath, result); err != nil {
 			return result, fmt.Errorf("write maintenance result journal: %w", err)
 		}
 	}
@@ -417,12 +428,14 @@ func WriteResultJournal(ctx context.Context, path string, result Result) error {
 	if err := os.Rename(tempPath, filepath.Clean(path)); err != nil {
 		return fmt.Errorf("replace result journal: %w", err)
 	}
-	if directory, err := os.Open(dir); err == nil {
-		err = directory.Sync()
-		_ = directory.Close()
-		if err != nil {
-			return fmt.Errorf("sync result journal directory: %w", err)
-		}
+	directory, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open result journal directory: %w", err)
+	}
+	err = directory.Sync()
+	_ = directory.Close()
+	if err != nil {
+		return fmt.Errorf("sync result journal directory: %w", err)
 	}
 	return nil
 }

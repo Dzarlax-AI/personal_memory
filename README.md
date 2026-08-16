@@ -325,9 +325,50 @@ Restore requires the same explicit inputs and IDs from a compatible manifest:
   --point-id 12345
 ```
 
-Stop `memory-mcp` and every other writer to the collection before either action and keep them stopped until it completes; the CLI requires `--confirm-server-stopped`. This prevents a separate server process from continuing to serve a stale recall-cache entry after maintenance changes. Both actions validate the immutable manifest batch and payload fingerprint before writing, create a mode-`0600` content-free result journal, and are idempotent for the same target. If cancellation occurs after dispatch, the command uses a separate bounded cleanup context to persist the potentially `ambiguous` outcome. Qdrant has no payload-fingerprint compare-and-set: a concurrent change that cannot be verified after the write is reported as `ambiguous`, never as success. Purge, snapshots, and scheduled maintenance remain out of scope.
+Stop `memory-mcp` and every other writer to the collection before either action and keep them stopped until it completes; the CLI requires `--confirm-server-stopped`. This prevents a separate server process from continuing to serve a stale recall-cache entry after maintenance changes. Both actions validate the immutable manifest batch and payload fingerprint before writing, create a mode-`0600` content-free result journal, and are idempotent for the same target. If cancellation occurs after dispatch, the command uses a separate bounded cleanup context to persist the potentially `ambiguous` outcome. Qdrant has no payload-fingerprint compare-and-set: a concurrent change that cannot be verified after the write is reported as `ambiguous`, never as success.
 
-In the production Compose deployment, the runtime image includes `/personal-memory-maintenance`. Run it as a one-off container on the service's existing `infra` network. Because the image entrypoint normally starts the MCP server, the maintenance command must override the entrypoint explicitly:
+### Manual phase-three purge runbook
+
+Purge is a manual, destructive operator action. It has no MCP endpoint, dashboard button, scheduler, or automation wrapper. The production commands below are a future runbook for a separate, explicitly approved maintenance window after deployment; this implementation and its testing perform no production purge.
+
+Only a saved, complete analysis manifest may select a record. The manifest marks permanent records, disputed records, and current canonical records as protected. Low recall, age, or duplicate similarity alone is review-only; eligible quarantine candidates are limited to the expired and retained-superseded classes. Quarantine can select `--eligible`, but purge never can: give every purge target as an explicit `--point-id` from that same manifest.
+
+Keep writers stopped for analysis, quarantine, restore, and purge. Keep the manifest and result journals in a private directory (mode `0700`); the tools create manifests and journals as mode `0600`. A nonzero command result or any `failed`, `ambiguous`, `conflict`, `not_found`, or `protected_or_ineligible` outcome is unresolved: inspect the journal before restarting, correct the cause, then repeat the original explicit selection with the same manifest and the same journal.
+
+After the configured quarantine period has fully elapsed (choose an operator policy such as 30 days; the CLI requires a positive `--minimum-quarantine-days`), purge creates a fresh Qdrant snapshot in the same invocation and proves its exact snapshot identity exists before it deletes anything. It also downloads that snapshot to the required private `--snapshot-archive` path, fsyncs it as mode `0600`, and records its SHA-256 in the journal before deletion. Keep this archive outside Qdrant's managed snapshot directory so scheduled `KEEP_SNAPSHOTS` pruning cannot remove the recovery point; the CLI rejects the standard Compose-managed `/qdrant/snapshots` tree. Purge re-proves the live snapshot identity immediately before every exact-ID deletion. A partial retry reuses the original journal, snapshot identity, and checksum-verified archive; it must not create a post-delete replacement snapshot.
+
+```bash
+# All collection writers remain stopped throughout this sequence.
+./maintenance analyze \
+  --qdrant-url http://127.0.0.1:6333 \
+  --collection memory \
+  --output /secure/path/manifest.json
+
+./maintenance quarantine \
+  --qdrant-url http://127.0.0.1:6333 \
+  --collection memory \
+  --manifest /secure/path/manifest.json \
+  --journal /secure/path/quarantine-result.json \
+  --confirm-server-stopped \
+  --eligible
+
+# Inspect the quarantined records and wait for the selected minimum age.
+# Purge requires explicit IDs; --eligible is deliberately unavailable.
+./maintenance purge \
+  --qdrant-url http://127.0.0.1:6333 \
+  --collection memory \
+  --manifest /secure/path/manifest.json \
+  --journal /secure/path/purge-result.json \
+  --snapshot-archive /secure/path/purge-recovery.snapshot \
+  --confirm-server-stopped \
+  --confirm-purge \
+  --minimum-quarantine-days 30 \
+  --point-id 12345
+```
+
+The purge journal records the verified snapshot name and archive checksum. Preserve the manifest, journal, and independently archived snapshot together. If a destructive result must be rolled back, restore that verified archive using the approved Qdrant recovery procedure while writers are stopped, verify the restored collection, then restart the service. Do not delete the recovery archive until that decision is closed.
+
+For a separate, explicitly approved production maintenance window after deployment, run the one-off command from the existing deployment directory after stopping writers, then inspect its journal and status before restart. This is a future operator procedure, not an action performed by this implementation or its tests:
 
 ```bash
 cd /path/to/personal_ai_stack/deploy/memory
@@ -339,13 +380,16 @@ test "$(docker inspect -f '{{.State.Running}}' memory-mcp)" = false
 docker compose run --rm --no-deps \
   --entrypoint /personal-memory-maintenance \
   -v /root/personal-memory-maintenance:/maintenance \
-  memory-mcp quarantine \
+  memory-mcp purge \
   --qdrant-url http://infra-qdrant:6333 \
   --collection memory \
   --manifest /maintenance/manifest.json \
-  --journal /maintenance/quarantine-result.json \
+  --journal /maintenance/purge-result.json \
+  --snapshot-archive /maintenance/purge-recovery.snapshot \
   --confirm-server-stopped \
-  --eligible
+  --confirm-purge \
+  --minimum-quarantine-days 30 \
+  --point-id 12345
 
 docker compose start memory-mcp
 docker compose ps memory-mcp
@@ -353,7 +397,7 @@ curl -fsS https://mcp.<domain>/health
 docker compose logs --tail=100 memory-mcp
 ```
 
-Inspect the private journal before restarting if the one-off command reports an error or an `ambiguous` outcome. A future infrastructure wrapper may automate this exact sequence, but it must not choose candidates or bypass the manifest and stopped-writer confirmations.
+The authenticated Viz Overview has an explicit **Maintenance inspection** selector. Choosing **Quarantined facts** calls only `GET /viz/api/facts?maintenance_status=quarantined` and displays each valid quarantined record's existing ordinary fact summary fields (including its fact text and point ID) plus normalized `maintenance_status`, `quarantined_at`, `quarantine_reason`, and `quarantine_batch_id`. This protected operator UI/API is intentionally not content-free. In contrast, maintenance CLI manifests, journals, and command summaries remain content-free and never include fact text or vectors. All ordinary Viz views, including graph and duplicates, remain active-only; the inspection has no mutation, refresh, purge, or restore controls.
 
 ### Load operational context at session start
 

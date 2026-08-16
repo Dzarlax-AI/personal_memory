@@ -32,6 +32,64 @@ async function initFacts() {
   }
 }
 
+// This operator-only inspection is intentionally opt-in. The dashboard's
+// normal cached facts response, graph, duplicates, and other views remain
+// active-only, while this selector has no mutation, refresh, or purge action.
+let quarantinedInspectionAbortController = null;
+let quarantinedInspectionGeneration = 0;
+
+async function loadQuarantinedFacts() {
+  const container = document.getElementById('quarantined-facts');
+  if (quarantinedInspectionAbortController) quarantinedInspectionAbortController.abort();
+  const requestGeneration = ++quarantinedInspectionGeneration;
+  quarantinedInspectionAbortController = new AbortController();
+  container.innerHTML = '<div class="loading"><div class="spinner"></div>Loading quarantined facts...</div>';
+  try {
+    const res = await fetch(`${BASE}/api/facts?maintenance_status=quarantined`, {
+      signal: quarantinedInspectionAbortController.signal,
+    });
+    if (requestGeneration !== quarantinedInspectionGeneration) return;
+    if (!res.ok) throw new Error(`quarantined facts request failed: ${res.status}`);
+    const data = await res.json();
+    if (requestGeneration !== quarantinedInspectionGeneration) return;
+    const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+    if (nodes.length === 0) {
+      container.innerHTML = '<div class="empty-state">No valid quarantined facts are available for inspection.</div>';
+      return;
+    }
+    container.innerHTML = nodes.map(node => `
+        <article class="quarantined-fact">
+          <div>${escapeHtml(node.text || '(text unavailable)')}</div>
+          <dl>
+            <dt>Point ID</dt><dd>${escapeHtml(node.id || '')}</dd>
+            <dt>Status</dt><dd>${escapeHtml(node.maintenance_status || '')}</dd>
+            <dt>Quarantined</dt><dd>${escapeHtml(node.quarantined_at || '')}</dd>
+            <dt>Reason</dt><dd>${escapeHtml(node.quarantine_reason || '')}</dd>
+            <dt>Batch</dt><dd>${escapeHtml(node.quarantine_batch_id || '')}</dd>
+          </dl>
+        </article>`).join('');
+  } catch (error) {
+    if (requestGeneration !== quarantinedInspectionGeneration || error.name === 'AbortError') return;
+    container.innerHTML = '<div class="empty-state">Unable to load quarantined facts. Try the selector again.</div>';
+  } finally {
+    if (requestGeneration === quarantinedInspectionGeneration) {
+      quarantinedInspectionAbortController = null;
+    }
+  }
+}
+
+document.getElementById('maintenance-status-filter').addEventListener('change', event => {
+  const container = document.getElementById('quarantined-facts');
+  if (event.target.value !== 'quarantined') {
+    ++quarantinedInspectionGeneration;
+    if (quarantinedInspectionAbortController) quarantinedInspectionAbortController.abort();
+    quarantinedInspectionAbortController = null;
+    container.replaceChildren();
+    return;
+  }
+  loadQuarantinedFacts();
+});
+
 function renderStats(nodes) {
   const ns = [...new Set(nodes.map(n => normalizeNamespace(n.namespace)))].length;
   const permanent = nodes.filter(n => n.permanent).length;

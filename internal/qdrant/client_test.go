@@ -2,10 +2,13 @@ package qdrant
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -602,6 +605,119 @@ func TestMaintenanceMutationsUseCompleteTypedStrongBatches(t *testing.T) {
 		if err := invalid(); err == nil {
 			t.Fatal("expected typed validation error")
 		}
+	}
+}
+
+func TestPurgePrimitivesUseTypedSnapshotsAndExactStrongDelete(t *testing.T) {
+	var deleteBody map[string]interface{}
+	downloadCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/collections/memory/snapshots":
+			_, _ = w.Write([]byte(`{"status":"ok","result":{"name":"fresh.snapshot"}}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/collections/memory/snapshots":
+			_, _ = w.Write([]byte(`{"status":"ok","result":[{"name":"fresh.snapshot"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/collections/memory/snapshots/fresh.snapshot":
+			downloadCalls++
+			_, _ = w.Write([]byte("snapshot bytes"))
+		case r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/delete":
+			if r.URL.Query().Get("wait") != "true" || r.URL.Query().Get("ordering") != "strong" {
+				t.Fatalf("query=%s", r.URL.RawQuery)
+			}
+			if err := json.NewDecoder(r.Body).Decode(&deleteBody); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = w.Write([]byte(`{"status":"ok","result":{"status":"completed"}}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client := NewClient(server.URL, "memory")
+	snapshot, err := client.CreateSnapshotIdentity(context.Background())
+	if err != nil || snapshot.Name != "fresh.snapshot" {
+		t.Fatalf("snapshot=%#v err=%v", snapshot, err)
+	}
+	snapshots, err := client.ListSnapshotIdentities(context.Background())
+	if err != nil || len(snapshots) != 1 || snapshots[0] != snapshot {
+		t.Fatalf("snapshots=%#v err=%v", snapshots, err)
+	}
+	archive := filepath.Join(t.TempDir(), "purge-recovery.snapshot")
+	digest, err := client.EnsureSnapshotArchive(context.Background(), snapshot, archive, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDigest := fmt.Sprintf("%x", sha256.Sum256([]byte("snapshot bytes")))
+	if digest != wantDigest || downloadCalls != 1 {
+		t.Fatalf("digest=%q downloads=%d", digest, downloadCalls)
+	}
+	info, err := os.Stat(archive)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("archive info=%v err=%v", info, err)
+	}
+	if got, err := client.EnsureSnapshotArchive(context.Background(), snapshot, archive, digest); err != nil || got != digest || downloadCalls != 1 {
+		t.Fatalf("verified digest=%q downloads=%d err=%v", got, downloadCalls, err)
+	}
+	if err := os.WriteFile(archive, []byte("tampered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.EnsureSnapshotArchive(context.Background(), snapshot, archive, digest); err == nil {
+		t.Fatal("accepted a tampered recovery archive")
+	}
+	if err := client.DeleteExactStrong(context.Background(), "42"); err != nil {
+		t.Fatal(err)
+	}
+	points := deleteBody["points"].([]interface{})
+	if len(points) != 1 || points[0] != float64(42) {
+		t.Fatalf("points=%#v", points)
+	}
+	if err := client.DeleteExactStrong(context.Background(), " "); err == nil {
+		t.Fatal("accepted invalid exact ID")
+	}
+}
+
+func TestEnsureSnapshotArchiveRejectsUnsafeParentsBeforeDownload(t *testing.T) {
+	root := t.TempDir()
+	managedParent := filepath.Join(root, "managed")
+	if err := os.Mkdir(managedParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	symlinkParent := filepath.Join(root, "link")
+	if err := os.Symlink(managedParent, symlinkParent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveSnapshotArchivePath(filepath.Join(symlinkParent, "recovery.snapshot"), managedParent); err == nil {
+		t.Fatal("accepted a symlink redirect into the managed snapshot directory")
+	}
+
+	downloadCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		downloadCalls++
+		_, _ = w.Write([]byte("snapshot bytes"))
+	}))
+	defer server.Close()
+	client := NewClient(server.URL, "memory")
+	snapshot := SnapshotIdentity{Name: "fresh.snapshot"}
+
+	tests := []struct {
+		name        string
+		destination string
+	}{
+		{name: "missing parent", destination: filepath.Join(root, "missing", "recovery.snapshot")},
+		{name: "managed qdrant directory", destination: "/qdrant/snapshots/recovery.snapshot"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := client.EnsureSnapshotArchive(context.Background(), snapshot, test.destination, ""); err == nil {
+				t.Fatalf("accepted unsafe destination %q", test.destination)
+			}
+		})
+	}
+	if downloadCalls != 0 {
+		t.Fatalf("download calls = %d, want 0", downloadCalls)
+	}
+	if _, err := os.Stat(filepath.Join(managedParent, "recovery.snapshot")); !os.IsNotExist(err) {
+		t.Fatalf("redirected archive exists or stat failed unexpectedly: %v", err)
 	}
 }
 

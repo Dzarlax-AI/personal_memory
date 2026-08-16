@@ -3,11 +3,13 @@ package qdrant
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -50,6 +52,12 @@ type Point struct {
 	Vector  []float32              `json:"vector,omitempty"`
 	Payload map[string]interface{} `json:"payload,omitempty"`
 	Score   float64                `json:"score,omitempty"`
+}
+
+// SnapshotIdentity is the typed, opaque identity Qdrant returns for a
+// collection snapshot. It deliberately contains no collection URL or data.
+type SnapshotIdentity struct {
+	Name string `json:"name"`
 }
 
 // parsePointID converts a Qdrant point ID (int or string) to string.
@@ -497,6 +505,27 @@ func (c *Client) Delete(ctx context.Context, ids []string) error {
 	return c.mutate(ctx, http.MethodPost, url, body, true, false)
 }
 
+// DeleteExactStrong removes exactly one named point. It is intentionally
+// separate from Delete so destructive maintenance flows cannot accidentally
+// broaden their target set or weaken ordering/wait semantics.
+func (c *Client) DeleteExactStrong(ctx context.Context, id string) error {
+	if err := validateMaintenanceTarget(id); err != nil {
+		return err
+	}
+	requestURL := fmt.Sprintf("%s/collections/%s/points/delete", c.url, c.collection)
+	parsed, err := url.Parse(requestURL)
+	if err != nil {
+		return fmt.Errorf("parse exact delete URL: %w", err)
+	}
+	query := parsed.Query()
+	query.Set("wait", "true")
+	query.Set("ordering", "strong")
+	parsed.RawQuery = query.Encode()
+	return c.mutate(ctx, http.MethodPost, parsed.String(), map[string]interface{}{
+		"points": []interface{}{qdrantPointID(id)},
+	}, true, false)
+}
+
 // DeleteByFilter removes all points matching the filter in a single request.
 func (c *Client) DeleteByFilter(ctx context.Context, filter map[string]interface{}) error {
 	url := fmt.Sprintf("%s/collections/%s/points/delete", c.url, c.collection)
@@ -644,12 +673,21 @@ func (c *Client) replacePayloadBatch(ctx context.Context, id string, set map[str
 	return c.mutate(ctx, http.MethodPost, parsed.String(), map[string]interface{}{"operations": operations}, true, false)
 }
 
-// CreateSnapshot triggers a snapshot creation.
+// CreateSnapshot triggers a snapshot creation. New maintenance flows should
+// use CreateSnapshotIdentity so snapshot identity cannot be accidentally
+// reduced to an untyped string before it is journaled.
 func (c *Client) CreateSnapshot(ctx context.Context) (string, error) {
+	snapshot, err := c.CreateSnapshotIdentity(ctx)
+	return snapshot.Name, err
+}
+
+// CreateSnapshotIdentity triggers snapshot creation and returns its opaque
+// typed identity.
+func (c *Client) CreateSnapshotIdentity(ctx context.Context) (SnapshotIdentity, error) {
 	url := fmt.Sprintf("%s/collections/%s/snapshots", c.url, c.collection)
 	respBody, err := c.postJSON(ctx, url, nil)
 	if err != nil {
-		return "", err
+		return SnapshotIdentity{}, err
 	}
 
 	var result struct {
@@ -658,19 +696,32 @@ func (c *Client) CreateSnapshot(ctx context.Context) (string, error) {
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("decode snapshot response: %w", err)
+		return SnapshotIdentity{}, fmt.Errorf("decode snapshot response: %w", err)
 	}
 	if err := validateMutationResponse(respBody, false); err != nil {
-		return "", fmt.Errorf("create snapshot: %w", err)
+		return SnapshotIdentity{}, fmt.Errorf("create snapshot: %w", err)
 	}
 	if result.Result.Name == "" {
-		return "", fmt.Errorf("create snapshot: qdrant response did not include a snapshot name")
+		return SnapshotIdentity{}, fmt.Errorf("create snapshot: qdrant response did not include a snapshot name")
 	}
-	return result.Result.Name, nil
+	return SnapshotIdentity{Name: result.Result.Name}, nil
 }
 
 // ListSnapshots returns all snapshot names.
 func (c *Client) ListSnapshots(ctx context.Context) ([]string, error) {
+	snapshots, err := c.ListSnapshotIdentities(ctx)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(snapshots))
+	for i, snapshot := range snapshots {
+		names[i] = snapshot.Name
+	}
+	return names, nil
+}
+
+// ListSnapshotIdentities returns typed opaque snapshot identities.
+func (c *Client) ListSnapshotIdentities(ctx context.Context) ([]SnapshotIdentity, error) {
 	url := fmt.Sprintf("%s/collections/%s/snapshots", c.url, c.collection)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -699,11 +750,115 @@ func (c *Client) ListSnapshots(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 
-	names := make([]string, len(result.Result))
+	snapshots := make([]SnapshotIdentity, len(result.Result))
 	for i, s := range result.Result {
-		names[i] = s.Name
+		if s.Name == "" {
+			return nil, fmt.Errorf("snapshot list included an empty snapshot name")
+		}
+		snapshots[i] = SnapshotIdentity{Name: s.Name}
 	}
-	return names, nil
+	return snapshots, nil
+}
+
+// EnsureSnapshotArchive downloads a snapshot to an operator-controlled path
+// outside Qdrant's ordinary retention set. On retries, expectedSHA256 makes the
+// existing archive immutable and proves that the same recovery artifact is
+// still available before deletion continues.
+func (c *Client) EnsureSnapshotArchive(ctx context.Context, snapshot SnapshotIdentity, destination, expectedSHA256 string) (string, error) {
+	if strings.TrimSpace(snapshot.Name) == "" || strings.TrimSpace(snapshot.Name) != snapshot.Name {
+		return "", fmt.Errorf("snapshot name is required")
+	}
+	archive, err := openSnapshotArchiveDestination(destination)
+	if err != nil {
+		return "", err
+	}
+	defer archive.close()
+	if expectedSHA256 != "" {
+		return verifySnapshotArchive(archive, expectedSHA256)
+	}
+	existingDigest, exists, err := archive.digest()
+	if err != nil {
+		return "", err
+	}
+
+	requestURL := fmt.Sprintf("%s/collections/%s/snapshots/%s", c.url, c.collection, url.PathEscape(snapshot.Name))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBodyBytes))
+		return "", fmt.Errorf("download snapshot failed (status %d)", resp.StatusCode)
+	}
+
+	tmp, tmpName, err := archive.createTemp()
+	if err != nil {
+		return "", err
+	}
+	defer archive.removeTemp(tmpName)
+	hash := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(tmp, hash), resp.Body); err != nil {
+		_ = tmp.Close()
+		return "", fmt.Errorf("download snapshot archive: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return "", fmt.Errorf("sync snapshot archive: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("close snapshot archive: %w", err)
+	}
+	downloadedDigest := fmt.Sprintf("%x", hash.Sum(nil))
+	if exists {
+		if existingDigest != downloadedDigest {
+			return "", fmt.Errorf("existing snapshot archive does not match downloaded snapshot")
+		}
+		return downloadedDigest, nil
+	}
+	if err := archive.publish(tmpName); err != nil {
+		return "", fmt.Errorf("publish snapshot archive: %w", err)
+	}
+	return downloadedDigest, nil
+}
+
+func verifySnapshotArchive(archive *snapshotArchiveDestination, expectedSHA256 string) (string, error) {
+	if len(expectedSHA256) != sha256.Size*2 || strings.ToLower(expectedSHA256) != expectedSHA256 {
+		return "", fmt.Errorf("snapshot archive checksum is invalid")
+	}
+	actual, exists, err := archive.digest()
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", fmt.Errorf("snapshot archive does not exist")
+	}
+	if actual != expectedSHA256 {
+		return "", fmt.Errorf("snapshot archive checksum mismatch")
+	}
+	return actual, nil
+}
+
+func snapshotArchiveFileDigest(file *os.File) (string, error) {
+	info, err := file.Stat()
+	if err != nil {
+		return "", fmt.Errorf("inspect snapshot archive: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("snapshot archive is not a regular file")
+	}
+	if info.Mode().Perm() != 0o600 {
+		return "", fmt.Errorf("snapshot archive permissions must be 0600")
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", fmt.Errorf("read snapshot archive: %w", err)
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
 
 // DeleteSnapshot removes a snapshot by name.

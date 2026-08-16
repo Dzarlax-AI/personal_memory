@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -17,6 +18,7 @@ import (
 
 const day = 24 * time.Hour
 const maxDays = 36500
+const managedQdrantSnapshotDir = "/qdrant/snapshots"
 
 type analyzeOptions struct {
 	qdrantURL               string
@@ -30,13 +32,16 @@ type analyzeOptions struct {
 }
 
 type mutationOptions struct {
-	qdrantURL            string
-	collection           string
-	manifest             string
-	journal              string
-	pointIDs             pointIDs
-	eligible             bool
-	confirmServerStopped bool
+	qdrantURL             string
+	collection            string
+	manifest              string
+	journal               string
+	snapshotArchive       string
+	pointIDs              pointIDs
+	eligible              bool
+	confirmServerStopped  bool
+	confirmPurge          bool
+	minimumQuarantineDays int
 }
 
 type pointIDs []string
@@ -61,16 +66,44 @@ func main() {
 
 func run(ctx context.Context, args []string, stdout io.Writer, now func() time.Time) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: maintenance <analyze|quarantine|restore> [flags]")
+		return fmt.Errorf("usage: maintenance <analyze|quarantine|restore|purge> [flags]")
 	}
 	switch args[0] {
 	case "analyze":
 		return runAnalyze(ctx, args[1:], stdout, now)
 	case "quarantine", "restore":
 		return runMutation(ctx, args[0], args[1:], stdout)
+	case "purge":
+		return runPurge(ctx, args[1:], stdout)
 	default:
-		return fmt.Errorf("usage: maintenance <analyze|quarantine|restore> [flags]")
+		return fmt.Errorf("usage: maintenance <analyze|quarantine|restore|purge> [flags]")
 	}
+}
+
+func runPurge(ctx context.Context, args []string, stdout io.Writer) error {
+	options, err := parsePurgeOptions(args)
+	if err != nil {
+		return err
+	}
+	manifest, err := maintenance.ReadManifest(options.manifest)
+	if err != nil {
+		return err
+	}
+	service, err := maintenance.NewService(qdrant.NewClient(options.qdrantURL, options.collection), options.collection, nil)
+	if err != nil {
+		return fmt.Errorf("maintenance purge is not configured")
+	}
+	result, err := service.Purge(ctx, maintenance.PurgeRequest{
+		Manifest:             manifest,
+		Selection:            maintenance.Selection{PointIDs: []string(options.pointIDs)},
+		JournalPath:          options.journal,
+		SnapshotArchivePath:  options.snapshotArchive,
+		MinimumQuarantineAge: time.Duration(options.minimumQuarantineDays) * day,
+	})
+	if err != nil {
+		return fmt.Errorf("maintenance purge could not complete")
+	}
+	return writeMutationSummary(stdout, "purge", result)
 }
 
 func runAnalyze(ctx context.Context, args []string, stdout io.Writer, now func() time.Time) error {
@@ -129,6 +162,15 @@ func writeMutationSummary(stdout io.Writer, operation string, result maintenance
 	counts := map[maintenance.OutcomeStatus]int{}
 	for _, outcome := range result.Outcomes {
 		counts[outcome.Status]++
+	}
+	if operation == "purge" {
+		if _, err := fmt.Fprintf(stdout, "mode=purge batch_id=%s deleted=%d already_applied=%d pending=%d dispatching=%d not_found=%d protected_or_ineligible=%d conflict=%d failed=%d ambiguous=%d\n", result.BatchID, counts[maintenance.OutcomeDeleted], counts[maintenance.OutcomeAlreadyApplied], counts[maintenance.OutcomePending], counts[maintenance.OutcomeDispatching], counts[maintenance.OutcomeNotFound], counts[maintenance.OutcomeProtectedOrIneligible], counts[maintenance.OutcomeConflict], counts[maintenance.OutcomeFailed], counts[maintenance.OutcomeAmbiguous]); err != nil {
+			return err
+		}
+		if len(result.Outcomes) == 0 || counts[maintenance.OutcomeDeleted]+counts[maintenance.OutcomeAlreadyApplied] != len(result.Outcomes) {
+			return fmt.Errorf("maintenance purge completed with non-success outcomes")
+		}
+		return nil
 	}
 	if _, err := fmt.Fprintf(stdout, "mode=%s batch_id=%s updated=%d already_applied=%d not_found=%d protected_or_ineligible=%d conflict=%d failed=%d ambiguous=%d\n", operation, result.BatchID, counts[maintenance.OutcomeUpdated], counts[maintenance.OutcomeAlreadyApplied], counts[maintenance.OutcomeNotFound], counts[maintenance.OutcomeProtectedOrIneligible], counts[maintenance.OutcomeConflict], counts[maintenance.OutcomeFailed], counts[maintenance.OutcomeAmbiguous]); err != nil {
 		return err
@@ -209,4 +251,67 @@ func parseMutationOptions(operation string, args []string) (mutationOptions, err
 		return mutationOptions{}, fmt.Errorf("eligible selection is only supported for quarantine")
 	}
 	return options, nil
+}
+
+func parsePurgeOptions(args []string) (mutationOptions, error) {
+	options := mutationOptions{}
+	set := flag.NewFlagSet("maintenance purge", flag.ContinueOnError)
+	set.SetOutput(io.Discard)
+	set.StringVar(&options.qdrantURL, "qdrant-url", "", "Qdrant base URL")
+	set.StringVar(&options.collection, "collection", "", "collection name")
+	set.StringVar(&options.manifest, "manifest", "", "saved analysis manifest")
+	set.StringVar(&options.journal, "journal", "", "private result journal path")
+	set.StringVar(&options.snapshotArchive, "snapshot-archive", "", "private recovery snapshot archive path")
+	set.Var(&options.pointIDs, "point-id", "manifest point ID (repeatable)")
+	set.IntVar(&options.minimumQuarantineDays, "minimum-quarantine-days", 0, "minimum completed quarantine days")
+	set.BoolVar(&options.confirmServerStopped, "confirm-server-stopped", false, "confirm memory-mcp and other collection writers are stopped")
+	set.BoolVar(&options.confirmPurge, "confirm-purge", false, "confirm permanent deletion of the explicit point IDs")
+	if err := set.Parse(args); err != nil {
+		return mutationOptions{}, err
+	}
+	if set.NArg() != 0 {
+		return mutationOptions{}, fmt.Errorf("unexpected arguments")
+	}
+	if strings.TrimSpace(options.qdrantURL) == "" || strings.TrimSpace(options.collection) == "" || strings.TrimSpace(options.manifest) == "" || strings.TrimSpace(options.journal) == "" || strings.TrimSpace(options.snapshotArchive) == "" {
+		return mutationOptions{}, fmt.Errorf("qdrant URL, collection, manifest, journal, and snapshot archive are required")
+	}
+	if pathWithin(managedQdrantSnapshotDir, options.snapshotArchive) {
+		return mutationOptions{}, fmt.Errorf("snapshot archive must be outside Qdrant's managed snapshot directory")
+	}
+	if len(options.pointIDs) == 0 || len(options.pointIDs) > maintenance.MaxSelectionSize {
+		return mutationOptions{}, fmt.Errorf("explicit point IDs must be non-empty and bounded")
+	}
+	seen := make(map[string]struct{}, len(options.pointIDs))
+	for _, id := range options.pointIDs {
+		if _, duplicate := seen[id]; duplicate {
+			return mutationOptions{}, fmt.Errorf("duplicate point ID")
+		}
+		seen[id] = struct{}{}
+	}
+	if options.minimumQuarantineDays <= 0 || options.minimumQuarantineDays > maxDays {
+		return mutationOptions{}, fmt.Errorf("minimum quarantine days must be positive and bounded")
+	}
+	if !options.confirmServerStopped {
+		return mutationOptions{}, fmt.Errorf("--confirm-server-stopped is required")
+	}
+	if !options.confirmPurge {
+		return mutationOptions{}, fmt.Errorf("--confirm-purge is required")
+	}
+	return options, nil
+}
+
+func pathWithin(root, candidate string) bool {
+	root, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return false
+	}
+	candidate, err = filepath.Abs(filepath.Clean(candidate))
+	if err != nil {
+		return false
+	}
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
 }
