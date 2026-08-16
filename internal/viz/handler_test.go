@@ -231,11 +231,11 @@ func TestFactSummaryAndDetailJSONContracts(t *testing.T) {
 	if err := json.Unmarshal(detailBody, &detail); err != nil {
 		t.Fatalf("decode detail: %v", err)
 	}
-	if _, ok := detail["payload"].(map[string]interface{}); !ok {
-		t.Fatalf("detail payload = %#v, want object", detail["payload"])
-	}
-	if _, ok := detail["payload_keys"].([]interface{}); !ok {
-		t.Fatalf("detail payload_keys = %#v, want array", detail["payload_keys"])
+	assertJSONOmitsKeys(t, detailBody, "payload", "payload_keys", "secret")
+	for _, key := range []string{"created_at", "updated_at", "last_recalled_at", "text_source"} {
+		if _, ok := detail[key]; !ok {
+			t.Fatalf("detail missing allowlisted field %q: %#v", key, detail)
+		}
 	}
 	if lifecycleView, ok := detail["lifecycle"].(map[string]interface{}); !ok || lifecycleView["state"] != "current" || lifecycleView["legacy"] != true {
 		t.Fatalf("detail lifecycle = %#v, want normalized legacy current", detail["lifecycle"])
@@ -269,8 +269,10 @@ func TestFactSummaryNormalizesLifecycleMetadata(t *testing.T) {
 			},
 			want: map[string]interface{}{
 				"state": "current", "legacy": false, "canonical": true,
-				"provenance":  map[string]interface{}{"source": "user", "reference": "decision-7"},
-				"verified_at": "2026-07-21T08:30:00Z", "supersedes": []interface{}{"old-id", "42"},
+				"provenance": map[string]interface{}{
+					"source": "user", "source_present": true, "has_reference": true, "reference_redacted": true,
+				},
+				"verified_at": "2026-07-21T08:30:00Z", "supersedes": []interface{}{"42", "old-id"},
 				"superseded_by": []interface{}{}, "valid": true,
 			},
 		},
@@ -281,7 +283,7 @@ func TestFactSummaryNormalizesLifecycleMetadata(t *testing.T) {
 				"text": "private fact text must not appear in reason", "lifecycle_state": "current", "canonical": "yes",
 			},
 			want: map[string]interface{}{
-				"state": "current", "legacy": false, "canonical": false,
+				"state": "invalid", "legacy": false, "canonical": false,
 				"supersedes": []interface{}{}, "superseded_by": []interface{}{}, "valid": false,
 				"invalid_reason": "canonical must be a boolean",
 			},
@@ -291,7 +293,7 @@ func TestFactSummaryNormalizesLifecycleMetadata(t *testing.T) {
 			id:      "unknown-state-id",
 			payload: map[string]interface{}{"lifecycle_state": "unknown"},
 			want: map[string]interface{}{
-				"state": "unknown", "legacy": false, "canonical": false,
+				"state": "invalid", "legacy": false, "canonical": false,
 				"supersedes": []interface{}{}, "superseded_by": []interface{}{}, "valid": false,
 				"invalid_reason": "lifecycle_state must be current, historical, superseded, or disputed",
 			},
@@ -315,16 +317,11 @@ func TestFactSummaryNormalizesLifecycleMetadata(t *testing.T) {
 	}
 }
 
-func TestFactDetailAddsLifecycleWithoutMutatingRawPayload(t *testing.T) {
+func TestFactDetailUsesAllowlistAndDoesNotExposeRawPayload(t *testing.T) {
 	payload := map[string]interface{}{
 		"text": "selected detail", "lifecycle_state": "current", "canonical": true,
 		"provenance": map[string]interface{}{"source": "import"}, "secret": "detail only",
 	}
-	wantPayload, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("marshal input payload: %v", err)
-	}
-
 	body, err := json.Marshal(pointToDetail(qdrant.Point{ID: "fact-id", Payload: payload}))
 	if err != nil {
 		t.Fatalf("marshal detail: %v", err)
@@ -333,19 +330,382 @@ func TestFactDetailAddsLifecycleWithoutMutatingRawPayload(t *testing.T) {
 	if err := json.Unmarshal(body, &detail); err != nil {
 		t.Fatalf("decode detail: %v", err)
 	}
-	gotPayload, err := json.Marshal(detail["payload"])
-	if err != nil {
-		t.Fatalf("marshal returned payload: %v", err)
-	}
-	if string(gotPayload) != string(wantPayload) {
-		t.Fatalf("raw payload changed: got %s, want %s", gotPayload, wantPayload)
-	}
+	assertJSONOmitsKeys(t, body, "payload", "payload_keys", "secret")
 	if lifecycleView, ok := detail["lifecycle"].(map[string]interface{}); !ok || lifecycleView["valid"] != true {
 		t.Fatalf("detail lifecycle = %#v, want valid normalized block", detail["lifecycle"])
 	}
 }
 
-func TestFactDetailReturnsPayloadForSelectedLegacyNumericID(t *testing.T) {
+func TestGraphLifecycleAndAuthorityFiltersAreClosedAndCombined(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		mustWriteTestResponse(t, w, `{"result":{"points":[
+			{"id":"canonical","vector":[1,0],"payload":{"text":"one","namespace":"projects","lifecycle_state":"current","canonical":true}},
+			{"id":"verified","vector":[1,0],"payload":{"text":"two","namespace":"projects","lifecycle_state":"historical","verified_at":"2026-08-01T00:00:00Z"}},
+			{"id":"legacy","vector":[1,0],"payload":{"text":"three","namespace":"work"}},
+			{"id":"provenance","vector":[1,0],"payload":{"text":"source","lifecycle_state":"current","provenance":{"source":"user"}}},
+			{"id":"partial-invalid","vector":[1,0],"payload":{"text":"malformed","lifecycle_state":"current","canonical":true,"provenance":{"source":"import"},"verified_at":"2026-08-01T00:00:00Z","supersedes":"not-an-array"}},
+			{"id":"invalid","vector":[1,0],"payload":{"text":"four","namespace":"projects","lifecycle_state":"bad"}}
+		],"next_page_offset":null}}`)
+	}))
+	defer backend.Close()
+	h := NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65)
+
+	for _, target := range []string{
+		"/api/graph?lifecycle_state=bogus", "/api/graph?authority=bogus",
+		"/api/graph?lifecycle_state=", "/api/graph?authority=",
+		"/api/graph?lifecycle_state=current&lifecycle_state=historical",
+		"/api/graph?authority=canonical&authority=verified",
+	} {
+		rr := httptest.NewRecorder()
+		h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, target, nil))
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("GET %s = %d (%s), want 400", target, rr.Code, rr.Body.String())
+		}
+	}
+	rr := httptest.NewRecorder()
+	h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/graph?namespace=projects&lifecycle_state=current&authority=canonical", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("combined filters = %d (%s)", rr.Code, rr.Body.String())
+	}
+	var body struct {
+		Nodes []struct {
+			ID string `json:"id"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Nodes) != 1 || body.Nodes[0].ID != "canonical" {
+		t.Fatalf("nodes = %#v, want canonical", body.Nodes)
+	}
+	for authority, wantID := range map[string]string{
+		"canonical": "canonical", "verified": "verified", "legacy": "legacy", "has-provenance": "provenance",
+	} {
+		rr := httptest.NewRecorder()
+		h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/graph?authority="+authority, nil))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("authority %s = %d (%s)", authority, rr.Code, rr.Body.String())
+		}
+		var filtered struct {
+			Nodes []struct {
+				ID string `json:"id"`
+			} `json:"nodes"`
+		}
+		if err := json.Unmarshal(rr.Body.Bytes(), &filtered); err != nil {
+			t.Fatal(err)
+		}
+		if len(filtered.Nodes) != 1 || filtered.Nodes[0].ID != wantID {
+			t.Fatalf("authority %s nodes = %#v, want only %s; malformed lifecycle must not match", authority, filtered.Nodes, wantID)
+		}
+	}
+}
+
+func TestFactHistoryIsDeterministicActiveOnlyAndDoesNotTraverseInvalidNodes(t *testing.T) {
+	points := map[string]string{
+		"root":         `{"id":"root","payload":{"text":"root text","lifecycle_state":"current","supersedes":["42","missing","quarantined","invalid"]}}`,
+		"42":           `{"id":42,"payload":{"text":"old text","lifecycle_state":"historical","superseded_by":["root"]}}`,
+		"quarantined":  `{"id":"quarantined","payload":{"text":"must not leak","maintenance_status":"quarantined","quarantined_at":"2026-08-01T00:00:00Z","quarantine_reason":"expired","quarantine_batch_id":"b"}}`,
+		"invalid":      `{"id":"invalid","payload":{"text":"invalid text","lifecycle_state":"bad","supersedes":["hidden-child"]}}`,
+		"hidden-child": `{"id":"hidden-child","payload":{"text":"must not be fetched"}}`,
+	}
+	var fetched []string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		fetched = append(fetched, id)
+		value, ok := points[id]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		mustWriteTestResponse(t, w, `{"result":%s}`, value)
+	}))
+	defer backend.Close()
+	rr := httptest.NewRecorder()
+	NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65).Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/facts/root/history", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("history = %d (%s)", rr.Code, rr.Body.String())
+	}
+	assertJSONOmitsKeys(t, rr.Body.Bytes(), "payload", "reference", "must not leak", "must not be fetched")
+	if slicesContain(fetched, "hidden-child") {
+		t.Fatalf("invalid node was traversed: fetched %#v", fetched)
+	}
+	var body struct {
+		Nodes     []factSummary `json:"nodes"`
+		Links     []historyLink `json:"links"`
+		Truncated bool          `json:"truncated"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if got := []string{body.Nodes[0].ID, body.Nodes[1].ID, body.Nodes[2].ID}; !reflect.DeepEqual(got, []string{"root", "42", "invalid"}) {
+		t.Fatalf("node order = %#v", got)
+	}
+	statuses := map[string]bool{}
+	for _, link := range body.Links {
+		statuses[link.Status] = true
+	}
+	for _, status := range []string{"resolved", "missing", "unavailable"} {
+		if !statuses[status] {
+			t.Errorf("missing link status %q in %#v", status, body.Links)
+		}
+	}
+	if statuses["cycle"] {
+		t.Fatalf("mirrored supersession metadata was falsely classified as a cycle: %#v", body.Links)
+	}
+	var mirrored []historyLink
+	for _, link := range body.Links {
+		if link.From == "root" && link.To == "42" {
+			mirrored = append(mirrored, link)
+		}
+	}
+	if len(mirrored) != 1 || mirrored[0].Type != "supersedes" || mirrored[0].Status != "resolved" {
+		t.Fatalf("normalized mirrored relationship = %#v", mirrored)
+	}
+}
+
+func TestFactHistoryMarksOnlyGenuineDirectedCycle(t *testing.T) {
+	points := map[string]string{
+		"a": `{"id":"a","payload":{"text":"a","lifecycle_state":"current","supersedes":["b"]}}`,
+		"b": `{"id":"b","payload":{"text":"b","lifecycle_state":"current","supersedes":["a"]}}`,
+	}
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		w.Header().Set("Content-Type", "application/json")
+		mustWriteTestResponse(t, w, `{"result":%s}`, points[id])
+	}))
+	defer backend.Close()
+	response, found, err := NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65).loadFactHistory(context.Background(), "a")
+	if err != nil || !found {
+		t.Fatalf("load history: found=%v err=%v", found, err)
+	}
+	if len(response.Links) != 2 {
+		t.Fatalf("links = %#v, want two directed relationships", response.Links)
+	}
+	statuses := map[string]string{}
+	for _, link := range response.Links {
+		statuses[link.From+"->"+link.To] = link.Status
+	}
+	if statuses["a->b"] != "resolved" || statuses["b->a"] != "cycle" {
+		t.Fatalf("cycle statuses = %#v", statuses)
+	}
+}
+
+func TestFactHistoryHardCapsBroadFanoutAt32Fetches(t *testing.T) {
+	references := make([]string, 40)
+	for i := range references {
+		references[i] = fmt.Sprintf("child-%02d", i)
+	}
+	referenceJSON, err := json.Marshal(references)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fetches int
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches++
+		id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		w.Header().Set("Content-Type", "application/json")
+		if id == "root" {
+			mustWriteTestResponse(t, w, `{"result":{"id":"root","payload":{"text":"root","lifecycle_state":"current","supersedes":%s}}}`, referenceJSON)
+			return
+		}
+		mustWriteTestResponse(t, w, `{"result":{"id":%q,"payload":{"text":%q,"lifecycle_state":"historical"}}}`, id, id)
+	}))
+	defer backend.Close()
+	response, found, err := NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65).loadFactHistory(context.Background(), "root")
+	if err != nil || !found {
+		t.Fatalf("load history: found=%v err=%v", found, err)
+	}
+	if fetches != hardHistoryFetchedNodes || len(response.Nodes) != hardHistoryFetchedNodes {
+		t.Fatalf("fetches=%d nodes=%d, want strict cap %d", fetches, len(response.Nodes), hardHistoryFetchedNodes)
+	}
+	if !response.Truncated {
+		t.Fatal("truncated=false, want true for broad fanout")
+	}
+	unavailable := 0
+	for _, link := range response.Links {
+		if link.Status == "unavailable" {
+			unavailable++
+		}
+	}
+	if unavailable == 0 {
+		t.Fatalf("links = %#v, want bounded unavailable links", response.Links)
+	}
+}
+
+func TestFactHistoryCapsTotalRelationshipsAndMalformedArrays(t *testing.T) {
+	references := make([]string, hardHistoryLinks+50)
+	for i := range references {
+		references[i] = fmt.Sprintf("wide-%03d", i)
+	}
+	referenceJSON, err := json.Marshal(references)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fetches int
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches++
+		id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		w.Header().Set("Content-Type", "application/json")
+		switch id {
+		case "root":
+			mustWriteTestResponse(t, w, `{"result":{"id":"root","payload":{"text":"root","lifecycle_state":"current","supersedes":%s}}}`, referenceJSON)
+		case "malformed":
+			mustWriteTestResponse(t, w, `{"result":{"id":"malformed","payload":{"text":"bad","lifecycle_state":"current","supersedes":"not-an-array"}}}`)
+		default:
+			mustWriteTestResponse(t, w, `{"result":{"id":%q,"payload":{"text":%q,"lifecycle_state":"historical"}}}`, id, id)
+		}
+	}))
+	defer backend.Close()
+	h := NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65)
+	response, found, err := h.loadFactHistory(context.Background(), "root")
+	if err != nil || !found {
+		t.Fatalf("wide history: found=%v err=%v", found, err)
+	}
+	if len(response.Links) != hardHistoryLinks || !response.Truncated {
+		t.Fatalf("links=%d truncated=%v, want cap=%d and truncated", len(response.Links), response.Truncated, hardHistoryLinks)
+	}
+	for _, node := range response.Nodes {
+		if len(node.Lifecycle.Supersedes) != 0 || len(node.Lifecycle.SupersededBy) != 0 {
+			t.Fatalf("history node duplicated uncapped relationships: %#v", node.Lifecycle)
+		}
+	}
+	if fetches > hardHistoryFetchedNodes {
+		t.Fatalf("fetches=%d exceeded bound %d", fetches, hardHistoryFetchedNodes)
+	}
+
+	before := fetches
+	malformed, found, err := h.loadFactHistory(context.Background(), "malformed")
+	if err != nil || !found {
+		t.Fatalf("malformed history: found=%v err=%v", found, err)
+	}
+	if len(malformed.Nodes) != 1 || len(malformed.Links) != 0 || fetches != before+1 {
+		t.Fatalf("malformed response=%#v fetches=%d, want one non-traversed node", malformed, fetches-before)
+	}
+}
+
+func TestFactHistoryRelationshipCapIsPermutationIndependent(t *testing.T) {
+	older := make([]string, 150)
+	newer := make([]string, hardHistoryLinks+20-len(older))
+	for i := range older {
+		older[i] = fmt.Sprintf("older-%03d", i)
+	}
+	for i := range newer {
+		newer[i] = fmt.Sprintf("newer-%03d", i)
+	}
+	reverseWithDuplicates := func(values []string) []string {
+		result := make([]string, 0, len(values)+3)
+		for i := len(values) - 1; i >= 0; i-- {
+			result = append(result, values[i])
+		}
+		return append(result, values[5], values[1], values[5])
+	}
+
+	load := func(t *testing.T, supersedes, supersededBy []string) historyResponse {
+		t.Helper()
+		supersedesJSON, err := json.Marshal(supersedes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		supersededByJSON, err := json.Marshal(supersededBy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+			w.Header().Set("Content-Type", "application/json")
+			if id == "root" {
+				mustWriteTestResponse(t, w, `{"result":{"id":"root","payload":{"text":"root","lifecycle_state":"historical","supersedes":%s,"superseded_by":%s}}}`, supersedesJSON, supersededByJSON)
+				return
+			}
+			mustWriteTestResponse(t, w, `{"result":{"id":%q,"payload":{"text":%q,"lifecycle_state":"historical"}}}`, id, id)
+		}))
+		defer backend.Close()
+		response, found, err := NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65).loadFactHistory(context.Background(), "root")
+		if err != nil || !found {
+			t.Fatalf("load history: found=%v err=%v", found, err)
+		}
+		return response
+	}
+
+	forward := load(t, older, newer)
+	reversed := load(t, reverseWithDuplicates(older), reverseWithDuplicates(newer))
+	if !reflect.DeepEqual(forward, reversed) {
+		forwardJSON, _ := json.Marshal(forward)
+		reversedJSON, _ := json.Marshal(reversed)
+		t.Fatalf("permuted relationship responses differ:\nforward=%s\nreversed=%s", forwardJSON, reversedJSON)
+	}
+	if len(forward.Links) != hardHistoryLinks || !forward.Truncated {
+		t.Fatalf("links=%d truncated=%v, want capped deterministic response", len(forward.Links), forward.Truncated)
+	}
+}
+
+func TestFactHistoryOverallDeadlineExpiresMidTraversal(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		if id == "root" {
+			w.Header().Set("Content-Type", "application/json")
+			mustWriteTestResponse(t, w, `{"result":{"id":"root","payload":{"text":"root","lifecycle_state":"current","supersedes":["slow"]}}}`)
+			return
+		}
+		<-r.Context().Done()
+	}))
+	defer backend.Close()
+	h := NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65)
+	h.historyTimeout = 25 * time.Millisecond
+	rr := httptest.NewRecorder()
+	h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/facts/root/history", nil))
+	if rr.Code != http.StatusRequestTimeout {
+		t.Fatalf("deadline status = %d (%s), want 408", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "nodes") || strings.Contains(rr.Body.String(), "slow") {
+		t.Fatalf("deadline was presented as partial success or leaked traversal state: %s", rr.Body.String())
+	}
+}
+
+func TestFactHistoryCancellationAndBackendErrorsAreFailures(t *testing.T) {
+	var requests int
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		http.Error(w, "private backend failure", http.StatusInternalServerError)
+	}))
+	defer backend.Close()
+	h := NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	response, found, err := h.loadFactHistory(ctx, "root")
+	if !errors.Is(err, context.Canceled) || found || len(response.Nodes) != 0 || requests != 0 {
+		t.Fatalf("canceled result: response=%#v found=%v err=%v requests=%d", response, found, err, requests)
+	}
+	canceledRequest := httptest.NewRequest(http.MethodGet, "/api/facts/root/history", nil).WithContext(ctx)
+	canceledRecorder := httptest.NewRecorder()
+	h.Router().ServeHTTP(canceledRecorder, canceledRequest)
+	if canceledRecorder.Code != http.StatusRequestTimeout || strings.Contains(canceledRecorder.Body.String(), "nodes") {
+		t.Fatalf("canceled HTTP result = %d (%s), want non-success failure", canceledRecorder.Code, canceledRecorder.Body.String())
+	}
+
+	rr := httptest.NewRecorder()
+	h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/facts/root/history", nil))
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("backend error status = %d (%s)", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "nodes") || strings.Contains(rr.Body.String(), "private backend failure") {
+		t.Fatalf("backend failure was presented as empty success or leaked detail: %s", rr.Body.String())
+	}
+}
+
+func slicesContain(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func TestFactDetailReturnsAllowlistedFieldsForSelectedLegacyNumericID(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got, want := r.URL.Path, "/collections/memory/points/42"; got != want {
 			t.Fatalf("request path = %q, want %q", got, want)
@@ -368,11 +728,9 @@ func TestFactDetailReturnsPayloadForSelectedLegacyNumericID(t *testing.T) {
 	if detail["id"] != "42" {
 		t.Fatalf("id = %#v, want legacy numeric id as string", detail["id"])
 	}
-	if _, ok := detail["payload"].(map[string]interface{}); !ok {
-		t.Fatalf("detail payload = %#v, want object", detail["payload"])
-	}
-	if _, ok := detail["payload_keys"].([]interface{}); !ok {
-		t.Fatalf("detail payload_keys = %#v, want array", detail["payload_keys"])
+	assertJSONOmitsKeys(t, rr.Body.Bytes(), "payload", "payload_keys", "secret")
+	if detail["text"] != "legacy fact" || detail["text_source"] != "text" {
+		t.Fatalf("allowlisted detail = %#v", detail)
 	}
 }
 
@@ -852,7 +1210,7 @@ func TestBackendErrorsAreGeneric(t *testing.T) {
 	defer backend.Close()
 
 	h := NewHandler(qdrant.NewClient(backend.URL, "memory"), 0.65)
-	for _, target := range []string{"/api/facts", "/api/facts/secret-id", "/api/graph"} {
+	for _, target := range []string{"/api/facts", "/api/facts/secret-id", "/api/facts/secret-id/history", "/api/graph"} {
 		rr := httptest.NewRecorder()
 		h.Router().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, target, nil))
 		if rr.Code != http.StatusInternalServerError {
@@ -1067,6 +1425,26 @@ func TestDuplicatesUIHandlesErrorsAndOffersBoundedRetry(t *testing.T) {
 	}
 }
 
+func TestGraphDetailFocusReturnSurvivesResultsRerender(t *testing.T) {
+	js, err := staticFS.ReadFile("static/assets/js/graph.js")
+	if err != nil {
+		t.Fatalf("read graph.js: %v", err)
+	}
+	source := string(js)
+	for _, want := range []string{
+		"button.dataset.factId = String(node.id)",
+		"detailReturnFactID = String(id)",
+		".graph-result[data-fact-id]",
+		"button.dataset.factId === detailReturnFactID",
+		"button.isConnected && !button.hidden",
+		"document.getElementById('graph-container')",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("graph.js does not contain stable focus-return mechanism %q", want)
+		}
+	}
+}
+
 func TestStrongestEdgeHeapIsBoundedAndDeterministic(t *testing.T) {
 	h := &edgeHeap{}
 	for _, edge := range []graphEdge{
@@ -1262,6 +1640,18 @@ func TestStaticUIContractsForLazyLoadingAccessibilityAndResilience(t *testing.T)
 
 	graph := read(t, "assets/js/graph.js")
 	require(t, graph, "api/facts/${encodeURIComponent(id)}")
+	require(t, graph, "api/facts/${encodeURIComponent(id)}/history")
+	require(t, graph, "lifecycle_state")
+	require(t, graph, "authority")
+	require(t, graph, "historyAbortController.abort()")
+	require(t, graph, "request !== detailRequest")
+	require(t, graph, "Could not load semantic history")
+	require(t, graph, "Retry history")
+	require(t, graph, "Missing fact")
+	require(t, graph, "Cycle detected")
+	require(t, graph, "History is truncated")
+	forbid(t, graph, "payload-json")
+	forbid(t, graph, "payload_keys")
 	require(t, graph, "Retry with up to 5,000 nodes")
 	require(t, graph, "panel.focus()")
 	require(t, graph, "graph-results-list")
@@ -1313,6 +1703,14 @@ func TestStaticUIContractsForLazyLoadingAccessibilityAndResilience(t *testing.T)
 	require(t, shared, "normalizeTagDisplay")
 	require(t, shared, "originalsByDisplay")
 	require(t, shared, "${normalized} (${original})")
+	require(t, shared, "normalizedLifecycle")
+	require(t, shared, "lifecycleBadgeHTML")
+	require(t, shared, "authoritySignals")
+	require(t, shared, "authoritySignalSummary")
+	require(t, shared, "provenanceDisplayHTML")
+	require(t, shared, "Source hidden")
+	require(t, shared, "Reference hidden")
+	forbid(t, shared, "trust score")
 	duplicates := read(t, "assets/js/duplicates.js")
 	require(t, duplicates, "duplicatesShown += 50")
 
@@ -1321,6 +1719,12 @@ func TestStaticUIContractsForLazyLoadingAccessibilityAndResilience(t *testing.T)
 	forbid(t, graphView, "aria-modal")
 	require(t, graphView, "<output")
 	require(t, graphView, "for=\"ns-filter\"")
+	require(t, graphView, "for=\"lifecycle-filter\"")
+	require(t, graphView, "for=\"authority-filter\"")
+	require(t, graphView, "id=\"history-status\"")
+	require(t, graphView, "aria-live=\"polite\"")
+	forbid(t, graphView, "payload-details")
+	forbid(t, graphView, "payload-json")
 	overviewView := read(t, "views/overview.html")
 	require(t, overviewView, "id=\"activity-section\"")
 	require(t, overviewView, "id=\"heatmap-grid\"")
@@ -1342,6 +1746,9 @@ func TestStaticUIContractsForLazyLoadingAccessibilityAndResilience(t *testing.T)
 	require(t, css, ".heatmap-scroll")
 	require(t, css, "flex: 1 1 100% !important")
 	require(t, css, ".graph-status { position: static")
+	require(t, css, ".lifecycle-badge")
+	require(t, css, ".history-link-missing")
+	require(t, css, "height: 100dvh")
 	require(t, css, "overflow-x: hidden;\n  flex-shrink: 0;")
 	require(t, css, ".activity-section { width: 100%; margin-top: 24px; flex-shrink: 0; }")
 	if !balancedCSSBraces(css) {

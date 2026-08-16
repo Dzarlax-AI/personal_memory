@@ -63,5 +63,5 @@ function duplicateHTML(pair) {
 function duplicateFactHTML(fact) {
   const text = factText(fact);
   const tags = tagOptions([fact]).map(tag => tag.display).join(', ');
-  return `<div>${escapeHtml(text.slice(0, 200))}${text.length > 200 ? '...' : ''}<div class="dup-meta">${escapeHtml(normalizeNamespace(fact.namespace))} | ${escapeHtml(tags)} | recalls: ${Number(fact.recall_count || 0)}</div></div>`;
+  return `<div>${escapeHtml(text.slice(0, 200))}${text.length > 200 ? '...' : ''}<div class="lifecycle-badges">${lifecycleBadgeHTML(fact)}${authorityBadgesHTML(fact)}</div><div class="dup-meta">${escapeHtml(normalizeNamespace(fact.namespace))} | ${escapeHtml(tags)} | recalls: ${Number(fact.recall_count || 0)}</div></div>`;
 }

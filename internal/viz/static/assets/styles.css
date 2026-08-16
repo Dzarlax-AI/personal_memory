@@ -225,6 +225,20 @@ body {
 }
 .dup-meta { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
 
+.lifecycle-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.lifecycle-badge, .authority-badge, .history-link-status {
+  display: inline-flex; align-items: center; width: fit-content;
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 1px 6px; font-size: 11px; line-height: 1.4; font-weight: 600;
+  background: var(--bg); color: var(--text-secondary);
+}
+.lifecycle-current { border-color: var(--good); color: var(--good); }
+.lifecycle-historical, .lifecycle-superseded { color: var(--text-secondary); }
+.lifecycle-disputed { border-color: var(--warn); color: var(--warn); }
+.lifecycle-invalid { border-color: var(--danger); color: var(--danger); }
+.authority-canonical { border-color: var(--accent); color: var(--accent); }
+.authority-verified { border-color: var(--good); color: var(--good); }
+
 /* Forgotten */
 .forgotten-list { display: flex; flex-direction: column; gap: 4px; }
 .forgotten-item {
@@ -298,6 +312,13 @@ body {
 .detail-panel .fact-text.missing-text { color: var(--warn); }
 .detail-panel .meta { font-size: var(--text-xs); color: var(--text-secondary); }
 .detail-panel .meta span { display: inline-block; margin-right: 12px; margin-bottom: 4px; }
+.curated-detail {
+  display: grid; grid-template-columns: minmax(90px, max-content) 1fr;
+  gap: 5px 10px; margin: 12px 0 0; font-size: var(--text-xs);
+}
+.curated-detail dt { color: var(--text-secondary); }
+.curated-detail dd { margin: 0; overflow-wrap: anywhere; }
+.curated-detail dd span { display: block; }
 .tag-chip {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -329,25 +350,29 @@ body {
   font-size: var(--text-xs);
   color: var(--text-secondary);
 }
-.payload-details {
-  margin-top: 10px;
-  color: var(--text-secondary);
-  font-size: var(--text-xs);
+.history-region { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.history-region h4 { margin: 0 0 6px; font-size: var(--text-sm); }
+.history-status, .history-empty, .history-explanation { color: var(--text-secondary); font-size: var(--text-xs); }
+.history-error { color: var(--danger); }
+#history-content { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.history-resolved-nodes { display: flex; flex-direction: column; gap: 6px; }
+.history-subheading { color: var(--text-secondary); font-size: 11px; font-weight: 600; }
+.history-node {
+  display: flex; flex-direction: column; gap: 3px; width: 100%;
+  padding: 7px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg); color: var(--text); text-align: left; cursor: pointer;
+  font-size: var(--text-xs); overflow-wrap: anywhere;
 }
-.payload-details summary { cursor: pointer; color: var(--text); }
-#payload-json {
-  margin-top: 8px;
-  max-height: 220px;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  color: var(--text-secondary);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 8px;
-  font-size: 11px;
-}
+.history-node:hover { border-color: var(--accent); }
+.history-node-label { color: var(--accent); font-size: 11px; font-weight: 600; }
+.history-link { padding: 8px; border-left: 3px solid var(--border); background: var(--bg); border-radius: var(--radius-sm); }
+.history-link-missing { border-left-color: var(--danger); }
+.history-link-unavailable { border-left-color: var(--warn); }
+.history-link-cycle { border-left-color: var(--warn); }
+.history-relation { margin-bottom: 5px; font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.history-link-status { margin-bottom: 6px; }
+.status-missing { color: var(--danger); }
+.status-unavailable, .status-cycle { color: var(--warn); }
 .detail-panel .close-btn {
   position: absolute; top: 8px; right: 12px;
   background: none; border: none;
@@ -364,7 +389,7 @@ body {
 .graph-results h3 { margin: 0 0 4px; font-size: var(--text-sm); }
 .graph-results-count { color: var(--text-secondary); font-size: var(--text-xs); margin-bottom: 6px; }
 .graph-results-list { display: flex; flex-direction: column; gap: 4px; }
-.graph-result { background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius-sm); padding: 6px; text-align: left; font-size: var(--text-xs); overflow-wrap: anywhere; cursor: pointer; }
+.graph-result { display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: var(--radius-sm); padding: 6px; text-align: left; font-size: var(--text-xs); overflow-wrap: anywhere; cursor: pointer; }
 .graph-result:hover { border-color: var(--accent); }
 
 /* Documents */
@@ -440,7 +465,8 @@ body {
   .forgotten-item .meta-col, .file-meta { text-align: left; white-space: normal; }
   .folder-header { align-items: flex-start; flex-direction: column; }
   .folder-meta, .file-name, .folder-path { white-space: normal; overflow-wrap: anywhere; }
-  .detail-panel { top: 8px; right: 8px; width: calc(100% - 16px); max-height: calc(100% - 16px); }
+  .detail-panel { position: fixed; inset: 0; width: 100%; max-height: none; height: 100dvh; border-radius: 0; padding: 16px; padding-top: 48px; overscroll-behavior: contain; }
+  .detail-panel .close-btn { top: 12px; right: 16px; min-width: 40px; min-height: 40px; }
   .legend { display: none; }
   .graph-results { position: static; width: 100%; max-height: 180px; border-radius: 0; box-shadow: none; }
   #graph-view { overflow-y: auto; }
@@ -455,6 +481,10 @@ body {
   .graph-controls select { max-width: 135px; }
   .tag-editor-row { flex-wrap: wrap; }
   .tag-editor-row input { width: 100%; flex-basis: 100%; }
+  .graph-controls > label { flex: 0 0 72px; }
+  .graph-controls select, .graph-controls input[type="search"] { flex: 1 1 190px; max-width: none; }
+  .curated-detail { grid-template-columns: 1fr; gap: 2px; }
+  .curated-detail dd { margin-bottom: 6px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

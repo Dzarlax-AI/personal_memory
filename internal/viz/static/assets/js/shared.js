@@ -111,10 +111,75 @@ function escapeAttr(s) {
 function factText(fact) {
   const text = typeof fact.text === 'string' ? fact.text.trim() : '';
   if (text) return text;
-  const keys = Array.isArray(fact.payload_keys) && fact.payload_keys.length > 0
-    ? ` Payload keys: ${fact.payload_keys.join(', ')}.`
-    : '';
-  return `No text payload stored for point ${fact.id || 'unknown'}.${keys}`;
+  return `No text stored for point ${fact.id || 'unknown'}.`;
+}
+
+const LIFECYCLE_STATES = new Set(['current', 'historical', 'superseded', 'disputed', 'invalid']);
+
+function normalizedLifecycle(fact) {
+  const value = fact && typeof fact.lifecycle === 'object' && fact.lifecycle ? fact.lifecycle : {};
+  let state = typeof value.state === 'string' ? value.state.toLowerCase().trim() : '';
+  if (value.valid === false || !LIFECYCLE_STATES.has(state)) state = value.valid === false ? 'invalid' : 'current';
+  return {
+    ...value,
+    state,
+    valid: value.valid !== false,
+    legacy: Boolean(value.legacy),
+    canonical: Boolean(value.canonical),
+    supersedes: Array.isArray(value.supersedes) ? value.supersedes.map(String) : [],
+    superseded_by: Array.isArray(value.superseded_by) ? value.superseded_by.map(String) : [],
+  };
+}
+
+function lifecycleBadgeHTML(fact) {
+  const lifecycle = normalizedLifecycle(fact);
+  const labels = {
+    current: '● Current', historical: '◷ Historical', superseded: '↘ Superseded',
+    disputed: '⚠ Disputed', invalid: '! Invalid metadata',
+  };
+  return `<span class="lifecycle-badge lifecycle-${escapeAttr(lifecycle.state)}">${escapeHtml(labels[lifecycle.state])}</span>`;
+}
+
+function authoritySignals(fact) {
+  const lifecycle = normalizedLifecycle(fact);
+  const signals = [];
+  if (!lifecycle.valid) return signals;
+  if (lifecycle.canonical) signals.push({ key: 'canonical', label: 'Canonical' });
+  if (typeof lifecycle.verified_at === 'string' && lifecycle.verified_at) signals.push({ key: 'verified', label: 'Verified' });
+  if (lifecycle.legacy) signals.push({ key: 'legacy', label: 'Legacy' });
+  if (lifecycle.provenance && lifecycle.provenance.source_present) signals.push({ key: 'provenance', label: 'Has provenance' });
+  return signals;
+}
+
+function authorityBadgesHTML(fact) {
+  return authoritySignals(fact).map(signal =>
+    `<span class="authority-badge authority-${escapeAttr(signal.key)}">${escapeHtml(signal.label)}</span>`
+  ).join('');
+}
+
+function authoritySignalSummary(fact) {
+  const labels = authoritySignals(fact).map(signal => signal.label);
+  return labels.length ? labels.join(', ') : 'No authority signals';
+}
+
+function provenanceDisplayHTML(fact) {
+  const provenance = normalizedLifecycle(fact).provenance;
+  if (!provenance || !provenance.source_present) return '<span>Not recorded</span>';
+  const source = provenance.source_redacted
+    ? 'Source hidden'
+    : provenance.source ? `Source: ${provenance.source}` : 'Source recorded';
+  let reference = '';
+  if (provenance.has_reference) {
+    reference = provenance.reference_redacted || !provenance.reference
+      ? 'Reference hidden'
+      : `Reference: ${provenance.reference}`;
+  }
+  return [source, reference].filter(Boolean).map(value => `<span>${escapeHtml(value)}</span>`).join('');
+}
+
+function matchesAuthorityFilter(fact, filter) {
+  if (!filter) return true;
+  return authoritySignals(fact).some(signal => signal.key === filter || (filter === 'has-provenance' && signal.key === 'provenance'));
 }
 
 async function responseMessage(res) {
@@ -153,4 +218,4 @@ let factsPromise = null;
 let graphDataCache = null;
 let network = null;
 let timeline = null;
-let graphFilter = { namespace: '', projectTag: '', primaryTag: '', text: '' };
+let graphFilter = { namespace: '', projectTag: '', primaryTag: '', text: '', lifecycle: '', authority: '' };
