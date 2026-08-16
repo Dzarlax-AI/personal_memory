@@ -1,4 +1,4 @@
-.PHONY: help dev-deps verify-assets build test vet eval-public eval-public-v4 conformance-public integration-bundle-public tidy clean
+.PHONY: help dev-deps verify-assets build test vet eval-public eval-public-v4 conformance-public integration-bundle-public docs-install docs-check docs-build tidy clean
 
 DS_VERSION ?= v1.4.0
 DS_DIR := internal/viz/static/assets/vendor
@@ -16,6 +16,9 @@ help:
 	@echo "  make eval-public-v4 — replay public document-routing evidence"
 	@echo "  make conformance-public — run the public model-memory conformance suite"
 	@echo "  make integration-bundle-public — validate bundle artifacts against the public suite"
+	@echo "  make docs-install — install documentation dependencies"
+	@echo "  make docs-check — validate documentation"
+	@echo "  make docs-build — build documentation"
 	@echo "  make clean     — remove built binaries and the vendored browser bundles"
 
 dev-deps:
@@ -115,7 +118,7 @@ conformance-public:
 	go run ./cmd/conformance-memory run \
 		--source fixture \
 		--suite conformancedata/public/v1/scenarios.json \
-		--contract docs/model-usage-contract.md \
+		--contract website/src/content/docs/reference/model-memory-usage-contract.md \
 		--traces conformancedata/public/v1/traces/passing.json \
 		--json conformance-results/public.json \
 		--markdown conformance-results/public.md
@@ -128,17 +131,26 @@ integration-bundle-public:
 		go run ./cmd/conformance-memory run \
 			--source live \
 			--suite conformancedata/public/v1/scenarios.json \
-			--contract docs/model-usage-contract.md \
+			--contract website/src/content/docs/reference/model-memory-usage-contract.md \
 			--client-family "$$client" \
 			--adapter-exec "$(CURDIR)/integration-results/memory-integration" \
 			--adapter-arg conformance-adapter \
 			--adapter-arg=--contract-source \
-			--adapter-arg "$(CURDIR)/docs/model-usage-contract.md" \
+			--adapter-arg "$(CURDIR)/website/src/content/docs/reference/model-memory-usage-contract.md" \
 			--adapter-arg=--suite-source \
 			--adapter-arg "$(CURDIR)/conformancedata/public/v1/scenarios.json" \
 			--json "integration-results/$$client.json" \
 			--markdown "integration-results/$$client.md"; \
 	done
+
+docs-install:
+	cd website && npm ci
+
+docs-check:
+	cd website && ASTRO_TELEMETRY_DISABLED=1 npm run check
+
+docs-build:
+	cd website && ASTRO_TELEMETRY_DISABLED=1 npm run build
 
 tidy:
 	go mod tidy
