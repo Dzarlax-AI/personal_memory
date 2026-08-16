@@ -28,10 +28,11 @@ ENABLE_VIZ=false
 The checked-in Compose file uses `:latest`, so select a reviewed immutable application image before the first pull or start:
 
 ```bash
+# Replace the example tag with the reviewed published sha-* tag.
 cat > compose.release.yml <<'EOF'
 services:
   memory-mcp:
-    image: ghcr.io/dzarlax-ai/personal-memory:sha-<commit>
+    image: ghcr.io/dzarlax-ai/personal-memory:sha-0123456789abcdef
 EOF
 docker compose -f docker-compose.yml -f compose.release.yml config
 docker compose -f docker-compose.yml -f compose.release.yml pull
@@ -41,4 +42,4 @@ curl -fsS https://mcp.example.com/health
 # ok
 ```
 
-The first TEI startup downloads the pinned embedding model. For environment details, see [Configuration](../reference/configuration/) and [Upgrade and rollback](../operations/upgrade-rollback/).
+The first TEI startup downloads the pinned embedding model. For environment details, see [Configuration](../../reference/configuration/) and [Upgrade and rollback](../../operations/upgrade-rollback/).

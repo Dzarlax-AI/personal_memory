@@ -4,7 +4,7 @@ title: Client integration bundle
 
 # Versioned client integration bundle
 
-The client integration bundle turns the [Model Memory Usage Contract](../reference/model-memory-usage-contract/) into deterministic, client-specific policy artifacts. It configures how a client should choose between Personal Memory facts, document search, Todoist, and ordinary conversation context. It does not configure or modify the Personal Memory server, Qdrant, deployment, credentials, or MCP endpoints.
+The client integration bundle turns the [Model Memory Usage Contract](../../reference/model-memory-usage-contract/) into deterministic, client-specific policy artifacts. It configures how a client should choose between Personal Memory facts, document search, Todoist, and ordinary conversation context. It does not configure or modify the Personal Memory server, Qdrant, deployment, credentials, or MCP endpoints.
 
 ## Versions and architecture
 

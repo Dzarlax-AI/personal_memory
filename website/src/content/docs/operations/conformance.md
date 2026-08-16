@@ -5,7 +5,7 @@ title: Conformance suite
 # Model memory conformance
 
 The model memory conformance suite tests whether an AI client follows the
-[Model Memory Usage Contract](../reference/model-memory-usage-contract/). It evaluates observable
+[Model Memory Usage Contract](../../reference/model-memory-usage-contract/). It evaluates observable
 tool choices, results, disclosures, claims, fallbacks, and retry relationships.
 It does not evaluate general model intelligence or require a model provider in
 ordinary CI.
@@ -144,7 +144,7 @@ Example invocation:
 go run ./cmd/conformance-memory run \
   --source live \
   --suite conformancedata/public/v1/scenarios.json \
-  --contract website/src/content/docs/reference/model-memory-usage-contract.md \
+  --contract docs/model-usage-contract.md \
   --client-family codex \
   --adapter-exec /absolute/path/to/codex-conformance-adapter \
   --adapter-arg=--profile \
@@ -173,7 +173,7 @@ bundle can add such wrappers without changing scenario or validator semantics.
 ## Contract evolution
 
 The runner extracts the published scenario identifiers and contract version from
-`website/src/content/docs/reference/model-memory-usage-contract.md`. CI fails when the contract and public suite
+`docs/model-usage-contract.md`. CI fails when the contract and public suite
 differ. Do not renumber or reuse a published scenario identifier.
 
 Schema and suite versions use semantic versioning:

@@ -36,10 +36,11 @@ openssl rand -hex 32
 Set `MEMORY_DOMAIN`, put the generated secret in `API_KEY`, and keep `ALLOW_INSECURE_AUTH=false`. The checked-in Compose file uses `:latest`, so select a reviewed immutable image before first start:
 
 ```bash
+# Replace the example tag with the reviewed published sha-* tag.
 cat > compose.release.yml <<'EOF'
 services:
   memory-mcp:
-    image: ghcr.io/dzarlax-ai/personal-memory:sha-<commit>
+    image: ghcr.io/dzarlax-ai/personal-memory:sha-0123456789abcdef
 EOF
 docker compose -f docker-compose.yml -f compose.release.yml config
 docker compose -f docker-compose.yml -f compose.release.yml pull

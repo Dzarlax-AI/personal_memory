@@ -118,7 +118,7 @@ conformance-public:
 	go run ./cmd/conformance-memory run \
 		--source fixture \
 		--suite conformancedata/public/v1/scenarios.json \
-		--contract website/src/content/docs/reference/model-memory-usage-contract.md \
+		--contract docs/model-usage-contract.md \
 		--traces conformancedata/public/v1/traces/passing.json \
 		--json conformance-results/public.json \
 		--markdown conformance-results/public.md
@@ -131,12 +131,12 @@ integration-bundle-public:
 		go run ./cmd/conformance-memory run \
 			--source live \
 			--suite conformancedata/public/v1/scenarios.json \
-			--contract website/src/content/docs/reference/model-memory-usage-contract.md \
+			--contract docs/model-usage-contract.md \
 			--client-family "$$client" \
 			--adapter-exec "$(CURDIR)/integration-results/memory-integration" \
 			--adapter-arg conformance-adapter \
 			--adapter-arg=--contract-source \
-			--adapter-arg "$(CURDIR)/website/src/content/docs/reference/model-memory-usage-contract.md" \
+			--adapter-arg "$(CURDIR)/docs/model-usage-contract.md" \
 			--adapter-arg=--suite-source \
 			--adapter-arg "$(CURDIR)/conformancedata/public/v1/scenarios.json" \
 			--json "integration-results/$$client.json" \

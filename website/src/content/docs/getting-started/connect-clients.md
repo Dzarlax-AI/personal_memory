@@ -17,4 +17,4 @@ go build -o ./memory-integration ./cmd/memory-integration
   --capability memory=disabled --capability documents=disabled --capability todoist=disabled
 ```
 
-The bundle supports Codex, Claude, ChatGPT (manual UI/admin step), and generic MCP hosts. See the [integration bundle guide](../integration-bundle/guide/).
+The bundle supports Codex, Claude, ChatGPT (manual UI/admin step), and generic MCP hosts. See the [integration bundle guide](../../integration-bundle/guide/).

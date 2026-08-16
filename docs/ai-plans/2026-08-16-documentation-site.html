@@ -32,7 +32,7 @@
 <body>
 <main>
   <header>
-    <span class="badge">Awaiting approval</span>
+    <span class="badge">Implemented locally</span>
     <h1>GitHub Issue #32: public documentation site</h1>
     <p class="meta">Prepared 2026-08-16 for <code>Dzarlax-AI/personal_memory</code>. Scope: Starlight documentation, GitHub Pages publishing, content migration, and release-quality documentation checks.</p>
   </header>
@@ -165,8 +165,36 @@
 
   <section class="approval">
     <h2>11. Approval gate</h2>
-    <p><strong>No site scaffold, content migration, workflow change, or README rewrite will begin until the user explicitly approves this implementation plan.</strong></p>
-    <p>Approval authorizes implementation in the issue #32 branch, local validation, and preparation of a reviewable diff. Pushing, opening a pull request, merging, changing GitHub Pages settings, configuring DNS, or deploying production still requires separate explicit authorization.</p>
+    <p><strong>The user approved implementation on 2026-08-16. The local implementation is complete in the issue #32 branch.</strong></p>
+    <p>Pushing, opening a pull request, merging, changing GitHub Pages settings, configuring DNS, or deploying production still requires separate explicit authorization.</p>
+  </section>
+
+  <section class="callout">
+    <h2>12. Actual implementation and verification</h2>
+    <p>Updated 2026-08-17 after implementation and review.</p>
+    <ul>
+      <li>Added an isolated Starlight site under <code>website/</code> using Astro 7.2.2, Starlight 0.41.7, Node <code>&gt;=22.12.0</code>, exact direct dependency versions, and a committed npm lockfile.</li>
+      <li>Published 18 content routes plus the landing page, with task-oriented navigation, Pagefind search, repository edit links, a local favicon, and repository Pages base-path support.</li>
+      <li>Moved lifecycle, integration-bundle, evaluation, and conformance documentation into the site with thin compatibility pointers at the old paths. The SHA-256-bound normative model usage contract remains byte-exact at <code>docs/model-usage-contract.md</code>; the site links to it instead of duplicating or mutating it.</li>
+      <li>Added source-backed installation, client connection, upgrade/rollback, lifecycle migration, backup/release, troubleshooting, maintenance, tools, configuration, compatibility, architecture/security, and limitations pages.</li>
+      <li>Reduced the root README to a repository landing page, repaired machine and human references, added independent Makefile documentation targets, and added a GitHub Pages check/deploy workflow.</li>
+      <li>Both independent spec-compliance and quality reviews approved the final scope after configuration, maintenance, migration, immutable-image, navigation, and link corrections.</li>
+    </ul>
+    <h3>Checks run</h3>
+    <ul>
+      <li><code>npm ci</code>, deployment-environment <code>npm run check</code>, and <code>npm run build</code>: passed; 19 static HTML pages generated and Pagefind indexed them.</li>
+      <li>Generated-site href/src validation: all local targets resolved under <code>/personal_memory/</code>.</li>
+      <li><code>make test</code>: browser asset checks, <code>go vet ./...</code>, full Go tests, and all eight binary builds passed.</li>
+      <li>The normative contract SHA-256 matched the integration bundle manifest exactly.</li>
+      <li>A non-production Compose rehearsal resolved the application image to an immutable <code>sha-*</code> tag through the documented override.</li>
+      <li>Repository whitespace, stale moved-document references, and public-content secret/private-path scans completed without unresolved findings.</li>
+    </ul>
+    <h3>Known limitations and follow-ups</h3>
+    <ul>
+      <li>GitHub Pages repository settings and the first remote deployment are not changed by this local implementation.</li>
+      <li>Custom domain, DNS, analytics, localization, and multi-version documentation remain deferred.</li>
+      <li>The documentation describes the current release line; client product versions remain explicitly unpinned where the repository has no verified matrix.</li>
+    </ul>
   </section>
 </main>
 </body>
