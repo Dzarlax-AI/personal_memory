@@ -108,6 +108,11 @@ func (s *Service) Purge(ctx context.Context, request PurgeRequest) (Result, erro
 		}
 	}
 	result.SnapshotName = snapshot.Name
+	if resuming {
+		// Bind every recovery attempt to the original archive before any remote
+		// proof. A failed preflight must never erase this durable identity.
+		result.SnapshotArchiveSHA256 = prior.SnapshotArchiveSHA256
+	}
 	for _, id := range ids {
 		status := OutcomePending
 		if priorStatus, ok := priorStatuses[id]; ok {
@@ -128,16 +133,15 @@ func (s *Service) Purge(ctx context.Context, request PurgeRequest) (Result, erro
 		}
 		return s.finishPurge(ctx, request.JournalPath, result, mutationDispatched)
 	}
-	expectedArchiveSHA256 := ""
-	if resuming {
-		expectedArchiveSHA256 = prior.SnapshotArchiveSHA256
-	}
+	expectedArchiveSHA256 := result.SnapshotArchiveSHA256
 	archiveSHA256, err := store.EnsureSnapshotArchive(ctx, snapshot, request.SnapshotArchivePath, expectedArchiveSHA256)
 	if err != nil {
-		for index := range result.Outcomes {
-			result.Outcomes[index].Status = OutcomeFailed
+		if !resuming {
+			for index := range result.Outcomes {
+				result.Outcomes[index].Status = OutcomeFailed
+			}
 		}
-		return s.finishPurge(ctx, request.JournalPath, result, mutationDispatched)
+		return s.finishPurge(ctx, request.JournalPath, result, mutationDispatched || hasResumeEvidence)
 	}
 	result.SnapshotArchiveSHA256 = archiveSHA256
 	// Persist the original snapshot and exact complete selection before the

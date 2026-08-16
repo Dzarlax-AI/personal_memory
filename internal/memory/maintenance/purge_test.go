@@ -126,6 +126,24 @@ func TestPurgePartialRetryAndPrivacy(t *testing.T) {
 	if store.listCalls < 3 {
 		t.Fatalf("snapshot was not re-proved before both deletes: list calls=%d", store.listCalls)
 	}
+	store.archiveErr = errors.New("archive temporarily unavailable")
+	archiveFailure, err := service.Purge(context.Background(), purgeRequest(manifest, []string{first.ID, second.ID}, journal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := outcomesByID(archiveFailure); got[first.ID] != OutcomeDeleted || got[second.ID] != OutcomeAmbiguous || archiveFailure.SnapshotArchiveSHA256 != result.SnapshotArchiveSHA256 {
+		t.Fatalf("archive failure lost evidence: result=%#v", archiveFailure)
+	}
+	store.archiveErr = nil
+	store.listErr = errors.New("snapshot list temporarily unavailable")
+	if _, err := service.Purge(context.Background(), purgeRequest(manifest, []string{first.ID, second.ID}, journal)); err == nil {
+		t.Fatal("snapshot list failure unexpectedly succeeded")
+	}
+	preserved, resuming, err := readCompatiblePurgeJournal(journal, manifest, []string{first.ID, second.ID})
+	if err != nil || !resuming || outcomesByID(preserved)[first.ID] != OutcomeDeleted || outcomesByID(preserved)[second.ID] != OutcomeAmbiguous || preserved.SnapshotArchiveSHA256 != result.SnapshotArchiveSHA256 {
+		t.Fatalf("snapshot list failure lost evidence: result=%#v resuming=%v err=%v", preserved, resuming, err)
+	}
+	store.listErr = nil
 	delete(store.deleteErrors, second.ID)
 	retry, err := service.Purge(context.Background(), purgeRequest(manifest, []string{first.ID, second.ID}, journal))
 	if err != nil {

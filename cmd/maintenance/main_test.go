@@ -56,6 +56,7 @@ func TestParsePurgeOptionsRequiresBothConfirmationsAndBoundedAge(t *testing.T) {
 		{"--qdrant-url", "u", "--collection", "c", "--manifest", "m", "--journal", "j", "--snapshot-archive", "s", "--point-id", "42", "--minimum-quarantine-days", "30", "--confirm-purge"},
 		{"--qdrant-url", "u", "--collection", "c", "--manifest", "m", "--journal", "j", "--snapshot-archive", "s", "--point-id", "42", "--minimum-quarantine-days", "0", "--confirm-server-stopped", "--confirm-purge"},
 		{"--qdrant-url", "u", "--collection", "c", "--manifest", "m", "--journal", "j", "--snapshot-archive", "s", "--point-id", "42", "--minimum-quarantine-days", "36501", "--confirm-server-stopped", "--confirm-purge"},
+		{"--qdrant-url", "u", "--collection", "c", "--manifest", "m", "--journal", "j", "--snapshot-archive", "/qdrant/snapshots/recovery.snapshot", "--point-id", "42", "--minimum-quarantine-days", "30", "--confirm-server-stopped", "--confirm-purge"},
 	} {
 		if _, err := parsePurgeOptions(args); err == nil {
 			t.Fatalf("expected rejection for %v", args)

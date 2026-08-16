@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -17,6 +18,7 @@ import (
 
 const day = 24 * time.Hour
 const maxDays = 36500
+const managedQdrantSnapshotDir = "/qdrant/snapshots"
 
 type analyzeOptions struct {
 	qdrantURL               string
@@ -273,6 +275,9 @@ func parsePurgeOptions(args []string) (mutationOptions, error) {
 	if strings.TrimSpace(options.qdrantURL) == "" || strings.TrimSpace(options.collection) == "" || strings.TrimSpace(options.manifest) == "" || strings.TrimSpace(options.journal) == "" || strings.TrimSpace(options.snapshotArchive) == "" {
 		return mutationOptions{}, fmt.Errorf("qdrant URL, collection, manifest, journal, and snapshot archive are required")
 	}
+	if pathWithin(managedQdrantSnapshotDir, options.snapshotArchive) {
+		return mutationOptions{}, fmt.Errorf("snapshot archive must be outside Qdrant's managed snapshot directory")
+	}
 	if len(options.pointIDs) == 0 || len(options.pointIDs) > maintenance.MaxSelectionSize {
 		return mutationOptions{}, fmt.Errorf("explicit point IDs must be non-empty and bounded")
 	}
@@ -293,4 +298,20 @@ func parsePurgeOptions(args []string) (mutationOptions, error) {
 		return mutationOptions{}, fmt.Errorf("--confirm-purge is required")
 	}
 	return options, nil
+}
+
+func pathWithin(root, candidate string) bool {
+	root, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return false
+	}
+	candidate, err = filepath.Abs(filepath.Clean(candidate))
+	if err != nil {
+		return false
+	}
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
 }

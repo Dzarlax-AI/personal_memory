@@ -428,12 +428,14 @@ func WriteResultJournal(ctx context.Context, path string, result Result) error {
 	if err := os.Rename(tempPath, filepath.Clean(path)); err != nil {
 		return fmt.Errorf("replace result journal: %w", err)
 	}
-	if directory, err := os.Open(dir); err == nil {
-		err = directory.Sync()
-		_ = directory.Close()
-		if err != nil {
-			return fmt.Errorf("sync result journal directory: %w", err)
-		}
+	directory, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open result journal directory: %w", err)
+	}
+	err = directory.Sync()
+	_ = directory.Close()
+	if err != nil {
+		return fmt.Errorf("sync result journal directory: %w", err)
 	}
 	return nil
 }
