@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Implementation Plan: GitHub Issue #32 — Documentation site</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f4f6f8; --surface: #fff; --text: #172033; --muted: #5f6b7a; --border: #d9dee7; --accent: #2563eb; --warn: #b45309; --risk: #b91c1c; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #0d1117; --surface: #161b22; --text: #e6edf3; --muted: #9da7b3; --border: #30363d; --accent: #58a6ff; --warn: #f59e0b; --risk: #f87171; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; }
+    main { max-width: 1080px; margin: 0 auto; padding: 32px 20px 56px; }
+    header, section { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 22px; margin: 16px 0; }
+    h1, h2, h3 { line-height: 1.2; }
+    h1, h2 { margin-top: 0; }
+    h2 { font-size: 1.25rem; }
+    h3 { font-size: 1rem; margin-bottom: 6px; }
+    p, li { max-width: 94ch; }
+    code { background: color-mix(in srgb, var(--border) 45%, transparent); padding: 2px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); font-size: 12px; font-weight: 700; }
+    .meta { color: var(--muted); }
+    .callout { border-left: 4px solid var(--accent); }
+    .risk { border-left: 4px solid var(--risk); }
+    .approval { border-left: 4px solid var(--warn); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; vertical-align: top; padding: 9px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-size: 0.85rem; }
+    ul, ol { padding-left: 22px; }
+    li + li { margin-top: 6px; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="badge">Awaiting approval</span>
+    <h1>GitHub Issue #32: public documentation site</h1>
+    <p class="meta">Prepared 2026-08-16 for <code>Dzarlax-AI/personal_memory</code>. Scope: Starlight documentation, GitHub Pages publishing, content migration, and release-quality documentation checks.</p>
+  </header>
+
+  <section>
+    <h2>1. Summary</h2>
+    <p>Create a standalone public documentation site inside this repository under <code>website/</code>. Use Starlight to provide structured navigation, local search, responsive rendering, and static output. Publish through GitHub Pages. Keep the README as a concise repository landing page and keep internal AI plans outside the published site.</p>
+    <p>The initial site documents the current release plus explicit compatibility and upgrade guidance. Multi-version documentation, a custom domain, analytics, and interactive production-connected features are deferred.</p>
+  </section>
+
+  <section>
+    <h2>2. Current behavior</h2>
+    <ul>
+      <li>The README contains onboarding, tool reference, configuration, architecture, security, migration, maintenance, and operator procedures in one large page.</li>
+      <li>Authoritative long-form documents exist under <code>docs/</code>, but there is no unified navigation, search, static-site build, or documentation deployment.</li>
+      <li>The only GitHub Actions workflow builds and publishes the service image; documentation has no independent validation or publishing path.</li>
+      <li>Issue #32 requires installation, upgrade, rollback, compatibility, integration-bundle, environment, maintenance, release, and limitation documentation plus clean-install and upgrade rehearsals.</li>
+    </ul>
+  </section>
+
+  <section class="callout">
+    <h2>3. Desired behavior and assumptions</h2>
+    <ul>
+      <li>A reader can reach every issue #32 acceptance topic through task-oriented navigation and local search.</li>
+      <li>The site builds to static files and requires no runtime server, database, credentials, Qdrant, TEI, or production deployment.</li>
+      <li>GitHub Pages is the first hosting target and repository-path hosting works before any custom domain is configured.</li>
+      <li>Starlight and Astro versions are exact or lockfile-pinned. The project uses a committed package lock and reproducible CI installation.</li>
+      <li>Public documentation is English and contains only public concepts, repository facts, and safe placeholders.</li>
+      <li>Existing Markdown is migrated to one canonical public location. The implementation must not leave duplicate, independently editable copies.</li>
+      <li>The current release is the only active documentation line. Compatibility tables and upgrade guides communicate version boundaries without a version selector.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>4. Likely file changes</h2>
+    <table>
+      <thead><tr><th>Path</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>website/package.json</code>, lockfile, <code>astro.config.*</code>, <code>tsconfig.json</code></td><td>Minimal isolated Starlight project with repository Pages base-path support.</td></tr>
+        <tr><td><code>website/src/content.config.ts</code></td><td>Starlight docs collection and schema configuration.</td></tr>
+        <tr><td><code>website/src/content/docs/</code></td><td>Canonical public documentation pages organized by reader task.</td></tr>
+        <tr><td><code>website/src/assets/</code> and optional local styles</td><td>Only small local branding/customization assets if the default theme is insufficient; no remote CDN.</td></tr>
+        <tr><td><code>.github/workflows/docs.yml</code></td><td>Install, validate, build, upload, and deploy the Pages artifact with least-required permissions and concurrency protection.</td></tr>
+        <tr><td><code>README.md</code></td><td>Reduce duplication and link to canonical documentation while preserving a minimal quick start.</td></tr>
+        <tr><td><code>docs/*.md</code></td><td>Move or adapt existing public documents into the site, then update all repository references. Internal plan directories remain unchanged.</td></tr>
+        <tr><td><code>Makefile</code> (only if useful)</td><td>Add small discoverable local docs build/check commands; avoid coupling Go tests to Node downloads.</td></tr>
+        <tr><td><code>docs/ai-plans/2026-08-16-documentation-site.html</code></td><td>Record actual implementation, validation results, limitations, and follow-ups after approved work.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>5. Implementation steps</h2>
+    <ol>
+      <li>Scaffold the smallest supported Starlight project under <code>website/</code>, pin dependencies, configure the repository Pages base path, and verify an empty production build.</li>
+      <li>Define navigation for Getting Started, Upgrade and Rollback, Lifecycle, Integration Bundle, Operations, Maintenance, Reference, Architecture/Security, and Limitations.</li>
+      <li>Inventory README and existing docs sections against issue #32. Assign each topic one canonical destination and identify missing content before moving files.</li>
+      <li>Migrate existing authoritative documents, repair internal anchors and repository links, and add concise new pages for missing acceptance topics.</li>
+      <li>Derive command, environment-variable, default, and deprecation reference material from the current source/configuration. Do not invent compatibility claims.</li>
+      <li>Shorten the README while retaining product identity, minimal local start, development entry point, and prominent documentation links.</li>
+      <li>Add a GitHub Pages workflow that performs a locked install and production build, uploads only the generated site artifact, and deploys only from the default branch.</li>
+      <li>Run automated checks, content/safety audit, clean-install rehearsal, and non-production upgrade/rollback rehearsal. Update this plan with evidence.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>6. Test and validation plan</h2>
+    <h3>Automated</h3>
+    <ul>
+      <li>Locked dependency install from a clean package state.</li>
+      <li>Starlight/Astro production build using the same command as CI.</li>
+      <li>Internal-link and moved-document reference scan across README, workflows, source comments, and Markdown.</li>
+      <li>Repository secret/path scan focused on public site output and source content.</li>
+      <li><code>make test</code> to ensure documentation moves do not break repository checks or embedded evidence paths.</li>
+      <li>Inspect the generated output for correct repository base-path asset and navigation URLs.</li>
+    </ul>
+    <h3>Content acceptance</h3>
+    <ul>
+      <li>Installation from prerequisites through authenticated health/use verification.</li>
+      <li>Upgrade with snapshot, immutable image reference, compatibility check, post-upgrade verification, and rollback.</li>
+      <li>Lifecycle migration with dry-run, snapshot, apply, verification, resume/failure handling, and compare-before-restore rollback.</li>
+      <li>Integration bundle install, update, verify, rollback/removal, supported clients, and official UI/admin steps where required.</li>
+      <li>All environment variables, defaults, feature gates, deprecations, and unsafe development escape hatches.</li>
+      <li>Maintenance analyze/quarantine/restore/purge and deprecated <code>forget_old</code> semantics, including stopped-writer and snapshot/archive safety requirements.</li>
+      <li>Release checklist, operational commands, compatibility matrix, known limitations, and unsupported cases.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>7. Manual QA and rehearsals</h2>
+    <ul>
+      <li>Navigate the built site on desktop and a narrow mobile viewport; verify sidebar, search, heading anchors, code blocks, and dark mode.</li>
+      <li>Open the deployed Pages URL without authentication and verify assets, direct deep links, refresh behavior, and canonical links.</li>
+      <li>Follow the public clean-install guide in an isolated temporary environment with placeholders and notifications/invites irrelevant or disabled; record any missing prerequisite or ambiguous step.</li>
+      <li>Rehearse the upgrade and rollback sequence without production mutation: validate commands, expected evidence, snapshot/image pin requirements, and stop conditions against current binaries and compose examples.</li>
+      <li>Confirm destructive maintenance commands are visually distinct, explicit, and impossible to mistake for routine upgrade steps.</li>
+      <li>Verify no published page contains a real API key, personal domain, private IP, absolute workstation path, or production-only identifier.</li>
+    </ul>
+  </section>
+
+  <section class="risk">
+    <h2>8. Risks and mitigations</h2>
+    <ul>
+      <li><strong>Documentation drift:</strong> keep a single canonical copy, derive reference tables from code during review, and make the docs build a required PR check.</li>
+      <li><strong>Broken historical links:</strong> scan the full repository, preserve practical redirect/index pages when needed, and update workflow/source references in the same change.</li>
+      <li><strong>Pages base-path errors:</strong> test generated URLs and a deployed deep link before completion.</li>
+      <li><strong>Dependency overhead:</strong> isolate Node dependencies under <code>website/</code>, commit the lockfile, avoid custom plugins unless required, and keep Go CI independent.</li>
+      <li><strong>Unsafe operator guidance:</strong> preserve explicit confirmation, snapshot, stopped-writer, archive, and ambiguous-outcome constraints from authoritative source docs.</li>
+      <li><strong>Premature versioning:</strong> use compatibility and upgrade pages now; require a new design decision before duplicating version trees.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>9. Rollback plan</h2>
+    <ol>
+      <li>If the site build or Pages deployment is unreliable, disable/revert the docs workflow while keeping the README usable.</li>
+      <li>If content migration breaks consumers, restore the old Markdown paths or add small compatibility pages, then repair references before redeploying.</li>
+      <li>Revert the documentation-only pull request if necessary. No service image, database, memory collection, or production configuration rollback is required.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>10. Open questions and deferred scope</h2>
+    <ul>
+      <li>The final GitHub Pages URL depends on repository Pages settings; custom domain configuration is explicitly deferred.</li>
+      <li>Brand assets should use existing project artwork if available; otherwise the default Starlight presentation is sufficient for the first release.</li>
+      <li>Version selection, localization, analytics, external search, and interactive production tools are not part of issue #32.</li>
+    </ul>
+  </section>
+
+  <section class="approval">
+    <h2>11. Approval gate</h2>
+    <p><strong>No site scaffold, content migration, workflow change, or README rewrite will begin until the user explicitly approves this implementation plan.</strong></p>
+    <p>Approval authorizes implementation in the issue #32 branch, local validation, and preparation of a reviewable diff. Pushing, opening a pull request, merging, changing GitHub Pages settings, configuring DNS, or deploying production still requires separate explicit authorization.</p>
+  </section>
+</main>
+</body>
+</html>
