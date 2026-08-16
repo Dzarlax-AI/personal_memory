@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -769,21 +768,17 @@ func (c *Client) EnsureSnapshotArchive(ctx context.Context, snapshot SnapshotIde
 	if strings.TrimSpace(snapshot.Name) == "" || strings.TrimSpace(snapshot.Name) != snapshot.Name {
 		return "", fmt.Errorf("snapshot name is required")
 	}
-	cleanDestination := filepath.Clean(destination)
-	if strings.TrimSpace(destination) == "" || cleanDestination == "." {
-		return "", fmt.Errorf("snapshot archive path is required")
+	archive, err := openSnapshotArchiveDestination(destination)
+	if err != nil {
+		return "", err
 	}
+	defer archive.close()
 	if expectedSHA256 != "" {
-		return verifySnapshotArchive(cleanDestination, expectedSHA256)
+		return verifySnapshotArchive(archive, expectedSHA256)
 	}
-	existingDigest := ""
-	if _, err := os.Lstat(cleanDestination); err == nil {
-		existingDigest, err = snapshotArchiveDigest(cleanDestination)
-		if err != nil {
-			return "", err
-		}
-	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("inspect snapshot archive: %w", err)
+	existingDigest, exists, err := archive.digest()
+	if err != nil {
+		return "", err
 	}
 
 	requestURL := fmt.Sprintf("%s/collections/%s/snapshots/%s", c.url, c.collection, url.PathEscape(snapshot.Name))
@@ -801,17 +796,11 @@ func (c *Client) EnsureSnapshotArchive(ctx context.Context, snapshot SnapshotIde
 		return "", fmt.Errorf("download snapshot failed (status %d)", resp.StatusCode)
 	}
 
-	dir := filepath.Dir(cleanDestination)
-	tmp, err := os.CreateTemp(dir, ".personal-memory-snapshot-*")
+	tmp, tmpName, err := archive.createTemp()
 	if err != nil {
-		return "", fmt.Errorf("create snapshot archive: %w", err)
+		return "", err
 	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return "", fmt.Errorf("secure snapshot archive: %w", err)
-	}
+	defer archive.removeTemp(tmpName)
 	hash := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(tmp, hash), resp.Body); err != nil {
 		_ = tmp.Close()
@@ -825,31 +814,28 @@ func (c *Client) EnsureSnapshotArchive(ctx context.Context, snapshot SnapshotIde
 		return "", fmt.Errorf("close snapshot archive: %w", err)
 	}
 	downloadedDigest := fmt.Sprintf("%x", hash.Sum(nil))
-	if existingDigest != "" {
+	if exists {
 		if existingDigest != downloadedDigest {
 			return "", fmt.Errorf("existing snapshot archive does not match downloaded snapshot")
 		}
-		if err := syncDirectory(dir); err != nil {
-			return "", fmt.Errorf("sync snapshot archive directory: %w", err)
-		}
 		return downloadedDigest, nil
 	}
-	if err := os.Link(tmpName, cleanDestination); err != nil {
+	if err := archive.publish(tmpName); err != nil {
 		return "", fmt.Errorf("publish snapshot archive: %w", err)
-	}
-	if err := syncDirectory(dir); err != nil {
-		return "", fmt.Errorf("sync snapshot archive directory: %w", err)
 	}
 	return downloadedDigest, nil
 }
 
-func verifySnapshotArchive(path, expectedSHA256 string) (string, error) {
+func verifySnapshotArchive(archive *snapshotArchiveDestination, expectedSHA256 string) (string, error) {
 	if len(expectedSHA256) != sha256.Size*2 || strings.ToLower(expectedSHA256) != expectedSHA256 {
 		return "", fmt.Errorf("snapshot archive checksum is invalid")
 	}
-	actual, err := snapshotArchiveDigest(path)
+	actual, exists, err := archive.digest()
 	if err != nil {
 		return "", err
+	}
+	if !exists {
+		return "", fmt.Errorf("snapshot archive does not exist")
 	}
 	if actual != expectedSHA256 {
 		return "", fmt.Errorf("snapshot archive checksum mismatch")
@@ -857,36 +843,22 @@ func verifySnapshotArchive(path, expectedSHA256 string) (string, error) {
 	return actual, nil
 }
 
-func snapshotArchiveDigest(path string) (string, error) {
-	info, err := os.Lstat(path)
+func snapshotArchiveFileDigest(file *os.File) (string, error) {
+	info, err := file.Stat()
 	if err != nil {
 		return "", fmt.Errorf("inspect snapshot archive: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("snapshot archive is not a regular file")
 	}
 	if info.Mode().Perm() != 0o600 {
 		return "", fmt.Errorf("snapshot archive permissions must be 0600")
 	}
-	file, err := os.Open(path)
-	if err != nil {
-		return "", fmt.Errorf("open snapshot archive: %w", err)
-	}
-	defer file.Close()
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
 		return "", fmt.Errorf("read snapshot archive: %w", err)
 	}
 	return fmt.Sprintf("%x", hash.Sum(nil)), nil
-}
-
-func syncDirectory(path string) error {
-	dir, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
 }
 
 // DeleteSnapshot removes a snapshot by name.
