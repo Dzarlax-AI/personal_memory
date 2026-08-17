@@ -10,9 +10,10 @@ Paste this request into Codex or Claude Code:
 ```text
 Install a new local Personal Memory service and connect this client by following
 https://github.com/Dzarlax-AI/personal_memory/releases/latest/download/agent-setup.md
-Show me the exact release and planned changes before writing anything. Stop after
-MCP registration so I can reconnect, and do not claim completion until the fresh
-session discovers all required tools and get_stats succeeds.
+Show me the exact release and planned changes before writing anything. Stop at
+every reconnect required by the playbook, and do not claim completion until a
+fresh session loads the installed policy, discovers all required tools, and
+get_stats succeeds.
 ```
 
 The downloaded playbook is attached to a stable GitHub Release and names that
@@ -26,8 +27,9 @@ downloaded assets, three Docker services, loopback endpoint, client scope, and
 required reconnect, then asks for approval. Session 1 installs the service and
 registers `personal-memory` through the official client CLI. It must stop at
 `awaiting_reconnect`. A fresh Session 2 must discover all selected tools in its
-own catalog before installing the policy bundle, and finishes with read-only
-`get_stats` rather than a sample fact.
+own catalog before installing the policy bundle, then stops again. Session 3
+loads and verifies that policy, rediscovers the tools, and finishes with
+read-only `get_stats` rather than a sample fact.
 
 This first automatic path is **Memory-only**. The published local Compose asset
 has RAG disabled. If you want Documents, stop before approving changes and use

@@ -35,7 +35,7 @@ ChatGPT installation and verification return `manual_action_required`. The insta
 ## Quick commands for Codex and Claude Code
 
 New local users should normally start with the
-[two-session agent-assisted setup](../../getting-started/installation/#recommended-agent-assisted-local-setup).
+[checkpointed agent-assisted setup](../../getting-started/installation/#recommended-agent-assisted-local-setup).
 It performs client-native registration and requires real discovery before it
 invokes these quick commands. The commands below remain the complete manual
 fallback and the path for existing or remote servers.

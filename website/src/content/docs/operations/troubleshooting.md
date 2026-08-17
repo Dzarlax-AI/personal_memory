@@ -40,15 +40,19 @@ is a stop condition; do not overwrite it as a repair.
 | `waiting_for_embeddings` | Inspect structured status and the last 50 embedding log lines. Preserve the cache at the 30-minute deadline. |
 | `embeddings_ready` | Run the bounded `memory-mcp` start and exact health check. |
 | `service_ready` | Recheck conflicts, then register once through the client CLI. |
+| `registration_pending` | Inspect the client entry; accept only the exact endpoint and expected scope, and never repeat registration automatically. |
 | `awaiting_reconnect` | Open a fresh client session and inspect that session's complete tool catalog. |
+| `bundle_pending` | Run read-only `quick-verify`; never repeat `quick-install` automatically. |
+| `awaiting_policy_reconnect` | Open a fresh session that loads the policy, rediscover tools, verify the bundle, and call `get_stats`. |
 | `embeddings_failed` | Show bounded logs and request a fresh decision; do not restart automatically. |
 | `complete` | Use read-only verification; do not reinstall. |
 
 Safe service diagnostics are:
 
 ```bash
-docker compose ps
-docker compose ps --format json memory-embeddings
+docker compose ps --all
+docker compose ps --all --format json memory-embeddings
+docker compose port memory-mcp 8000
 docker compose logs --tail 50 memory-embeddings
 docker compose logs --tail 50 memory-mcp
 curl -fsS http://127.0.0.1:8000/health

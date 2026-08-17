@@ -34,6 +34,7 @@ required_literals=(
   "quick-install codex"
   "quick-verify codex"
   "get_stats"
+  "docker compose port memory-mcp 8000"
   "docker compose down -v"
   '"release_name": "compose.local-arm64.yaml"'
   '"local_name": "compose.yaml"'
@@ -54,7 +55,10 @@ required_states=(
   waiting_for_embeddings
   embeddings_ready
   service_ready
+  registration_pending
   awaiting_reconnect
+  bundle_pending
+  awaiting_policy_reconnect
   embeddings_failed
   complete
 )

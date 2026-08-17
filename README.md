@@ -27,16 +27,18 @@ For a new local installation, paste this into Codex or Claude Code:
 ```text
 Install a new local Personal Memory service and connect this client by following
 https://github.com/Dzarlax-AI/personal_memory/releases/latest/download/agent-setup.md
-Show me the exact release and planned changes before writing anything. Stop after
-MCP registration so I can reconnect, and do not claim completion until the fresh
-session discovers all required tools and get_stats succeeds.
+Show me the exact release and planned changes before writing anything. Stop at
+every reconnect required by the playbook, and do not claim completion until a
+fresh session loads the installed policy, discovers all required tools, and
+get_stats succeeds.
 ```
 
 The released guide is bound to one stable version and uses only its matching
 Compose file, integration binary, and checksums. It writes a privacy-safe
-checkpoint, stops after client-native MCP registration, and resumes in a fresh
-session for real tool discovery and bundle verification. The automated local
-flow is Memory-only. If you need Documents, stop before setup and use a
+checkpoint, stops after client-native MCP registration, resumes for real tool
+discovery and bundle installation, then requires a final fresh session to load
+and verify the policy. The automated local flow is Memory-only. If you need
+Documents, stop before setup and use a
 RAG-enabled service plus the [manual client guide](website/src/content/docs/getting-started/connect-clients.md).
 
 For a reproducible older release, replace `releases/latest/download` in the
