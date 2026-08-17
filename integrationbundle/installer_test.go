@@ -707,6 +707,26 @@ func TestInstallerLockCancellationAndRelease(t *testing.T) {
 	}
 }
 
+func TestLoadInstalledConfigRequiresVerifiedState(t *testing.T) {
+	b := loadTestBundle(t)
+	root := t.TempDir()
+	cfg := CapabilityConfig{Memory: CapabilityAvailable, Documents: CapabilityAvailable, Todoist: CapabilityDisabled}
+	discovery := Discovery{Performed: true, Tools: []string{"recall_facts", "store_fact", "update_fact", "set_fact_lifecycle", "search_documents"}}
+	if _, err := Install(InstallOptions{TargetRoot: root, Bundle: b, Client: conformance.ClientCodex, Config: cfg, Discovery: discovery}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadInstalledConfig(root, b, conformance.ClientCodex, nil)
+	if err != nil || got != cfg {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "skills", "personal-memory", "SKILL.md"), []byte("drift\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadInstalledConfig(root, b, conformance.ClientCodex, nil); err == nil {
+		t.Fatal("drifted state accepted")
+	}
+}
+
 func TestConcurrentInstallerCannotUndoPeer(t *testing.T) {
 	root := t.TempDir()
 	set := testSet(t, conformance.ClientCodex)

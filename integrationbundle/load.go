@@ -61,6 +61,29 @@ var canonicalTelemetryForbidden = []string{"prompts_responses_queries", "memory_
 // inventory so a rewritten manifest cannot bless weakened shared rules.
 const canonicalPolicySHA256 = "f7c4e9721d36bb1eb8b68f04946da295b07fb5895df536d5113cffbb9491510b"
 
+// EmbeddedSources returns private copies of the normative contract and public
+// conformance suite shipped with the standalone integration binary.
+func EmbeddedSources() ([]byte, []byte, error) {
+	contract, err := publicAssets.ReadFile("bundle/v1/model-usage-contract.md")
+	if err != nil {
+		return nil, nil, fmt.Errorf("read embedded contract: %w", err)
+	}
+	suite, err := publicAssets.ReadFile("bundle/v1/scenarios.json")
+	if err != nil {
+		return nil, nil, fmt.Errorf("read embedded conformance suite: %w", err)
+	}
+	return append([]byte(nil), contract...), append([]byte(nil), suite...), nil
+}
+
+// LoadEmbedded validates and loads the completely self-contained public bundle.
+func LoadEmbedded() (*Bundle, error) {
+	contract, suite, err := EmbeddedSources()
+	if err != nil {
+		return nil, err
+	}
+	return Load(contract, suite)
+}
+
 // Load loads embedded public bundle sources and binds them to the exact
 // normative contract and public conformance suite supplied by the caller.
 func Load(contractSource, suiteSource []byte) (*Bundle, error) {

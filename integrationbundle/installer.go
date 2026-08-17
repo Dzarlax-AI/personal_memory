@@ -186,6 +186,39 @@ func PlanUpdate(o InstallOptions) (InstallPlan, error)  { return plan(o, true) }
 func Install(o InstallOptions) (Result, error)          { return apply(o, false) }
 func Update(o InstallOptions) (Result, error)           { return apply(o, true) }
 
+// LoadInstalledConfig returns the capability configuration only after the
+// existing installation state and every managed artifact have been verified.
+func LoadInstalledConfig(targetRoot string, bundle *Bundle, client conformance.ClientFamily, ctx context.Context) (CapabilityConfig, error) {
+	r, err := openValidatedRoot(targetRoot)
+	if err != nil {
+		return CapabilityConfig{}, err
+	}
+	defer func() { _ = r.Close() }()
+	lock, err := r.mutation.lock(ctx, false)
+	if err != nil {
+		return CapabilityConfig{}, err
+	}
+	defer func() { _ = lock.Close() }()
+	st, exists, err := readState(r, client)
+	if err != nil || !exists {
+		return CapabilityConfig{}, fmt.Errorf("verified installation state is required")
+	}
+	if err = compatibleState(st, client); err != nil {
+		return CapabilityConfig{}, err
+	}
+	set, err := renderClient(bundle, client, st.CapabilityConfig)
+	if err != nil {
+		return CapabilityConfig{}, err
+	}
+	if err = validateInstalledState(r, st, set, true); err != nil {
+		return CapabilityConfig{}, err
+	}
+	if err = verifyOwned(r, st); err != nil {
+		return CapabilityConfig{}, err
+	}
+	return st.CapabilityConfig, nil
+}
+
 func plan(o InstallOptions, update bool) (InstallPlan, error) {
 	set, err := resolveInstallSet(o)
 	if err != nil {
@@ -1059,6 +1092,10 @@ func inventoryShapeMatches(st installState, active []activeArtifact) bool {
 func anyAvailable(c CapabilityConfig) bool {
 	return c.Memory == CapabilityAvailable || c.Documents == CapabilityAvailable || c.Todoist == CapabilityAvailable
 }
+
+// RequiredTools returns the exact discovery inventory for a capability preset.
+func RequiredTools(c CapabilityConfig) []string { return missingTools(c, nil) }
+
 func missingTools(c CapabilityConfig, got []string) []string {
 	have := map[string]bool{}
 	for _, x := range got {
