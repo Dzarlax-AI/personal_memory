@@ -28,7 +28,7 @@ grep 'compose.local-arm64.yaml' SHA256SUMS | shasum -a 256 -c -
 mv compose.local-arm64.yaml compose.yaml
 ```
 
-For reproducible installation or rollback, replace `latest` in both URLs with `download/vX.Y.Z`, using the exact desired release.
+For reproducible installation or rollback, replace `latest/download` in both URLs with `download/vX.Y.Z`, using the exact desired release.
 
 ### Windows PowerShell
 

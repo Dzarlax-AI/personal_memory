@@ -40,6 +40,26 @@ if "$repo_root/scripts/verify-local-release.sh" "$scratch/optional-feature" >/de
   exit 1
 fi
 
+declare -a critical_environment_mutations=(
+  'MCP_PORT: "8000"|MCP_PORT: "9000"'
+  'QDRANT_URL: http://memory-qdrant:6333|QDRANT_URL: http://memory-qdrant:7333'
+  'EMBED_URL: http://memory-embeddings:80|EMBED_URL: http://memory-embeddings:81'
+  'ADOPT_EXISTING_EMBEDDING_IDENTITY: "false"|ADOPT_EXISTING_EMBEDDING_IDENTITY: "true"'
+)
+for index in "${!critical_environment_mutations[@]}"; do
+  mutation=${critical_environment_mutations[$index]}
+  before=${mutation%%|*}
+  after=${mutation#*|}
+  candidate="$scratch/critical-environment-$index"
+  cp -R "$scratch/valid" "$candidate"
+  sed -i.bak "s|$before|$after|" "$candidate/compose.local-amd64.yaml"
+  rm "$candidate/compose.local-amd64.yaml.bak"
+  if "$repo_root/scripts/verify-local-release.sh" "$candidate" >/dev/null 2>&1; then
+    echo "validator accepted unsafe critical environment mutation: $before" >&2
+    exit 1
+  fi
+done
+
 cp -R "$scratch/valid" "$scratch/bind-mount"
 sed -i.bak 's|tei_cache:/data|/tmp:/data|' "$scratch/bind-mount/compose.local-amd64.yaml"
 rm "$scratch/bind-mount/compose.local-amd64.yaml.bak"

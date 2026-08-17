@@ -50,7 +50,11 @@ def main() -> None:
         fail("memory-mcp port must be exactly 127.0.0.1:8000:8000")
 
     environment = services["memory-mcp"].get("environment", {})
+    embed_port = "80" if architecture == "amd64" else "8080"
     required = {
+        "MCP_PORT": "8000",
+        "QDRANT_URL": "http://memory-qdrant:6333",
+        "EMBED_URL": f"http://memory-embeddings:{embed_port}",
         "ALLOW_INSECURE_AUTH": "true",
         "OAUTH_ENABLED": "false",
         "ENABLE_RAG": "false",
@@ -59,6 +63,7 @@ def main() -> None:
         "EMBED_MODEL": "intfloat/multilingual-e5-small",
         "EMBED_MODEL_REVISION": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
         "EMBED_INPUT_PROFILE": "legacy-raw-v1",
+        "ADOPT_EXISTING_EMBEDDING_IDENTITY": "false",
     }
     for key, value in required.items():
         if str(environment.get(key, "")).lower() != value.lower():
