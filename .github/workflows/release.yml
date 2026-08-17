@@ -1,0 +1,201 @@
+name: Publish release artifacts
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a stable semantic version tag
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "release tags must match vX.Y.Z; got: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - run: make dev-deps
+      - run: go test ./... -count=1
+      - run: ./scripts/test-local-release.sh
+
+  build-app:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: true
+          tags: |
+            ghcr.io/dzarlax-ai/personal-memory:${{ github.ref_name }}
+            ghcr.io/dzarlax-ai/personal-memory:sha-${{ github.sha }}
+
+  build-tei-arm64:
+    needs: validate
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      upstream_commit: ${{ steps.source.outputs.commit }}
+      upstream_version: ${{ steps.source.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: personal-memory
+      - name: Read reviewed TEI source identity
+        id: source
+        working-directory: personal-memory
+        shell: bash
+        run: |
+          source deploy/local/tei-arm64-source.env
+          echo "repository=${TEI_UPSTREAM_REPOSITORY}" >> "$GITHUB_OUTPUT"
+          echo "commit=${TEI_UPSTREAM_COMMIT}" >> "$GITHUB_OUTPUT"
+          echo "version=${TEI_UPSTREAM_VERSION}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.source.outputs.repository }}
+          ref: ${{ steps.source.outputs.commit }}
+          persist-credentials: false
+          path: tei-source
+      - name: Install reviewed ARM64 Dockerfile
+        run: cp personal-memory/deploy/local/Dockerfile.tei-arm64 tei-source/Dockerfile.personal-memory-arm64
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: tei-source
+          file: tei-source/Dockerfile.personal-memory-arm64
+          platforms: linux/arm64
+          push: true
+          provenance: true
+          build-args: |
+            GIT_SHA=${{ steps.source.outputs.commit }}
+            DOCKER_LABEL=${{ github.ref_name }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ steps.source.outputs.repository }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.commit }}
+            org.opencontainers.image.version=${{ steps.source.outputs.version }}
+          tags: ghcr.io/dzarlax-ai/personal-memory-tei-arm64:${{ github.ref_name }}
+
+  publish-assets:
+    needs: [build-app, build-tei-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      APP_IMAGE: ghcr.io/dzarlax-ai/personal-memory@${{ needs.build-app.outputs.digest }}
+      TEI_AMD64_IMAGE: ghcr.io/huggingface/text-embeddings-inference@sha256:492506e6a76ce6d0fd834a49f69bee4134f5b37de06052519d358a3d5387434d
+      TEI_ARM64_IMAGE: ghcr.io/dzarlax-ai/personal-memory-tei-arm64@${{ needs.build-tei-arm64.outputs.digest }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - name: Verify dependency platforms
+        shell: bash
+        run: |
+          docker buildx imagetools inspect "$APP_IMAGE" | grep -q 'Platform:.*linux/amd64'
+          docker buildx imagetools inspect "$APP_IMAGE" | grep -q 'Platform:.*linux/arm64'
+          docker buildx imagetools inspect "$TEI_AMD64_IMAGE" | grep -q 'Platform:.*linux/amd64'
+          docker buildx imagetools inspect "$TEI_ARM64_IMAGE" | grep -q 'Platform:.*linux/arm64'
+          docker buildx imagetools inspect qdrant/qdrant@sha256:f1c7272cdac52b38c1a0e89313922d940ba50afd90d593a1605dbbc214e66ffb | grep -q 'Platform:.*linux/amd64'
+          docker buildx imagetools inspect qdrant/qdrant@sha256:f1c7272cdac52b38c1a0e89313922d940ba50afd90d593a1605dbbc214e66ffb | grep -q 'Platform:.*linux/arm64'
+      - name: Render local Compose assets
+        run: |
+          ./scripts/render-local-release.sh \
+            --app-image "$APP_IMAGE" \
+            --tei-amd64-image "$TEI_AMD64_IMAGE" \
+            --tei-arm64-image "$TEI_ARM64_IMAGE" \
+            --output release-assets
+      - name: Record ARM64 TEI provenance
+        shell: bash
+        env:
+          TEI_UPSTREAM_COMMIT: ${{ needs.build-tei-arm64.outputs.upstream_commit }}
+          TEI_UPSTREAM_VERSION: ${{ needs.build-tei-arm64.outputs.upstream_version }}
+        run: |
+          {
+            echo "upstream_repository=https://github.com/huggingface/text-embeddings-inference"
+            echo "upstream_commit=${TEI_UPSTREAM_COMMIT}"
+            echo "upstream_version=${TEI_UPSTREAM_VERSION}"
+            echo "image=${TEI_ARM64_IMAGE}"
+          } > release-assets/TEI_ARM64_PROVENANCE.txt
+          (
+            cd release-assets
+            shasum -a 256 TEI_ARM64_PROVENANCE.txt >> SHA256SUMS
+          )
+      - name: Create draft, upload assets, and publish release
+        shell: bash
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            if [[ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" != "true" ]]; then
+              echo "release $GITHUB_REF_NAME is already published; refusing to replace immutable assets" >&2
+              exit 1
+            fi
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --draft \
+              --verify-tag \
+              --generate-notes \
+              --title "$GITHUB_REF_NAME"
+          fi
+
+          gh release upload "$GITHUB_REF_NAME" \
+            release-assets/compose.local-amd64.yaml \
+            release-assets/compose.local-arm64.yaml \
+            release-assets/TEI_ARM64_PROVENANCE.txt \
+            release-assets/SHA256SUMS \
+            --clobber
+
+          expected_assets=(
+            compose.local-amd64.yaml
+            compose.local-arm64.yaml
+            TEI_ARM64_PROVENANCE.txt
+            SHA256SUMS
+          )
+          expected_asset_list="$(printf '%s\n' "${expected_assets[@]}" | sort)"
+          release_asset_list="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' | sort)"
+          if [[ "$release_asset_list" != "$expected_asset_list" ]]; then
+            echo "draft release asset set does not match the expected immutable set" >&2
+            diff <(printf '%s\n' "$expected_asset_list") <(printf '%s\n' "$release_asset_list") || true
+            exit 1
+          fi
+
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
