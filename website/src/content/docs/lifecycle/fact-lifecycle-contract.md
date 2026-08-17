@@ -8,7 +8,7 @@ This document defines how Personal Memory classifies stored facts as current con
 
 ## States
 
-Every fact has one normalized lifecycle state:
+Every fact with valid lifecycle metadata has one normalized lifecycle state:
 
 | State | Meaning | Included in default current-context reads |
 |---|---|---|
@@ -18,6 +18,8 @@ Every fact has one normalized lifecycle state:
 | `disputed` | Contested or unresolved and unsafe as default truth | No |
 
 An explicit state is classification metadata, not a deletion or retention instruction.
+
+Malformed explicit lifecycle metadata is represented as an invalid normalized view, not as one of these four valid states, and is excluded from current-context reads.
 
 ## Qdrant payload fields
 

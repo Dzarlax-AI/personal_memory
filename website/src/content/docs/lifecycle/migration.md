@@ -4,6 +4,8 @@ title: Lifecycle migration
 
 Lifecycle migration never runs at startup. Preview is read-only; do not pass write confirmations or a manifest:
 
+The published container installs this executable at `/personal-memory-migrate-lifecycle`; locally built binaries may use a different path.
+
 ```bash
 /personal-memory-migrate-lifecycle
 ```

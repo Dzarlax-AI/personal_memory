@@ -11,6 +11,7 @@ For client behavior policy, build and install the versioned bundle with explicit
 
 ```bash
 go build -o ./memory-integration ./cmd/memory-integration
+mkdir -p "$HOME/.codex"
 ./memory-integration install --client codex --target-root "$HOME/.codex" \
   --capability memory=disabled --capability documents=disabled --capability todoist=disabled
 ./memory-integration verify --client codex --target-root "$HOME/.codex" \

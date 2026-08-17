@@ -49,6 +49,12 @@ go build -o ./memory-integration ./cmd/memory-integration
 
 The target directory must already exist. For safe filesystem mutation, bundle `0.1.0` supports only Darwin and Linux. Rendering and installation mutations are deliberately unsupported on other operating systems.
 
+Create the configuration roots before using the examples below:
+
+```bash
+mkdir -p "$HOME/.codex" "$HOME/.claude"
+```
+
 ## Capability discovery
 
 Capabilities describe the tools available to the client session. `ordinary_context` is always required. The optional states are `available`, `disabled`, or `unavailable` for Memory, Documents, and Todoist.

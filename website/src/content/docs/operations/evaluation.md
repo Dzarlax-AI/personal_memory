@@ -305,7 +305,7 @@ go run ./cmd/eval-memory run \
   --dataset evaldata/private/my-v3-live-set.json \
   --qdrant-url http://127.0.0.1:6333 \
   --embed-url http://127.0.0.1:8080 \
-  --documents-root /root/documents/personal \
+  --documents-root /path/to/private/documents \
   --json eval-results/private.json \
   --markdown eval-results/private.md
 ```

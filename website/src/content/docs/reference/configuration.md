@@ -11,7 +11,7 @@ Use `.env` (not source control) for deployment values. Required values are enfor
 | `MCP_PORT` | `8000` | HTTP port; integer 1–65535. |
 | `MEMORY_DOMAIN` | none | Required by the Compose/Traefik deployment; also supplies OAuth resource defaults. |
 | `API_KEY` | none | Required unless OAuth is enabled or isolated development enables `ALLOW_INSECURE_AUTH`; always required for Todoist. |
-| `ALLOW_INSECURE_AUTH` | `false` | Development-only escape hatch; never use in production. |
+| `ALLOW_INSECURE_AUTH` | `false` | Isolated-development escape hatch for `/memory` without API-key/OAuth auth and for Viz without `VIZ_PROXY_SECRET`; it never removes Todoist's `API_KEY` requirement. Never enable in staging or production. |
 | `QDRANT_URL` | `http://memory-qdrant:6333` | Qdrant base URL. |
 | `EMBED_URL` | `http://memory-embeddings:80` | TEI base URL. |
 | `EMBED_MODEL` | `intfloat/multilingual-e5-small` | Expected embedding model ID. |

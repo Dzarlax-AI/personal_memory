@@ -2,7 +2,7 @@
 
 **Issue:** #32 — Ship upgrade, rollback, compatibility, and integration-bundle documentation
 **Date:** 2026-08-16
-**Status:** Approved direction; implementation pending plan approval
+**Status:** Approved and implemented
 
 ## Decision
 
