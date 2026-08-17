@@ -28,6 +28,45 @@ jobs:
       - run: make dev-deps
       - run: go test ./... -count=1
       - run: ./scripts/test-local-release.sh
+      - run: ./scripts/test-agent-setup.sh
+
+  validate-client-registration:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install release-supported client CLIs
+        shell: bash
+        run: |
+          source install/agent-setup-cli-versions.env
+          npm install --global \
+            "@openai/codex@$CODEX_CLI_VERSION" \
+            "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+          codex --version | grep -F "codex-cli $CODEX_CLI_VERSION"
+          claude --version | grep -F "$CLAUDE_CODE_VERSION"
+      - name: Verify client-native HTTP registration commands
+        shell: bash
+        run: |
+          endpoint=http://127.0.0.1:8000/memory
+
+          if codex mcp get personal-memory --json >/dev/null 2>&1; then
+            echo "unexpected pre-existing Codex MCP entry" >&2
+            exit 1
+          fi
+          codex mcp add personal-memory --url "$endpoint"
+          codex mcp get personal-memory --json | grep -F "$endpoint"
+
+          if claude mcp get personal-memory >/dev/null 2>&1; then
+            echo "unexpected pre-existing Claude Code MCP entry" >&2
+            exit 1
+          fi
+          claude mcp add --transport http personal-memory --scope user "$endpoint"
+          claude mcp get personal-memory | grep -F "$endpoint"
 
   build-app:
     needs: validate
@@ -166,7 +205,7 @@ jobs:
           if-no-files-found: error
 
   publish-assets:
-    needs: [build-app, build-tei-arm64, build-integration-binaries]
+    needs: [build-app, build-tei-arm64, build-integration-binaries, validate-client-registration]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -227,6 +266,16 @@ jobs:
             cd release-assets
             shasum -a 256 memory-integration-* >> SHA256SUMS
           )
+      - name: Render release-bound agent setup guide
+        shell: bash
+        run: |
+          ./scripts/render-agent-setup.sh \
+            --release "$GITHUB_REF_NAME" \
+            --output release-assets
+          (
+            cd release-assets
+            shasum -a 256 agent-setup.md >> SHA256SUMS
+          )
       - name: Create draft, upload assets, and publish release
         shell: bash
         run: |
@@ -251,6 +300,7 @@ jobs:
             release-assets/memory-integration-darwin-arm64 \
             release-assets/memory-integration-linux-amd64 \
             release-assets/memory-integration-linux-arm64 \
+            release-assets/agent-setup.md \
             release-assets/SHA256SUMS \
             --clobber
 
@@ -262,6 +312,7 @@ jobs:
             memory-integration-darwin-arm64
             memory-integration-linux-amd64
             memory-integration-linux-arm64
+            agent-setup.md
             SHA256SUMS
           )
           expected_asset_list="$(printf '%s\n' "${expected_assets[@]}" | sort)"

@@ -34,7 +34,13 @@ ChatGPT installation and verification return `manual_action_required`. The insta
 
 ## Quick commands for Codex and Claude Code
 
-Most users do not need the repository or a Go toolchain. Download the matching `memory-integration-{darwin|linux}-{amd64|arm64}` binary and `SHA256SUMS` from the [latest release](https://github.com/Dzarlax-AI/personal-memory/releases/latest), verify the checksum, and make the binary executable. The complete download example is in [Connect clients](../../getting-started/connect-clients/).
+New local users should normally start with the
+[two-session agent-assisted setup](../../getting-started/installation/#recommended-agent-assisted-local-setup).
+It performs client-native registration and requires real discovery before it
+invokes these quick commands. The commands below remain the complete manual
+fallback and the path for existing or remote servers.
+
+Most users do not need the repository or a Go toolchain. Download the matching `memory-integration-{darwin|linux}-{amd64|arm64}` binary and `SHA256SUMS` from the [latest release](https://github.com/Dzarlax-AI/personal_memory/releases/latest), verify the checksum, and make the binary executable. The complete download example is in [Connect clients](../../getting-started/connect-clients/).
 
 After registering the MCP endpoint and observing the Memory tools in a fresh client session:
 

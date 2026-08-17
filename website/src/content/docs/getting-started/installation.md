@@ -1,9 +1,45 @@
 ---
 title: Installation
-description: Start Personal Memory locally from immutable release assets, or use the production baseline.
+description: Ask Codex or Claude Code to install Personal Memory, or follow the complete manual paths.
 ---
 
-## Local installation
+## Recommended: agent-assisted local setup
+
+Paste this request into Codex or Claude Code:
+
+```text
+Install a new local Personal Memory service and connect this client by following
+https://github.com/Dzarlax-AI/personal_memory/releases/latest/download/agent-setup.md
+Show me the exact release and planned changes before writing anything. Stop after
+MCP registration so I can reconnect, and do not claim completion until the fresh
+session discovers all required tools and get_stats succeeds.
+```
+
+The downloaded playbook is attached to a stable GitHub Release and names that
+exact release internally. After resolving it, the agent must not mix in moving
+`latest` assets. For a reproducible older release, use
+`https://github.com/Dzarlax-AI/personal_memory/releases/download/vX.Y.Z/agent-setup.md`
+in the prompt.
+
+Before any change, the agent reports the release, platform, installation path,
+downloaded assets, three Docker services, loopback endpoint, client scope, and
+required reconnect, then asks for approval. Session 1 installs the service and
+registers `personal-memory` through the official client CLI. It must stop at
+`awaiting_reconnect`. A fresh Session 2 must discover all selected tools in its
+own catalog before installing the policy bundle, and finishes with read-only
+`get_stats` rather than a sample fact.
+
+This first automatic path is **Memory-only**. The published local Compose asset
+has RAG disabled. If you want Documents, stop before approving changes and use
+a service configured with `ENABLE_RAG=true`, a mounted `RAG_DOCUMENTS_DIR`, and
+the [manual client flow](../connect-clients/). Selecting Documents in the policy
+bundle cannot enable RAG on a Memory-only server.
+
+See [Troubleshooting](../../operations/troubleshooting/#agent-setup-checkpoints)
+for every resumable checkpoint and safe diagnostic. The manual service and
+client instructions remain complete fallbacks.
+
+## Manual fallback: local installation
 
 The local path requires Docker Engine or Docker Desktop with Docker Compose v2. It needs no Git checkout, source build, Traefik, DNS, TLS, `.env`, root-owned directory, or API key.
 
@@ -24,13 +60,17 @@ mkdir personal-memory
 cd personal-memory
 curl -fsSLO https://github.com/Dzarlax-AI/personal_memory/releases/latest/download/compose.local-arm64.yaml
 curl -fsSLO https://github.com/Dzarlax-AI/personal_memory/releases/latest/download/SHA256SUMS
-grep 'compose.local-arm64.yaml' SHA256SUMS | shasum -a 256 -c -
+if command -v shasum >/dev/null 2>&1; then
+  grep 'compose.local-arm64.yaml' SHA256SUMS | shasum -a 256 -c -
+else
+  grep 'compose.local-arm64.yaml' SHA256SUMS | sha256sum -c -
+fi
 mv compose.local-arm64.yaml compose.yaml
 ```
 
 For reproducible installation or rollback, replace `latest/download` in both URLs with `download/vX.Y.Z`, using the exact desired release.
 
-### Windows PowerShell
+### Windows PowerShell (manual service only)
 
 This example uses AMD64, which is the ordinary Windows Docker Desktop architecture:
 
@@ -43,6 +83,12 @@ $expected = ((Select-String -Path SHA256SUMS -Pattern 'compose.local-amd64.yaml'
 $actual = (Get-FileHash compose.yaml -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw "compose.yaml checksum mismatch" }
 ```
+
+Windows can run this local service, but the current release does not include a
+Windows `memory-integration` binary or the agent-assisted client flow. Treat it
+as service-only: register the MCP endpoint manually in a compatible client, or
+use a supported Darwin/Linux host for the complete policy-bundle journey. Do
+not download a Linux binary directly into a Windows client configuration.
 
 ### Start and observe the first model download
 

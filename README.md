@@ -20,7 +20,31 @@ MCP client -> Traefik -> Personal Memory (Go) -> TEI -> Qdrant
 
 `/memory` is the Streamable HTTP MCP endpoint. `/todoist` exists only when its feature is enabled. TEI and Qdrant are internal services. Before serving requests, the application verifies the configured embedding identity against every active collection.
 
-## Quick start: local computer
+## Recommended: ask Codex or Claude Code to set it up
+
+For a new local installation, paste this into Codex or Claude Code:
+
+```text
+Install a new local Personal Memory service and connect this client by following
+https://github.com/Dzarlax-AI/personal_memory/releases/latest/download/agent-setup.md
+Show me the exact release and planned changes before writing anything. Stop after
+MCP registration so I can reconnect, and do not claim completion until the fresh
+session discovers all required tools and get_stats succeeds.
+```
+
+The released guide is bound to one stable version and uses only its matching
+Compose file, integration binary, and checksums. It writes a privacy-safe
+checkpoint, stops after client-native MCP registration, and resumes in a fresh
+session for real tool discovery and bundle verification. The automated local
+flow is Memory-only. If you need Documents, stop before setup and use a
+RAG-enabled service plus the [manual client guide](website/src/content/docs/getting-started/connect-clients.md).
+
+For a reproducible older release, replace `releases/latest/download` in the
+prompt with `releases/download/vX.Y.Z`. Read the complete
+[agent-assisted setup explanation](website/src/content/docs/getting-started/installation.md),
+or use the manual path below.
+
+## Manual fallback: local service
 
 The local release needs only Docker Engine or Docker Desktop with Docker Compose v2. It uses published images, stores data in named volumes, and exposes only `http://127.0.0.1:8000/memory`. It needs no repository clone, build, Traefik, domain, `.env`, or API key.
 
@@ -31,7 +55,11 @@ mkdir personal-memory
 cd personal-memory
 curl -fsSLO https://github.com/Dzarlax-AI/personal_memory/releases/latest/download/compose.local-arm64.yaml
 curl -fsSLO https://github.com/Dzarlax-AI/personal_memory/releases/latest/download/SHA256SUMS
-grep 'compose.local-arm64.yaml' SHA256SUMS | shasum -a 256 -c -
+if command -v shasum >/dev/null 2>&1; then
+  grep 'compose.local-arm64.yaml' SHA256SUMS | shasum -a 256 -c -
+else
+  grep 'compose.local-arm64.yaml' SHA256SUMS | sha256sum -c -
+fi
 mv compose.local-arm64.yaml compose.yaml
 docker compose pull
 docker compose up -d memory-qdrant memory-embeddings
