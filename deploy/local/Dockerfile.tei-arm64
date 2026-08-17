@@ -1,0 +1,28 @@
+FROM rust:1.92-bookworm@sha256:e90e846de4124376164ddfbaab4b0774c7bdeef5e738866295e5a90a34a307a2 AS builder
+
+WORKDIR /usr/src/text-embeddings-inference
+ARG GIT_SHA
+ARG DOCKER_LABEL
+COPY backends backends
+COPY core core
+COPY router router
+COPY Cargo.toml Cargo.lock ./
+
+RUN cargo build --locked --release --bin text-embeddings-router \
+    --features candle,http --no-default-features
+
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
+
+ENV HUGGINGFACE_HUB_CACHE=/data \
+    PORT=80
+
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/src/text-embeddings-inference/target/release/text-embeddings-router /usr/local/bin/text-embeddings-router
+
+ENTRYPOINT ["text-embeddings-router"]
+CMD ["--json-output"]

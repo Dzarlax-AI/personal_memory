@@ -260,8 +260,23 @@ docker build -t personal-memory .
 ```
 Builder/runtime base images are digest-pinned. TEI, Qdrant, and the embedding model revision are immutable in repository compose. Browser assets are exact-version downloads checked against `build/browser-assets.sha256` before compilation.
 
+Stable releases attach validated standalone local Compose assets for
+`linux/amd64` and `linux/arm64`. The application image is multi-platform. AMD64
+uses the reviewed official TEI CPU digest; ARM64 uses
+`ghcr.io/dzarlax-ai/personal-memory-tei-arm64`, rebuilt for every release from
+the exact upstream commit in `deploy/local/tei-arm64-source.env` and then pinned
+by digest. Updating that source commit is an explicit dependency review, never
+an automatic `main`/`latest` update.
+
 ### CI/CD
-`.github/workflows/docker.yml`: on push to `main`, runs `go test` then builds and pushes to `ghcr.io/dzarlax-ai/personal-memory:{latest,sha}`.
+`.github/workflows/docker.yml`: on push to `main`, runs the repository gates,
+then builds and pushes a multi-platform
+`ghcr.io/dzarlax-ai/personal-memory:{latest,sha}` image.
+
+`.github/workflows/release.yml`: on a stable version tag, validates the tree,
+rebuilds the multi-platform application and pinned-source ARM64 TEI images,
+renders both local Compose assets, produces checksums and provenance, and
+creates or updates the matching GitHub Release.
 
 ### Deploy
 Production deploy configs live in `personal_ai_stack/deploy/memory/`. Deploy skill (`deploy-personal`) handles syncing configs and pulling the latest image on the VPS.

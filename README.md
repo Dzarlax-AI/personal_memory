@@ -20,9 +20,43 @@ MCP client -> Traefik -> Personal Memory (Go) -> TEI -> Qdrant
 
 `/memory` is the Streamable HTTP MCP endpoint. `/todoist` exists only when its feature is enabled. TEI and Qdrant are internal services. Before serving requests, the application verifies the configured embedding identity against every active collection.
 
-## Quick start
+## Quick start: local computer
 
-The checked-in Compose stack is a production-oriented baseline: it expects Docker, an external `traefik` network, HTTPS-capable Traefik, DNS for `mcp.<domain>`, and writable Qdrant data/snapshot directories.
+The local release needs only Docker Engine or Docker Desktop with Docker Compose v2. It uses published images, stores data in named volumes, and exposes only `http://127.0.0.1:8000/memory`. It needs no repository clone, build, Traefik, domain, `.env`, or API key.
+
+Choose the asset for your CPU (`amd64` for Intel/AMD, `arm64` for Apple Silicon or ARM64 Linux):
+
+```bash
+mkdir personal-memory
+cd personal-memory
+curl -fsSLO https://github.com/Dzarlax-AI/personal_memory/releases/latest/download/compose.local-arm64.yaml
+curl -fsSLO https://github.com/Dzarlax-AI/personal_memory/releases/latest/download/SHA256SUMS
+grep 'compose.local-arm64.yaml' SHA256SUMS | shasum -a 256 -c -
+mv compose.local-arm64.yaml compose.yaml
+docker compose pull
+docker compose up -d memory-qdrant memory-embeddings
+```
+
+For Intel/AMD, replace both occurrences of `arm64` with `amd64`. The first embedding-model download can be slow. Observe it without restarting it:
+
+```bash
+docker compose ps --format json memory-embeddings
+docker compose logs --tail 50 memory-embeddings
+```
+
+When `memory-embeddings` is healthy, start the application with a short bounded wait:
+
+```bash
+docker compose up -d --wait --wait-timeout 120 memory-mcp
+curl -fsS http://127.0.0.1:8000/health
+# ok
+```
+
+Do not change the published port to a non-loopback address: this intentionally unauthenticated mode is safe only on `127.0.0.1`. See the full [local installation instructions](website/src/content/docs/getting-started/installation.md) for Windows download commands, resume behavior, stop, diagnostics, and rollback.
+
+## Production baseline
+
+The checked-in Compose stack is production-oriented: it expects Docker, an external `traefik` network, HTTPS-capable Traefik, DNS for `mcp.<domain>`, and writable Qdrant data/snapshot directories.
 
 ```bash
 git clone https://github.com/Dzarlax-AI/personal_memory.git
@@ -52,7 +86,7 @@ curl -fsS https://mcp.example.com/health
 
 Connect clients to `https://mcp.example.com/memory` with `X-API-Key` or a Bearer API key. Todoist uses a distinct `/todoist` endpoint and needs explicit enablement.
 
-See [Upgrade and rollback](website/src/content/docs/operations/upgrade-rollback.md) for client-path verification and reverting to a previous immutable image.
+See [Upgrade and rollback](website/src/content/docs/operations/upgrade-rollback.md) for local and production rollback procedures.
 
 ## Development
 
