@@ -39,7 +39,7 @@ Use `.env` (not source control) for deployment values. Required values are enfor
 | `ENABLE_TODOIST` | `false` | Registers Todoist only when true; requires `TODOIST_TOKEN` and `API_KEY`. |
 | `TODOIST_TOKEN` | none | Todoist API token, only when enabled. |
 | `ENABLE_VIZ` | `false` | Registers visualization only when true. |
-| `VIZ_PROXY_SECRET` | none | Required when Viz is enabled; Traefik overwrites the trusted header after ForwardAuth. |
+| `VIZ_PROXY_SECRET` | none | Required when Viz is enabled unless isolated development explicitly sets `ALLOW_INSECURE_AUTH=true`; in production, Traefik overwrites the trusted header after ForwardAuth. |
 | `VIZ_SIMILARITY_THRESHOLD` | `0.65` | Visualization graph cosine threshold. |
 | `ENABLE_RAG` | `false` | Enables document search and indexing. |
 | `RAG_DOCUMENTS_DIR` | `/root/documents/personal` | Readable document root. |
