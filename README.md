@@ -39,11 +39,11 @@ checkpoint, stops after client-native MCP registration, resumes for real tool
 discovery and bundle installation, then requires a final fresh session to load
 and verify the policy. The automated local flow is Memory-only. If you need
 Documents, stop before setup and use a
-RAG-enabled service plus the [manual client guide](website/src/content/docs/getting-started/connect-clients.md).
+RAG-enabled service plus the [manual client guide](https://dzarlax-ai.github.io/personal_memory/getting-started/connect-clients/).
 
 For a reproducible older release, replace `releases/latest/download` in the
 prompt with `releases/download/vX.Y.Z`. Read the complete
-[agent-assisted setup explanation](website/src/content/docs/getting-started/installation.md),
+[agent-assisted setup explanation](https://dzarlax-ai.github.io/personal_memory/getting-started/installation/),
 or use the manual path below.
 
 ## Manual fallback: local service
@@ -82,7 +82,7 @@ curl -fsS http://127.0.0.1:8000/health
 # ok
 ```
 
-Do not change the published port to a non-loopback address: this intentionally unauthenticated mode is safe only on `127.0.0.1`. See the full [local installation instructions](website/src/content/docs/getting-started/installation.md) for Windows download commands, resume behavior, stop, diagnostics, and rollback.
+Do not change the published port to a non-loopback address: this intentionally unauthenticated mode is safe only on `127.0.0.1`. See the full [local installation instructions](https://dzarlax-ai.github.io/personal_memory/getting-started/installation/) for Windows download commands, resume behavior, stop, diagnostics, and rollback.
 
 ## Production baseline
 
@@ -116,7 +116,7 @@ curl -fsS https://mcp.example.com/health
 
 Connect clients to `https://mcp.example.com/memory` with `X-API-Key` or a Bearer API key. Todoist uses a distinct `/todoist` endpoint and needs explicit enablement.
 
-See [Upgrade and rollback](website/src/content/docs/operations/upgrade-rollback.md) for local and production rollback procedures.
+See [Upgrade and rollback](https://dzarlax-ai.github.io/personal_memory/operations/upgrade-rollback/) for local and production rollback procedures.
 
 ## Development
 
@@ -132,21 +132,21 @@ Documentation targets are separate from `make test`; ordinary Go checks do not d
 
 ## Documentation
 
-The canonical public source is in [`website/src/content/docs`](website/src/content/docs). The site will publish at `https://dzarlax-ai.github.io/personal_memory/` after GitHub Pages is enabled.
+The public documentation is available at [dzarlax-ai.github.io/personal_memory](https://dzarlax-ai.github.io/personal_memory/). Contributors can edit its canonical source in [`website/src/content/docs`](website/src/content/docs).
 
-- [Installation](website/src/content/docs/getting-started/installation.md)
-- [Connect clients](website/src/content/docs/getting-started/connect-clients.md)
-- [Upgrade and rollback](website/src/content/docs/operations/upgrade-rollback.md)
-- [Backups and releases](website/src/content/docs/operations/backups-release.md)
-- [Troubleshooting](website/src/content/docs/operations/troubleshooting.md)
-- [Fact lifecycle](website/src/content/docs/lifecycle/fact-lifecycle-contract.md)
-- [Lifecycle migration](website/src/content/docs/lifecycle/migration.md)
-- [Maintenance](website/src/content/docs/maintenance/index.md)
-- [MCP tools](website/src/content/docs/reference/tools.md)
-- [Configuration](website/src/content/docs/reference/configuration.md)
-- [Compatibility](website/src/content/docs/reference/compatibility.md)
-- [Architecture and security](website/src/content/docs/architecture-security.md)
-- [Limitations](website/src/content/docs/limitations.md)
-- [Client integration bundle](website/src/content/docs/integration-bundle/guide.md)
-- [Retrieval evaluation](website/src/content/docs/operations/evaluation.md)
-- [Conformance suite](website/src/content/docs/operations/conformance.md)
+- [Installation](https://dzarlax-ai.github.io/personal_memory/getting-started/installation/)
+- [Connect clients](https://dzarlax-ai.github.io/personal_memory/getting-started/connect-clients/)
+- [Upgrade and rollback](https://dzarlax-ai.github.io/personal_memory/operations/upgrade-rollback/)
+- [Backups and releases](https://dzarlax-ai.github.io/personal_memory/operations/backups-release/)
+- [Troubleshooting](https://dzarlax-ai.github.io/personal_memory/operations/troubleshooting/)
+- [Fact lifecycle](https://dzarlax-ai.github.io/personal_memory/lifecycle/fact-lifecycle-contract/)
+- [Lifecycle migration](https://dzarlax-ai.github.io/personal_memory/lifecycle/migration/)
+- [Maintenance](https://dzarlax-ai.github.io/personal_memory/maintenance/)
+- [MCP tools](https://dzarlax-ai.github.io/personal_memory/reference/tools/)
+- [Configuration](https://dzarlax-ai.github.io/personal_memory/reference/configuration/)
+- [Compatibility](https://dzarlax-ai.github.io/personal_memory/reference/compatibility/)
+- [Architecture and security](https://dzarlax-ai.github.io/personal_memory/architecture-security/)
+- [Limitations](https://dzarlax-ai.github.io/personal_memory/limitations/)
+- [Client integration bundle](https://dzarlax-ai.github.io/personal_memory/integration-bundle/guide/)
+- [Retrieval evaluation](https://dzarlax-ai.github.io/personal_memory/operations/evaluation/)
+- [Conformance suite](https://dzarlax-ai.github.io/personal_memory/operations/conformance/)
