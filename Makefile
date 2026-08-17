@@ -1,4 +1,4 @@
-.PHONY: help dev-deps verify-assets build test vet eval-public eval-public-v4 conformance-public integration-bundle-public tidy clean
+.PHONY: help dev-deps verify-assets build test vet eval-public eval-public-v4 conformance-public integration-bundle-public docs-install docs-check docs-build tidy clean
 
 DS_VERSION ?= v1.4.0
 DS_DIR := internal/viz/static/assets/vendor
@@ -16,6 +16,9 @@ help:
 	@echo "  make eval-public-v4 — replay public document-routing evidence"
 	@echo "  make conformance-public — run the public model-memory conformance suite"
 	@echo "  make integration-bundle-public — validate bundle artifacts against the public suite"
+	@echo "  make docs-install — install documentation dependencies"
+	@echo "  make docs-check — validate documentation"
+	@echo "  make docs-build — build documentation"
 	@echo "  make clean     — remove built binaries and the vendored browser bundles"
 
 dev-deps:
@@ -139,6 +142,15 @@ integration-bundle-public:
 			--json "integration-results/$$client.json" \
 			--markdown "integration-results/$$client.md"; \
 	done
+
+docs-install:
+	cd website && npm ci
+
+docs-check:
+	cd website && ASTRO_TELEMETRY_DISABLED=1 npm run check
+
+docs-build:
+	cd website && ASTRO_TELEMETRY_DISABLED=1 npm run build
 
 tidy:
 	go mod tidy

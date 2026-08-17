@@ -1,0 +1,3 @@
+# Documentation
+
+Public product and operator documentation lives in [`website/src/content/docs`](../website/src/content/docs) and is published as the documentation site. Thin compatibility pointers at former public-document paths link there without duplicating content. The source-identity-bound [`model-usage-contract.md`](model-usage-contract.md) remains here because its exact SHA-256 is part of the integration bundle contract; the site links to it without duplicating the normative body. This directory also keeps internal engineering material such as `ai-plans/` and `superpowers/`; those are not public site content.

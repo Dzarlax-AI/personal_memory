@@ -122,7 +122,7 @@ supersedes        []string  — normalized IDs replaced by this fact
 superseded_by     []string  — normalized IDs replacing this fact; required for superseded state
 ```
 
-The normative lifecycle contract, including visibility and rollout behavior, is in `docs/lifecycle.md`.
+The normative lifecycle contract, including visibility and rollout behavior, is in `website/src/content/docs/lifecycle/fact-lifecycle-contract.md`.
 
 ### Point IDs
 
@@ -181,7 +181,7 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - Duplicate prevention is unchanged except that a valid superseded fact does not block a new current fact. Related-fact feedback does not auto-supersede, classify disputes, or invoke an LLM.
 - `recall_facts` defaults to valid, non-expired current facts; payloads with no lifecycle fields are legacy current. `history`, `as_of`, and `include_all` expose every valid, non-expired state and mark disputed facts uncertain. `as_of` changes only the expiry reference and does not reconstruct historical intervals. Operational context remains current-only.
 - Structured recall results expose `semantic_score`/`semantic_rank`, lifecycle-adjusted `final_rank`, normalized lifecycle, decision, safe reason codes, and `point_id`; the text fallback omits point IDs and lifecycle relationship IDs. Lifecycle ranking uses a bounded semantic candidate pool, so canonical current facts rank first only when present in that pool and vector scores never change. Recall cache identity includes lifecycle mode and the applicable `as_of` date.
-- `find_related`, `list_facts`, `export_facts`, `get_stats`, and Viz retain history-inspection visibility as defined in `docs/lifecycle.md`; malformed explicit lifecycle metadata remains inspectable but is never current truth.
+- `find_related`, `list_facts`, `export_facts`, `get_stats`, and Viz retain history-inspection visibility as defined in `website/src/content/docs/lifecycle/fact-lifecycle-contract.md`; malformed explicit lifecycle metadata remains inspectable but is never current truth.
 - Lifecycle writes are explicit and validated. `store_fact`/`update_fact` preserve old-client behavior when lifecycle inputs are omitted; `set_fact_lifecycle` uses exact IDs and a lifecycle-only ordered Qdrant batch without re-embedding.
 - Lifecycle migration is standalone, dry-run-first, manifest-backed, and never runs at startup. Apply/rollback require stopped writers; rollback uses compare-before-restore and never overwrites post-migration lifecycle changes.
 
@@ -247,7 +247,7 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - `integrationbundle` mutations are supported only on Darwin and Linux, use no-follow root-relative writes, locking, verified state, bounded backups, and compare-before-restore recovery. User override files are never overwritten.
 - `conformance-adapter` emits normalized bundle-policy/artifact traces only from canonical enum-only policy recipes, never from suite assertions. Recipes are identity-bound and authorized by referenced rules; selected rendered artifacts must decode to the matching canonical policy/config. It never reads real prompts, tools, credentials, endpoints, or client state, and its reports are not live proprietary-client evidence.
 - `make integration-bundle-public` builds the adapter and runs all 32 public scenarios for all four client families without Qdrant, TEI, model downloads, or credentials. Generated output belongs in ignored `integration-results/`.
-- Public usage and evidence semantics are documented in `docs/integration-bundle.md`.
+- Public usage and evidence semantics are documented in `website/src/content/docs/integration-bundle/guide.md`.
 
 ### Local build
 ```bash
