@@ -28,8 +28,8 @@ title: Troubleshooting
 
 The agent-assisted path stores
 `$HOME/personal-memory/agent-setup-state.json` with owner-only permissions. A
-resume must validate the bound release, platform, `$HOME` path token, client,
-Memory-only preset, endpoint, artifact names and hashes before doing anything.
+resume must validate the bound release, platform, `install_path`, client,
+`capabilities=memory-only`, endpoint, artifact names and hashes before doing anything.
 A mismatch, unrelated directory, symlink, malformed JSON, or weakened file mode
 is a stop condition; do not overwrite it as a repair.
 

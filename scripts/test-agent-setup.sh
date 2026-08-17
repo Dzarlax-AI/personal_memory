@@ -12,6 +12,10 @@ if grep -Fq 'Resolve the newest stable GitHub release' "$scratch/valid/agent-set
   echo "agent setup resolves a moving release instead of its bound release" >&2
   exit 1
 fi
+if grep -Eq 'path token|client, preset' "$scratch/valid/agent-setup.md"; then
+  echo "agent setup uses checkpoint aliases instead of JSON field names" >&2
+  exit 1
+fi
 
 registration_state_line=$(grep -nF 'Write `registration_pending` before executing' "$scratch/valid/agent-setup.md" | cut -d: -f1)
 registration_mutation_line=$(grep -nF 'codex mcp add personal-memory --url' "$scratch/valid/agent-setup.md" | cut -d: -f1 | head -1)

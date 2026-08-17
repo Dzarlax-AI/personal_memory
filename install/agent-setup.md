@@ -83,8 +83,8 @@ The schema is:
 
 `platform` must be one of `darwin-amd64`, `darwin-arm64`, `linux-amd64`, or
 `linux-arm64`. `client` must be `codex` or `claude`. The release, platform,
-path token, client, preset, endpoint, artifact names, and all three hashes must
-match before resuming. A missing, malformed, mismatched, symlinked, or
+`install_path`, client, `capabilities`, endpoint, artifact names, and all three
+hashes must match before resuming. A missing, malformed, mismatched, symlinked, or
 permission-weakened checkpoint is not compatible state: stop without rewriting
 it or the installation directory.
 
@@ -267,7 +267,7 @@ an ambiguous registration outcome: stop and request a fresh user decision.
 ### 1. Validate before continuing
 
 Read the checkpoint, require state `awaiting_reconnect`, and revalidate its
-schema, release, platform, `$HOME` path token, client, preset, endpoint,
+schema, release, platform, `install_path`, client, `capabilities`, endpoint,
 artifact names, hashes, mode, and non-symlink status. Recheck:
 
 - `docker compose ps --all`, exact `/health` response, and exactly one live
