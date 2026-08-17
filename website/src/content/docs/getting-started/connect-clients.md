@@ -27,19 +27,19 @@ grep ' memory-integration-darwin-arm64$' SHA256SUMS | shasum -a 256 -c -
 chmod +x ./memory-integration-darwin-arm64
 ```
 
-Codex and Claude Code must already be installed and run at least once: the quick command refuses a missing `~/.codex` or `~/.claude` configuration root instead of creating one.
+Codex and Claude Code must already be installed and run at least once. Pass the actual client configuration root explicitly; the quick command refuses a missing or symlinked root instead of creating one. The standard roots are `~/.codex` and `~/.claude`, but custom installations must use their real root.
 
 Install and verify the policy for Memory only:
 
 ```bash
-./memory-integration-darwin-arm64 quick-install codex --confirm-tools-discovered
-./memory-integration-darwin-arm64 quick-verify codex --confirm-tools-discovered
+./memory-integration-darwin-arm64 quick-install codex --target-root "$HOME/.codex" --confirm-tools-discovered
+./memory-integration-darwin-arm64 quick-verify codex --target-root "$HOME/.codex" --confirm-tools-discovered
 ```
 
 Use `claude` instead of `codex` for Claude Code. If `search_documents` was also visible, install that behavior explicitly:
 
 ```bash
-./memory-integration-darwin-arm64 quick-install codex --with-documents --confirm-tools-discovered
+./memory-integration-darwin-arm64 quick-install codex --target-root "$HOME/.codex" --with-documents --confirm-tools-discovered
 ```
 
 `--confirm-tools-discovered` is your confirmation of what you observed in the client; the binary does not probe the MCP server or infer discovery. After installation, start a fresh client session so it loads the installed policy.

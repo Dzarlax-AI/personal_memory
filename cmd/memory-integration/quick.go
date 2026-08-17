@@ -55,6 +55,7 @@ func runQuick(command string, args []string, stdout, stderr io.Writer) int {
 	withDocuments := fs.Bool("with-documents", false, "enable document search")
 	memoryOnly := fs.Bool("memory-only", false, "disable document search")
 	confirmed := fs.Bool("confirm-tools-discovered", false, "confirm the tools are visible in the client session")
+	targetRoot := fs.String("target-root", "", "explicit client configuration root")
 	jsonOutput := fs.Bool("json", false, "emit JSON")
 	if err = fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
 		return 2
@@ -62,23 +63,22 @@ func runQuick(command string, args []string, stdout, stderr io.Writer) int {
 	visited := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { visited[f.Name] = true })
 	if command == "quick-rollback" && (visited["with-documents"] || visited["memory-only"] || visited["confirm-tools-discovered"]) {
-		fmt.Fprintln(stderr, "quick-rollback accepts only --json")
+		fmt.Fprintln(stderr, "quick-rollback accepts only --target-root and --json")
 		return 2
 	}
 	if *withDocuments && *memoryOnly {
 		fmt.Fprintln(stderr, "--with-documents and --memory-only are mutually exclusive")
 		return 2
 	}
+	if *targetRoot == "" || !filepath.IsAbs(*targetRoot) {
+		fmt.Fprintln(stderr, "--target-root is required and must be absolute")
+		return 2
+	}
 	if command != "quick-rollback" && !*confirmed {
 		fmt.Fprintln(stderr, "--confirm-tools-discovered is required after observing the tools in the client")
 		return 2
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Fprintln(stderr, "cannot resolve the home directory")
-		return 1
-	}
-	root := filepath.Join(home, "."+string(client))
+	root := *targetRoot
 	if info, statErr := os.Lstat(root); statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		fmt.Fprintln(stderr, "the client configuration root must already exist as a real directory")
 		return 1

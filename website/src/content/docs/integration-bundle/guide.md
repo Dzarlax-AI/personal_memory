@@ -39,13 +39,13 @@ Most users do not need the repository or a Go toolchain. Download the matching `
 After registering the MCP endpoint and observing the Memory tools in a fresh client session:
 
 ```bash
-./memory-integration-darwin-arm64 quick-install codex --confirm-tools-discovered
-./memory-integration-darwin-arm64 quick-verify codex --confirm-tools-discovered
+./memory-integration-darwin-arm64 quick-install codex --target-root "$HOME/.codex" --confirm-tools-discovered
+./memory-integration-darwin-arm64 quick-verify codex --target-root "$HOME/.codex" --confirm-tools-discovered
 ```
 
 Use `claude` for Claude Code. Add `--with-documents` only when `search_documents` is also visible. The default is Memory available, Documents disabled, and Todoist disabled. `quick-update` and `quick-verify` preserve the verified installed capability configuration unless `--with-documents` or `--memory-only` explicitly changes it. `quick-rollback` restores the previous verified transaction and does not accept a discovery confirmation.
 
-The confirmation flag records a real observation made in the client. It is not a server probe. Quick commands refuse missing or symlinked `~/.codex` and `~/.claude` roots and never create them. Use `--json` when another local tool needs a privacy-safe result containing only the client, root, capability states, bundle version, outcome, and changed flag.
+The confirmation flag records a real observation made in the client. It is not a server probe. Quick commands require an explicit absolute `--target-root`, refuse missing or symlinked roots, and never create them. Standard installations normally use `~/.codex` or `~/.claude`; custom installations must pass their actual configuration root. Use `--json` when another local tool needs a privacy-safe result containing only the client, root, capability states, bundle version, outcome, and changed flag.
 
 ## Advanced interface and target roots
 

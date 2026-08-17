@@ -155,8 +155,8 @@ jobs:
           binary="$GITHUB_WORKSPACE/dist/memory-integration-${{ matrix.goos }}-${{ matrix.goarch }}"
           (
             cd "$smoke_home"
-            HOME="$smoke_home" "$binary" quick-install codex --confirm-tools-discovered --json
-            HOME="$smoke_home" "$binary" quick-verify codex --confirm-tools-discovered --json
+            HOME="$smoke_home" "$binary" quick-install codex --target-root "$smoke_home/.codex" --confirm-tools-discovered --json
+            HOME="$smoke_home" "$binary" quick-verify codex --target-root "$smoke_home/.codex" --confirm-tools-discovered --json
           )
       - name: Upload standalone integration binary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

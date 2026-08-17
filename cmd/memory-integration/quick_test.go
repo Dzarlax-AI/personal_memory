@@ -20,13 +20,11 @@ func TestQuickInstallPresetsForCodexAndClaude(t *testing.T) {
 			{name: "with_documents", flags: []string{"--with-documents"}, wantDocuments: "available"},
 		} {
 			t.Run(client+"_"+tc.name, func(t *testing.T) {
-				home := t.TempDir()
-				t.Setenv("HOME", home)
-				root := filepath.Join(home, "."+client)
+				root := filepath.Join(t.TempDir(), "."+client)
 				if err := os.Mkdir(root, 0o700); err != nil {
 					t.Fatal(err)
 				}
-				args := append([]string{"quick-install", client, "--confirm-tools-discovered", "--json"}, tc.flags...)
+				args := append([]string{"quick-install", client, "--target-root", root, "--confirm-tools-discovered", "--json"}, tc.flags...)
 				result := runQuickJSON(t, args)
 				if result.Client != client || result.Root != root || result.BundleVersion != "0.1.0" || result.Outcome != quickOutcomeInstalled {
 					t.Fatalf("unexpected result: %+v", result)
@@ -42,30 +40,28 @@ func TestQuickInstallPresetsForCodexAndClaude(t *testing.T) {
 func TestQuickCommandsPreserveAndExplicitlyTransitionDocuments(t *testing.T) {
 	for _, client := range []string{"codex", "claude"} {
 		t.Run(client, func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv("HOME", home)
-			root := filepath.Join(home, "."+client)
+			root := filepath.Join(t.TempDir(), "."+client)
 			if err := os.Mkdir(root, 0o700); err != nil {
 				t.Fatal(err)
 			}
 
-			installed := runQuickJSON(t, []string{"quick-install", client, "--with-documents", "--confirm-tools-discovered", "--json"})
+			installed := runQuickJSON(t, []string{"quick-install", client, "--target-root", root, "--with-documents", "--confirm-tools-discovered", "--json"})
 			if installed.Capabilities.Documents != "available" {
 				t.Fatal(installed)
 			}
-			verified := runQuickJSON(t, []string{"quick-verify", client, "--confirm-tools-discovered", "--json"})
+			verified := runQuickJSON(t, []string{"quick-verify", client, "--target-root", root, "--confirm-tools-discovered", "--json"})
 			if verified.Outcome != quickOutcomeVerified || verified.Capabilities.Documents != "available" {
 				t.Fatalf("verify silently changed documents: %+v", verified)
 			}
-			updated := runQuickJSON(t, []string{"quick-update", client, "--confirm-tools-discovered", "--json"})
+			updated := runQuickJSON(t, []string{"quick-update", client, "--target-root", root, "--confirm-tools-discovered", "--json"})
 			if updated.Capabilities.Documents != "available" {
 				t.Fatalf("update silently changed documents: %+v", updated)
 			}
-			memoryOnly := runQuickJSON(t, []string{"quick-update", client, "--memory-only", "--confirm-tools-discovered", "--json"})
+			memoryOnly := runQuickJSON(t, []string{"quick-update", client, "--target-root", root, "--memory-only", "--confirm-tools-discovered", "--json"})
 			if memoryOnly.Capabilities.Documents != "disabled" {
 				t.Fatalf("explicit transition failed: %+v", memoryOnly)
 			}
-			rolledBack := runQuickJSON(t, []string{"quick-rollback", client, "--json"})
+			rolledBack := runQuickJSON(t, []string{"quick-rollback", client, "--target-root", root, "--json"})
 			if rolledBack.Outcome != quickOutcomeRolledBack || rolledBack.Capabilities.Documents != "available" {
 				t.Fatalf("rollback did not restore documents config: %+v", rolledBack)
 			}
@@ -75,26 +71,30 @@ func TestQuickCommandsPreserveAndExplicitlyTransitionDocuments(t *testing.T) {
 
 func TestQuickCommandsRefuseBeforeWriting(t *testing.T) {
 	t.Run("missing root", func(t *testing.T) {
-		home := t.TempDir()
-		t.Setenv("HOME", home)
+		root := filepath.Join(t.TempDir(), ".codex")
 		var stdout, stderr bytes.Buffer
-		if code := run([]string{"quick-install", "codex", "--confirm-tools-discovered", "--json"}, strings.NewReader(""), &stdout, &stderr); code == 0 {
+		if code := run([]string{"quick-install", "codex", "--target-root", root, "--confirm-tools-discovered", "--json"}, strings.NewReader(""), &stdout, &stderr); code == 0 {
 			t.Fatal("missing root accepted")
 		}
-		if _, err := os.Stat(filepath.Join(home, ".codex")); !os.IsNotExist(err) {
+		if _, err := os.Stat(root); !os.IsNotExist(err) {
 			t.Fatal("missing root was created")
 		}
 	})
 
+	t.Run("missing explicit root", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		if code := run([]string{"quick-install", "codex", "--confirm-tools-discovered", "--json"}, strings.NewReader(""), &stdout, &stderr); code != 2 {
+			t.Fatalf("missing --target-root code=%d stderr=%q", code, stderr.String())
+		}
+	})
+
 	t.Run("missing confirmation", func(t *testing.T) {
-		home := t.TempDir()
-		t.Setenv("HOME", home)
-		root := filepath.Join(home, ".claude")
+		root := filepath.Join(t.TempDir(), ".claude")
 		if err := os.Mkdir(root, 0o700); err != nil {
 			t.Fatal(err)
 		}
 		var stdout, stderr bytes.Buffer
-		if code := run([]string{"quick-install", "claude", "--json"}, strings.NewReader(""), &stdout, &stderr); code == 0 {
+		if code := run([]string{"quick-install", "claude", "--target-root", root, "--json"}, strings.NewReader(""), &stdout, &stderr); code == 0 {
 			t.Fatal("missing confirmation accepted")
 		}
 		if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
@@ -116,9 +116,8 @@ func TestQuickCommandsRefuseBeforeWriting(t *testing.T) {
 }
 
 func TestQuickBinaryPathNeedsNoRepositorySources(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	if err := os.Mkdir(filepath.Join(home, ".codex"), 0o700); err != nil {
+	root := filepath.Join(t.TempDir(), ".codex")
+	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	outside := t.TempDir()
@@ -131,20 +130,19 @@ func TestQuickBinaryPathNeedsNoRepositorySources(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(previous) })
 
-	result := runQuickJSON(t, []string{"quick-install", "codex", "--confirm-tools-discovered", "--json"})
+	result := runQuickJSON(t, []string{"quick-install", "codex", "--target-root", root, "--confirm-tools-discovered", "--json"})
 	if result.Outcome != quickOutcomeInstalled {
 		t.Fatal(result)
 	}
 }
 
 func TestQuickHumanAndJSONOutputAreContentFree(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	if err := os.Mkdir(filepath.Join(home, ".codex"), 0o700); err != nil {
+	root := filepath.Join(t.TempDir(), ".codex")
+	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"quick-install", "codex", "--confirm-tools-discovered"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
+	if code := run([]string{"quick-install", "codex", "--target-root", root, "--confirm-tools-discovered"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
 	for _, forbidden := range []string{"BEGIN PERSONAL_MEMORY", "canonical policy", "api_key", "https://", "recall preference"} {
