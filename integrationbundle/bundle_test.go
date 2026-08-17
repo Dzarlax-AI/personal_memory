@@ -539,3 +539,29 @@ func refreshArtifactSetDigests(sets []ArtifactSet) {
 		sets[i].DigestSHA256 = artifactSetDigest(sets[i].Artifacts)
 	}
 }
+
+func TestLoadEmbeddedMatchesNormativeSources(t *testing.T) {
+	bundle, err := LoadEmbedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := bundle.Manifest()
+	if manifest.SourceIdentity.ContractSHA256 != currentContractSHA256 || manifest.SourceIdentity.ConformanceSuiteSHA256 != currentSuiteSHA256 {
+		t.Fatalf("unexpected embedded identity: %+v", manifest.SourceIdentity)
+	}
+	contract, err := os.ReadFile(filepath.Join("..", "docs", "model-usage-contract.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	suite, err := os.ReadFile(filepath.Join("..", "conformancedata", "public", "v1", "scenarios.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	embeddedContract, embeddedSuite, err := EmbeddedSources()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(contract, embeddedContract) || !bytes.Equal(suite, embeddedSuite) {
+		t.Fatal("embedded sources drifted from normative repository sources")
+	}
+}

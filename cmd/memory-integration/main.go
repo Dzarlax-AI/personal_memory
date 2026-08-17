@@ -28,6 +28,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	command := args[0]
+	if strings.HasPrefix(command, "quick-") {
+		return runQuick(command, args[1:], stdout, stderr)
+	}
 	if command == "conformance-adapter" {
 		return runConformanceAdapter(args[1:], stdin, stdout, stderr)
 	}

@@ -17,7 +17,7 @@ The first public release has these independently validated identities:
 | Public conformance suite | `1.1.0` |
 | Client artifact formats | `1.0.0` |
 
-The executable loads the embedded manifest, canonical policy, and client templates; verifies their checksums against the supplied public contract and suite; renders one capability-specific artifact set; then installs, updates, verifies, rolls back, or exports it. A client wrapper may make a rule more concrete, but it must preserve every canonical rule.
+The standalone executable embeds the manifest, canonical policy, client templates, normative contract, and public conformance suite. It verifies their bound identities, renders one capability-specific artifact set, then installs, updates, verifies, rolls back, or exports it. A client wrapper may make a rule more concrete, but it must preserve every canonical rule.
 
 No prompt, memory content, document content, task content, credential, user identifier, path, endpoint, vector, or hidden reasoning is embedded in the bundle.
 
@@ -32,9 +32,24 @@ No prompt, memory content, document content, task content, credential, user iden
 
 ChatGPT installation and verification return `manual_action_required`. The installer cannot configure ChatGPT's official UI, workspace controls, or administrator-managed connector registration automatically.
 
-## Build and target roots
+## Quick commands for Codex and Claude Code
 
-From the repository root:
+Most users do not need the repository or a Go toolchain. Download the matching `memory-integration-{darwin|linux}-{amd64|arm64}` binary and `SHA256SUMS` from the [latest release](https://github.com/Dzarlax-AI/personal-memory/releases/latest), verify the checksum, and make the binary executable. The complete download example is in [Connect clients](../../getting-started/connect-clients/).
+
+After registering the MCP endpoint and observing the Memory tools in a fresh client session:
+
+```bash
+./memory-integration-darwin-arm64 quick-install codex --confirm-tools-discovered
+./memory-integration-darwin-arm64 quick-verify codex --confirm-tools-discovered
+```
+
+Use `claude` for Claude Code. Add `--with-documents` only when `search_documents` is also visible. The default is Memory available, Documents disabled, and Todoist disabled. `quick-update` and `quick-verify` preserve the verified installed capability configuration unless `--with-documents` or `--memory-only` explicitly changes it. `quick-rollback` restores the previous verified transaction and does not accept a discovery confirmation.
+
+The confirmation flag records a real observation made in the client. It is not a server probe. Quick commands refuse missing or symlinked `~/.codex` and `~/.claude` roots and never create them. Use `--json` when another local tool needs a privacy-safe result containing only the client, root, capability states, bundle version, outcome, and changed flag.
+
+## Advanced interface and target roots
+
+The advanced interface supports custom roots, dry runs, explicit capability states, ChatGPT exports, and generic MCP hosts. From the repository root:
 
 ```bash
 go build -o ./memory-integration ./cmd/memory-integration

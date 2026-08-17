@@ -114,8 +114,59 @@ jobs:
             org.opencontainers.image.version=${{ steps.source.outputs.version }}
           tags: ghcr.io/dzarlax-ai/personal-memory-tei-arm64:${{ github.ref_name }}
 
+  build-integration-binaries:
+    needs: validate
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+          - runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+          - runner: macos-15
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: Build standalone integration binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -trimpath \
+            -o dist/memory-integration-${{ matrix.goos }}-${{ matrix.goarch }} \
+            ./cmd/memory-integration
+      - name: Smoke test outside the repository
+        shell: bash
+        run: |
+          smoke_home="$(mktemp -d)"
+          mkdir "$smoke_home/.codex"
+          binary="$GITHUB_WORKSPACE/dist/memory-integration-${{ matrix.goos }}-${{ matrix.goarch }}"
+          (
+            cd "$smoke_home"
+            HOME="$smoke_home" "$binary" quick-install codex --confirm-tools-discovered --json
+            HOME="$smoke_home" "$binary" quick-verify codex --confirm-tools-discovered --json
+          )
+      - name: Upload standalone integration binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: memory-integration-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/memory-integration-${{ matrix.goos }}-${{ matrix.goarch }}
+          if-no-files-found: error
+
   publish-assets:
-    needs: [build-app, build-tei-arm64]
+    needs: [build-app, build-tei-arm64, build-integration-binaries]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -128,6 +179,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Download standalone integration binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: memory-integration-*
+          path: integration-binaries
+          merge-multiple: true
       - uses: docker/setup-buildx-action@v3
       - name: Verify dependency platforms
         shell: bash
@@ -161,6 +218,15 @@ jobs:
             cd release-assets
             shasum -a 256 TEI_ARM64_PROVENANCE.txt >> SHA256SUMS
           )
+      - name: Add standalone integration binaries
+        shell: bash
+        run: |
+          cp integration-binaries/memory-integration-* release-assets/
+          chmod 0755 release-assets/memory-integration-*
+          (
+            cd release-assets
+            shasum -a 256 memory-integration-* >> SHA256SUMS
+          )
       - name: Create draft, upload assets, and publish release
         shell: bash
         run: |
@@ -181,6 +247,10 @@ jobs:
             release-assets/compose.local-amd64.yaml \
             release-assets/compose.local-arm64.yaml \
             release-assets/TEI_ARM64_PROVENANCE.txt \
+            release-assets/memory-integration-darwin-amd64 \
+            release-assets/memory-integration-darwin-arm64 \
+            release-assets/memory-integration-linux-amd64 \
+            release-assets/memory-integration-linux-arm64 \
             release-assets/SHA256SUMS \
             --clobber
 
@@ -188,6 +258,10 @@ jobs:
             compose.local-amd64.yaml
             compose.local-arm64.yaml
             TEI_ARM64_PROVENANCE.txt
+            memory-integration-darwin-amd64
+            memory-integration-darwin-arm64
+            memory-integration-linux-amd64
+            memory-integration-linux-arm64
             SHA256SUMS
           )
           expected_asset_list="$(printf '%s\n' "${expected_assets[@]}" | sort)"
