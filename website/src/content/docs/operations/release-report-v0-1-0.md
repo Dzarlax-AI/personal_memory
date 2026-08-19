@@ -13,8 +13,8 @@ release.
 
 The validated candidate was release `v0.1.0`, commit
 `d7d61501c4955aeee1a04eeebb738916de893d97`, deployed through the immutable
-application tag `sha-d7d6150`. The preceding immutable tag remained available
-from the registry as the rollback candidate.
+application tag `sha-d7d6150`. The preceding immutable tag `sha-fa275a4`
+remained available from the registry as the rollback candidate.
 
 No migration, maintenance mutation, reindex, restart, configuration edit,
 rollback, restore, purge, or secret rotation was performed during validation.
@@ -77,10 +77,10 @@ A fresh Memory collection snapshot was created and positively re-listed at T0.
 Scheduled snapshot activity continued after T0. Exact snapshot identities and
 operational locations are retained privately and are not part of this report.
 
-The preceding application image was no longer present in the VPS Docker cache
-at the final checkpoint, but its registry manifest remained available. The
-reviewed rollback procedure therefore remained actionable through an explicit
-pull and restart decision.
+The preceding application image `sha-fa275a4` was no longer present in the VPS
+Docker cache at the final checkpoint, but its registry manifest remained
+available. The reviewed rollback procedure therefore remained actionable
+through an explicit pull and restart decision.
 
 No real rollback or snapshot restore was executed. Those actions require a
 separate stopped-writer or deployment approval and would create unnecessary
