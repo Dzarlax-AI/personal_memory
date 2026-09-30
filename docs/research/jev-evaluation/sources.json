@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "note": "Evidence inventory. Private artifact paths, hashes, payloads and examples are omitted.",
+  "evidence": [
+    "Recorded seven-query retrieval probe in the original exploration plan",
+    "Synthetic campaign summary and three holdout reports",
+    "Synthetic aggregate comparison gate",
+    "Conflict advisory technical probe and deterministic replay",
+    "Six-pair real-data smoke report",
+    "Sixty-pair report and independent rubric reassessment",
+    "Thirty-two-fact tagging report and post-hoc baseline comparison",
+    "Thirty-three-fact frozen tagging control report and protocol"
+  ]
+}
