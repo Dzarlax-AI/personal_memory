@@ -657,3 +657,19 @@ func unsetTestEnv(t *testing.T, key string) {
 		}
 	})
 }
+
+func TestLoadRegistryOnlyConfigNeedsNoInferenceStateOrProfiles(t *testing.T) {
+	setSecureTestEnv(t)
+	path := t.TempDir() + "/registry-config.json"
+	if err := os.WriteFile(path, []byte(`{"schema_version":1,"registration":{"mode":"client_declared"},"catalog_dir":"catalog-only"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MEMORY_AI_CONFIG_FILE", path)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AI.Registration.Active() || cfg.AI.Active() || cfg.AI.StateDir != "" || len(cfg.AI.Profiles) != 0 {
+		t.Fatalf("registry config coupled inference %#v", cfg.AI)
+	}
+}

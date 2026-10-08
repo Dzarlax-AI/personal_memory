@@ -22,6 +22,8 @@ import (
 )
 
 type Server struct {
+	aiMu                   sync.RWMutex
+	ai                     *aiRuntime
 	qdrant                 *qdrant.Client
 	embed                  *embeddings.Client
 	cache                  *Cache
@@ -115,13 +117,17 @@ func (s *Server) Start(ctx context.Context) {
 
 // Shutdown stops accepting recall increments and drains queued work.
 func (s *Server) Shutdown(ctx context.Context) error {
+	aiErr := s.ShutdownAI(ctx)
 	s.recallCounterMu.Lock()
 	counter := s.recallCounter
 	s.recallCounterMu.Unlock()
 	if counter == nil {
-		return nil
+		return aiErr
 	}
-	return counter.stop(ctx)
+	if err := counter.stop(ctx); err != nil {
+		return err
+	}
+	return aiErr
 }
 
 func (s *Server) countRecalls(ctx context.Context, result *RecallFactsResult) error {
@@ -175,6 +181,7 @@ func NewServer(qc *qdrant.Client, ec *embeddings.Client, cache *Cache, user stri
 
 // RegisterTools registers all memory MCP tools on the given MCP server.
 func (s *Server) RegisterTools(srv *server.MCPServer) {
+	s.registerProjectTool(srv)
 	srv.AddTool(mcp.NewTool("store_fact",
 		mcp.WithDescription("Store a fact in semantic memory. Cosine similarity identifies related candidates and prevents duplicate writes at the deduplication threshold; valid superseded facts remain related context and do not block storage."),
 		mcp.WithOutputSchema[StoreFactResult](),
@@ -185,6 +192,10 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 		mcp.WithString("fact", mcp.Description("The fact to store"), mcp.Required()),
 		mcp.WithString("tags", mcp.Description("Comma-separated semantic tags")),
 		mcp.WithString("primary_tag", mcp.Description("Single primary tag for overview grouping; must also be present in tags")),
+		mcp.WithString("source_project", mcp.Description("Declared origin project; separate from the subject primary_tag")),
+		mcp.WithString("source_kind", mcp.Description("user_declared or client_declared; required with source_project")),
+		mcp.WithString("subject_scope", mcp.Description("Optional client declaration: project, non_project, or unknown; never changes namespace")),
+		mcp.WithString("subject_context", mcp.Description("Optional untrusted component description, at most 2048 UTF-8 bytes; distinct from recording origin")),
 		mcp.WithString("namespace", mcp.Description("Namespace (default: default)")),
 		mcp.WithBoolean("permanent", mcp.Description("Never deleted by forget_old")),
 		mcp.WithString("valid_until", mcp.Description("ISO date after which fact expires")),
@@ -209,6 +220,7 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 		mcp.WithNumber("limit", mcp.Description("Max results (default 5)")),
 		mcp.WithString("lifecycle_mode", mcp.Description("Lifecycle intent: current (default), history, as_of, or include_all")),
 		mcp.WithString("as_of", mcp.Description("Exact YYYY-MM-DD expiry reference; valid only with lifecycle_mode=as_of")),
+		mcp.WithString("project_context_id", mcp.Description("Optional registered project ID; adds AI relevance context only, never a project or namespace filter")),
 	), s.recallFacts)
 
 	srv.AddTool(mcp.NewTool("update_fact",
@@ -222,6 +234,10 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 		mcp.WithString("new_fact", mcp.Description("New fact text"), mcp.Required()),
 		mcp.WithString("tags", mcp.Description("Comma-separated semantic tags")),
 		mcp.WithString("primary_tag", mcp.Description("Single primary tag for overview grouping; must also be present in tags")),
+		mcp.WithString("source_project", mcp.Description("Declared origin project; separate from the subject primary_tag")),
+		mcp.WithString("source_kind", mcp.Description("user_declared or client_declared; required with source_project")),
+		mcp.WithString("subject_scope", mcp.Description("Optional client declaration: project, non_project, or unknown; never changes namespace")),
+		mcp.WithString("subject_context", mcp.Description("Optional untrusted component description, at most 2048 UTF-8 bytes; distinct from recording origin")),
 		mcp.WithString("namespace", mcp.Description("Namespace")),
 		mcp.WithBoolean("permanent", mcp.Description("Set permanent flag")),
 		mcp.WithString("lifecycle_state", mcp.Description("Optional replacement lifecycle state")),
@@ -653,12 +669,14 @@ func (s *Server) mutationTarget(ctx context.Context, args map[string]interface{}
 // --- Tool implementations ---
 
 type StoreFactResult struct {
-	Status       string                 `json:"status"`
-	Stored       bool                   `json:"stored"`
-	PointID      string                 `json:"point_id,omitempty"`
-	Message      string                 `json:"message,omitempty"`
-	Duplicate    *RelatedFactCandidate  `json:"duplicate,omitempty"`
-	RelatedFacts []RelatedFactCandidate `json:"related_facts"`
+	SubjectDecision string                 `json:"subject_decision,omitempty"`
+	AI              *AIOutcome             `json:"ai,omitempty"`
+	Status          string                 `json:"status"`
+	Stored          bool                   `json:"stored"`
+	PointID         string                 `json:"point_id,omitempty"`
+	Message         string                 `json:"message,omitempty"`
+	Duplicate       *RelatedFactCandidate  `json:"duplicate,omitempty"`
+	RelatedFacts    []RelatedFactCandidate `json:"related_facts"`
 }
 
 type ImportFactItemResult struct {
@@ -685,6 +703,9 @@ type LifecycleMutationResult struct {
 }
 
 type RecallFact struct {
+	Subject       *FactSubject                  `json:"subject,omitempty"`
+	AIRelevance   *float64                      `json:"ai_relevance,omitempty"`
+	Origin        *FactOrigin                   `json:"origin,omitempty"`
 	PointID       string                        `json:"point_id"`
 	Text          string                        `json:"text"`
 	Namespace     string                        `json:"namespace"`
@@ -700,6 +721,7 @@ type RecallFact struct {
 }
 
 type RecallFactsResult struct {
+	AI                       *AIOutcome          `json:"ai,omitempty"`
 	Count                    int                 `json:"count"`
 	LifecycleMode            RecallLifecycleMode `json:"lifecycle_mode"`
 	AsOf                     string              `json:"as_of,omitempty"`
@@ -725,6 +747,12 @@ func formatStoreFactResult(result StoreFactResult) string {
 	}
 	if result.Message != "" {
 		lines = append(lines, "message: "+result.Message)
+	}
+	if result.AI != nil {
+		lines = append(lines, "ai: "+result.AI.Status)
+	}
+	if result.SubjectDecision != "" {
+		lines = append(lines, "subject_decision: "+result.SubjectDecision)
 	}
 	if result.Duplicate != nil {
 		lines = append(lines, "duplicate:", formatRelatedCandidate(*result.Duplicate))
@@ -764,6 +792,15 @@ func formatFindRelatedResult(result FindRelatedResult) string {
 
 func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
+	subject, subjectErr := subjectArguments(args)
+	if subjectErr != nil {
+		return mcp.NewToolResultError(subjectErr.Error()), nil
+	}
+	origin, originErr := originArguments(args)
+	if originErr != nil {
+		return mcp.NewToolResultError(originErr.Error()), nil
+	}
+
 	fact := strParam(args, "fact")
 	if err := validateBoundedString("fact", fact, maxFactBytes, true); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -794,6 +831,7 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
+	aiDecision := s.aiClassify(ctx, fact, namespace, tags, primaryTag, origin, subject)
 	vec, err := s.embed.Embed(ctx, fact)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("embedding failed: %v", err)), nil
@@ -846,9 +884,18 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 			Duplicate:    duplicate,
 			RelatedFacts: relatedFacts,
 		}
+		if aiDecision != nil {
+			result.AI = aiDecision.outcome
+		}
 		return mcp.NewToolResultStructured(result, formatStoreFactResult(result)), nil
 	}
 
+	if aiDecision != nil && aiDecision.prepare(pointID) {
+		tags, primaryTag = aiDecision.after.Tags, aiDecision.after.Primary
+	}
+	if err := ctx.Err(); err != nil {
+		return mcp.NewToolResultError("store canceled"), nil
+	}
 	createdAt := nowISO()
 	payload := map[string]interface{}{
 		"text":         fact,
@@ -859,6 +906,15 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		"permanent":    permanent,
 		"created_at":   createdAt,
 		"recall_count": 0,
+	}
+	if origin != nil {
+		payload["origin"] = origin
+	}
+	if subject != nil {
+		payload["subject"] = subject
+	}
+	if aiDecision != nil && aiDecision.outcome.OperationRef != "" {
+		payload["ai_grouping_ref"] = aiDecision.outcome.OperationRef
 	}
 	if validUntil != "" {
 		payload["valid_until"] = validUntil
@@ -882,11 +938,19 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		return mcp.NewToolResultError(fmt.Sprintf("store failed: %v", err)), nil
 	}
 
+	if aiDecision != nil {
+		aiDecision.complete()
+		aiDecision.shadow(pointID, fact, namespace, origin)
+	}
 	result := StoreFactResult{
-		Status:       "stored",
-		Stored:       true,
-		PointID:      pointID,
-		RelatedFacts: relatedFacts,
+		SubjectDecision: subjectDecision(namespace, subject),
+		Status:          "stored",
+		Stored:          true,
+		PointID:         pointID,
+		RelatedFacts:    relatedFacts,
+	}
+	if aiDecision != nil {
+		result.AI = aiDecision.outcome
 	}
 	return mcp.NewToolResultStructured(result, formatStoreFactResult(result)), nil
 }
@@ -904,6 +968,9 @@ func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	if err := s.resolveRecallProject(args, &lifecycleOptions); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	tags := tagsParam(args)
 	namespace := strParam(args, "namespace")
 	limit, err := intParam(args, "limit", 5)
@@ -915,16 +982,20 @@ func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	}
 
 	cacheKey := recallFactsCacheKey(query, namespace, tags, limit, lifecycleOptions)
-	cached, flight, err := s.cache.AcquireRecall(ctx, cacheKey, func(result *RecallFactsResult) error {
-		return s.countRecalls(ctx, result)
-	})
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("record recall failed: %v", err)), nil
+	// AI-derived output is never cached: the complete dependency pool must be
+	// rechecked per operation. The disabled path retains its existing cache key.
+	var flight *recallFlight
+	if a := s.aiState(); a == nil || a.cfg.Read.Mode != "on" {
+		var cached RecallFactsResult
+		cached, flight, err = s.cache.AcquireRecall(ctx, cacheKey, func(result *RecallFactsResult) error { return s.countRecalls(ctx, result) })
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("record recall failed: %v", err)), nil
+		}
+		if flight == nil {
+			return mcp.NewToolResultStructured(cached, formatRecallFactsResult(cached)), nil
+		}
+		defer s.cache.FinishRecall(cacheKey, flight, nil)
 	}
-	if flight == nil {
-		return mcp.NewToolResultStructured(cached, formatRecallFactsResult(cached)), nil
-	}
-	defer s.cache.FinishRecall(cacheKey, flight, nil)
 
 	vec, err := s.embed.Embed(ctx, query)
 	if err != nil {
@@ -940,10 +1011,16 @@ func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	results = activeSearchPoints(results)
 
 	candidates := presentLifecycleRecallCandidates(results, lifecycleOptions, time.Now())
+	baselineCandidates := append([]lifecycleRecallCandidate{}, candidates...)
+	candidates, aiOutcome, aiErr := s.aiRerank(ctx, query, namespace, tags, lifecycleOptions, candidates)
+	if aiErr != nil {
+		return mcp.NewToolResultError("candidate freshness could not be verified"), nil
+	}
 	if len(candidates) > limit {
 		candidates = candidates[:limit]
 	}
 	result := RecallFactsResult{
+		AI:                       aiOutcome,
 		LifecycleMode:            lifecycleOptions.normalizedMode(),
 		AsOf:                     lifecycleOptions.AsOf,
 		CandidateWindowSaturated: candidateWindowSaturated,
@@ -953,6 +1030,9 @@ func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		point := candidate.point
 		result.Facts = append(result.Facts, RecallFact{
 			PointID:       point.ID,
+			AIRelevance:   candidate.AIRelevance,
+			Origin:        originPayload(point.Payload),
+			Subject:       subjectPayload(point.Payload),
 			Text:          stringFromPayload(point.Payload["text"]),
 			Namespace:     stringFromPayload(point.Payload["namespace"]),
 			Tags:          relatedCandidateTags(point.Payload["tags"]),
@@ -970,7 +1050,10 @@ func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	if err := s.countRecalls(ctx, &result); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("record recall failed: %v", err)), nil
 	}
-	s.cache.FinishRecall(cacheKey, flight, &result)
+	if flight != nil {
+		s.cache.FinishRecall(cacheKey, flight, &result)
+	}
+	s.aiShadowRead(query, lifecycleOptions, baselineCandidates)
 	return mcp.NewToolResultStructured(result, formatRecallFactsResult(result)), nil
 }
 
@@ -992,21 +1075,25 @@ func recallFactsCacheKey(query, namespace string, tags []string, limit int, opti
 		asOf = options.AsOf
 	}
 	identity := struct {
-		Version       string              `json:"version"`
-		Query         string              `json:"query"`
-		Namespace     string              `json:"namespace"`
-		Tags          []string            `json:"tags"`
-		Limit         int                 `json:"limit"`
-		LifecycleMode RecallLifecycleMode `json:"lifecycle_mode"`
-		AsOf          string              `json:"as_of"`
+		Version          string              `json:"version"`
+		Query            string              `json:"query"`
+		Namespace        string              `json:"namespace"`
+		Tags             []string            `json:"tags"`
+		Limit            int                 `json:"limit"`
+		LifecycleMode    RecallLifecycleMode `json:"lifecycle_mode"`
+		AsOf             string              `json:"as_of"`
+		ProjectContextID string              `json:"project_context_id,omitempty"`
+		CatalogHash      string              `json:"catalog_hash,omitempty"`
 	}{
-		Version:       lifecycleRecallCacheVersion,
-		Query:         query,
-		Namespace:     namespace,
-		Tags:          canonicalTags,
-		Limit:         limit,
-		LifecycleMode: mode,
-		AsOf:          asOf,
+		Version:          lifecycleRecallCacheVersion,
+		Query:            query,
+		Namespace:        namespace,
+		Tags:             canonicalTags,
+		Limit:            limit,
+		LifecycleMode:    mode,
+		AsOf:             asOf,
+		ProjectContextID: options.ProjectContextID,
+		CatalogHash:      options.CatalogHash,
 	}
 	encoded, err := json.Marshal(identity)
 	if err != nil {
@@ -1017,6 +1104,15 @@ func recallFactsCacheKey(query, namespace string, tags []string, limit int, opti
 
 func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
+	subject, subjectErr := subjectArguments(args)
+	if subjectErr != nil {
+		return mcp.NewToolResultError(subjectErr.Error()), nil
+	}
+	origin, originErr := originArguments(args)
+	if originErr != nil {
+		return mcp.NewToolResultError(originErr.Error()), nil
+	}
+
 	newFact := strParam(args, "new_fact")
 	if err := validateBoundedString("new_fact", newFact, maxFactBytes, true); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -1102,7 +1198,15 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	for key, value := range old.Payload {
 		payload[key] = value
 	}
+	if origin != nil {
+		payload["origin"] = origin
+	}
 	payload["text"] = newFact
+	if subject != nil {
+		payload["subject"] = subject
+	} else if oldText != newFact {
+		delete(payload, "subject")
+	}
 	updatedAt := nowISO()
 	payload["updated_at"] = updatedAt
 	payload["namespace"] = namespace
@@ -1155,7 +1259,11 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		}
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Updated: '%s' → '%s'", oldText, newFact)), nil
+	message := fmt.Sprintf("Updated: '%s' → '%s'", oldText, newFact)
+	if decision := subjectDecision(namespace, subjectPayload(payload)); decision != "" {
+		message += "\nsubject_decision: " + decision
+	}
+	return mcp.NewToolResultText(message), nil
 }
 
 func (s *Server) setFactLifecycle(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -1358,6 +1466,14 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 			setOutcome(index, "invalid", "", err.Error(), nil)
 			continue
 		}
+		if err := importOrigin(f); err != nil {
+			setOutcome(index, "invalid", "", err.Error(), nil)
+			continue
+		}
+		if _, present := f["subject"]; present && subjectPayload(f) == nil {
+			setOutcome(index, "invalid", "", "invalid subject metadata", nil)
+			continue
+		}
 		if _, _, err := validUntilPayload(f); err != nil {
 			setOutcome(index, "invalid", "", err.Error(), nil)
 			continue
@@ -1476,6 +1592,12 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 				tagsParamFromPayload(candidate.source["tags"]),
 				stringFromPayload(candidate.source["primary_tag"]),
 			)
+			if o := originPayload(candidate.source); o != nil {
+				payload["origin"] = o
+			}
+			if subject := subjectPayload(candidate.source); subject != nil {
+				payload["subject"] = subject
+			}
 			payload["tags"] = tags
 			payload["primary_tag"] = primaryTag
 			if value, ok := candidate.source["valid_until"]; ok {
@@ -1593,7 +1715,7 @@ func (s *Server) listFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		tagsList := formatTagsList(p.Payload["tags"])
 		primary := formatPrimaryTag(p.Payload["primary_tag"])
 		lifecycleSummary := formatLifecycleView(lifecycleView(p.ID, p.Payload))
-		lines = append(lines, fmt.Sprintf("- [%s] %s%s ns:%s%s recalls:%d %s %s", createdAt, tagsList, primary, ns, perm, rc, lifecycleSummary, text))
+		lines = append(lines, fmt.Sprintf("- [%s] %s%s ns:%s%s recalls:%d %s %s", createdAt, tagsList, primary, ns, perm, rc, lifecycleSummary, text+formatOrigin(originPayload(p.Payload))))
 	}
 
 	if len(lines) == 0 {

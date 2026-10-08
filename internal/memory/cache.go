@@ -150,9 +150,25 @@ func (c *Cache) SetRecall(key string, result RecallFactsResult) {
 
 func cloneRecallFactsResult(result RecallFactsResult) RecallFactsResult {
 	cloned := result
+	if result.AI != nil {
+		ai := *result.AI
+		cloned.AI = &ai
+	}
 	cloned.Facts = make([]RecallFact, len(result.Facts))
 	for index, fact := range result.Facts {
 		cloned.Facts[index] = fact
+		if fact.AIRelevance != nil {
+			value := *fact.AIRelevance
+			cloned.Facts[index].AIRelevance = &value
+		}
+		if fact.Subject != nil {
+			subject := *fact.Subject
+			cloned.Facts[index].Subject = &subject
+		}
+		if fact.Origin != nil {
+			origin := *fact.Origin
+			cloned.Facts[index].Origin = &origin
+		}
 		cloned.Facts[index].Tags = append([]string{}, fact.Tags...)
 		cloned.Facts[index].ReasonCodes = append([]LifecycleReasonCode{}, fact.ReasonCodes...)
 		cloned.Facts[index].Lifecycle.Supersedes = append([]string{}, fact.Lifecycle.Supersedes...)

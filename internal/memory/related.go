@@ -11,6 +11,7 @@ import (
 // detection and related-fact feedback. Lifecycle remains the single source of
 // truth for lifecycle metadata exposed by this package.
 type RelatedFactCandidate struct {
+	Origin     *FactOrigin    `json:"origin,omitempty"`
 	PointID    string         `json:"point_id"`
 	Text       string         `json:"text"`
 	Score      float64        `json:"score"`
@@ -69,6 +70,7 @@ func projectRelatedFactCandidate(point qdrant.Point, view lifecycle.View) Relate
 	}
 	return RelatedFactCandidate{
 		PointID:    point.ID,
+		Origin:     originPayload(point.Payload),
 		Text:       relatedCandidateString(point.Payload, "text"),
 		Score:      point.Score,
 		Namespace:  relatedCandidateString(point.Payload, "namespace"),

@@ -620,16 +620,17 @@ func strongestDuplicates(ctx context.Context, points []qdrant.ScrollPoint, thres
 // Keep it intentionally small: lifecycle is normalized metadata, while raw
 // payload and unrelated diagnostics are never returned by collection views.
 type factSummary struct {
-	ID          string       `json:"id"`
-	Text        string       `json:"text"`
-	TextMissing bool         `json:"text_missing"`
-	Namespace   string       `json:"namespace"`
-	Tags        []string     `json:"tags"`
-	PrimaryTag  string       `json:"primary_tag"`
-	CreatedAt   string       `json:"created_at"`
-	Permanent   bool         `json:"permanent"`
-	RecallCount int          `json:"recall_count"`
-	Lifecycle   lifecycleDTO `json:"lifecycle"`
+	Origin      json.RawMessage `json:"origin,omitempty"`
+	ID          string          `json:"id"`
+	Text        string          `json:"text"`
+	TextMissing bool            `json:"text_missing"`
+	Namespace   string          `json:"namespace"`
+	Tags        []string        `json:"tags"`
+	PrimaryTag  string          `json:"primary_tag"`
+	CreatedAt   string          `json:"created_at"`
+	Permanent   bool            `json:"permanent"`
+	RecallCount int             `json:"recall_count"`
+	Lifecycle   lifecycleDTO    `json:"lifecycle"`
 }
 
 // quarantinedFactSummary is intentionally list-only. It exposes only the
@@ -663,6 +664,7 @@ func pointToSummary(p qdrant.ScrollPoint) factSummary {
 		Namespace:   payloadStringValue(p.Payload, "namespace"),
 		Tags:        payloadStringSlice(p.Payload["tags"]),
 		PrimaryTag:  payloadStringValue(p.Payload, "primary_tag"),
+		Origin:      originSummary(p.Payload),
 		CreatedAt:   payloadStringValue(p.Payload, "created_at", "created", "timestamp", "date"),
 		Permanent:   payloadBool(p.Payload["permanent"]),
 		RecallCount: payloadInt(p.Payload["recall_count"]),
@@ -1326,4 +1328,29 @@ func hasWindowsDrivePrefix(path string) bool {
 
 func safeRelativePath(path string) bool {
 	return path != ".." && !strings.HasPrefix(path, "../") && !isCrossPlatformAbsolute(path)
+}
+
+// originSummary projects declared origin without exposing unrelated payload fields.
+func originSummary(payload map[string]interface{}) json.RawMessage {
+	raw, ok := payload["origin"]
+	if !ok {
+		return nil
+	}
+	var origin struct {
+		SourceProject string `json:"source_project"`
+		SourceKind    string `json:"source_kind"`
+		RecordedAt    string `json:"recorded_at"`
+	}
+	b, err := json.Marshal(raw)
+	if err != nil || json.Unmarshal(b, &origin) != nil {
+		return nil
+	}
+	if strings.TrimSpace(origin.SourceProject) == "" || len(origin.SourceProject) > 255 || strings.ContainsRune(origin.SourceProject, '\x00') || (origin.SourceKind != "user_declared" && origin.SourceKind != "client_declared") {
+		return nil
+	}
+	if _, err := time.Parse(time.RFC3339, origin.RecordedAt); err != nil {
+		return nil
+	}
+	b, _ = json.Marshal(origin)
+	return b
 }

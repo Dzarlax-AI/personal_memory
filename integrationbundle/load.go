@@ -57,9 +57,25 @@ var canonicalRetryRules = []RetryRule{
 var canonicalTelemetryAllowlist = []string{"contract_version", "scenario_id", "capability", "operation", "outcome", "latency_bucket", "retry_count", "client_family"}
 var canonicalTelemetryForbidden = []string{"prompts_responses_queries", "memory_document_task_content", "identifiers_and_paths", "credentials_users_endpoints_payloads", "vectors_and_hidden_reasoning"}
 
+var canonicalClientWorkflows = []ClientWorkflow{{
+	ID: "project_registration", Tool: "ensure_project",
+	Trigger:           "explicit_project_context_before_first_memory_or_document_tool_call",
+	InputFields:       []string{"project_key", "namespace", "name", "tag", "summary", "evidence"},
+	RequiresStableKey: true, MinProjectKeyBytes: 8, MaxProjectKeyBytes: 128, MaxRequestBytes: 8192, MaxSummaryBytes: 2048,
+	ProjectKeyPattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$",
+	MaxEvidenceItems:  4, MaxEvidenceBytes: 4096,
+	EvidenceKinds:    []string{"client_readme", "client_agents", "user_declared"},
+	Statuses:         []string{"created", "existing", "proposed_update", "ambiguous", "disabled", "unavailable"},
+	IdentityStatuses: []string{"created", "existing"},
+	OutputFields:     []string{"status", "project_id", "tag", "catalog_hash"},
+	FailureBehavior:  "continue_baseline_without_project_context_or_origin",
+	IdentityUse:      "project_context_id_uses_returned_project_id; source_project_uses_returned_tag; subject_primary_tag_is_independent",
+	SourceKind:       "client_declared", ReadContextField: "project_context_id", SubjectField: "primary_tag",
+}}
+
 // Updated alongside bundle/v1/policy.json. It is independent of the manifest
 // inventory so a rewritten manifest cannot bless weakened shared rules.
-const canonicalPolicySHA256 = "f7c4e9721d36bb1eb8b68f04946da295b07fb5895df536d5113cffbb9491510b"
+const canonicalPolicySHA256 = "48df6bda3701858e6f80543c46d410f3c551e815da94169a54d473dc0ec382cd"
 
 // EmbeddedSources returns private copies of the normative contract and public
 // conformance suite shipped with the standalone integration binary.
@@ -158,8 +174,8 @@ func (b *Bundle) validate(contractSource, suiteSource []byte) error {
 	if m.SchemaVersion != currentBundleSchema {
 		return fmt.Errorf("manifest schema_version must be %d", currentBundleSchema)
 	}
-	if m.BundleVersion != BundleVersion || m.ContractVersion != ContractVersion || m.ConformanceSuiteVersion != SuiteVersion {
-		return fmt.Errorf("manifest versions must be bundle %s, contract %s, and suite %s", BundleVersion, ContractVersion, SuiteVersion)
+	if m.BundleVersion != BundleVersion || m.ContractVersion != ContractVersion || m.ConformanceSuiteVersion != SuiteVersion || m.WorkflowSuiteVersion != ProjectRegistrationWorkflowSuiteVersion {
+		return fmt.Errorf("manifest versions must be bundle %s, contract %s, public suite %s, and project workflow suite %s", BundleVersion, ContractVersion, SuiteVersion, ProjectRegistrationWorkflowSuiteVersion)
 	}
 	if digest(contractSource) != m.SourceIdentity.ContractSHA256 {
 		return fmt.Errorf("contract source checksum mismatch")
@@ -219,6 +235,9 @@ func validateCapabilities(m *Manifest) error {
 	}
 	if len(m.OptionalCapabilities) != 3 {
 		return fmt.Errorf("optional capabilities must contain memory, documents, and todoist exactly once")
+	}
+	if !reflect.DeepEqual(m.OptionalWorkflows, canonicalClientWorkflows) {
+		return fmt.Errorf("optional client workflow contract mismatch")
 	}
 	seen := map[conformance.Capability]bool{}
 	for _, mapping := range append(append([]CapabilityMapping{}, m.RequiredCapabilities...), m.OptionalCapabilities...) {

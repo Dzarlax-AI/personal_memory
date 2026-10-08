@@ -99,3 +99,19 @@ func TestCache_AcquireRecallDoesNotHoldGlobalLockDuringHitUpdate(t *testing.T) {
 		t.Fatalf("blocked cache hit failed: %v", err)
 	}
 }
+
+func TestRecallCacheSubjectIsolation(t *testing.T) {
+	c := NewCache(time.Minute)
+	original := RecallFactsResult{Facts: []RecallFact{{Subject: &FactSubject{Scope: "unknown", Context: "original", SourceKind: "client_declared"}}}}
+	c.SetRecall("subject", original)
+	original.Facts[0].Subject.Context = "caller mutation"
+	got, _ := c.GetRecall("subject")
+	if got.Facts[0].Subject.Context != "original" {
+		t.Fatal("set shared subject")
+	}
+	got.Facts[0].Subject.Context = "reader mutation"
+	again, _ := c.GetRecall("subject")
+	if again.Facts[0].Subject.Context != "original" {
+		t.Fatal("get shared subject")
+	}
+}

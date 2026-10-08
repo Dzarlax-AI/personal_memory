@@ -1,8 +1,9 @@
 {
   "schema_version": 1,
-  "bundle_version": "0.1.0",
+  "bundle_version": "0.2.0",
   "contract_version": "1.0.0",
   "conformance_suite_version": "1.1.0",
+  "workflow_suite_version": "1.0.0",
   "source_identity": {
     "contract_sha256": "b425bb25ea0ecaa85ddaafacb9e5af9970d11a985a482b8d8fabcc612fa69668",
     "conformance_suite_sha256": "bd10ce7d22054210ad6798b3a75f48379ccb8063a52d620677b67b36509fcd1f"
@@ -14,6 +15,31 @@
     {"id": "memory", "tools": ["recall_facts", "store_fact", "update_fact", "set_fact_lifecycle"]},
     {"id": "documents", "tools": ["search_documents"]},
     {"id": "todoist", "tools": ["get_tasks", "create_task", "update_task", "complete_task", "delete_task"]}
+  ],
+  "optional_workflows": [
+    {
+      "id": "project_registration",
+      "tool": "ensure_project",
+      "trigger": "explicit_project_context_before_first_memory_or_document_tool_call",
+      "input_fields": ["project_key", "namespace", "name", "tag", "summary", "evidence"],
+      "requires_stable_key": true,
+      "min_project_key_bytes": 8,
+      "max_project_key_bytes": 128,
+      "project_key_pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$",
+      "max_request_bytes": 8192,
+      "max_summary_bytes": 2048,
+      "max_evidence_items": 4,
+      "max_evidence_bytes": 4096,
+      "evidence_kinds": ["client_readme", "client_agents", "user_declared"],
+      "statuses": ["created", "existing", "proposed_update", "ambiguous", "disabled", "unavailable"],
+      "identity_statuses": ["created", "existing"],
+      "output_fields": ["status", "project_id", "tag", "catalog_hash"],
+      "failure_behavior": "continue_baseline_without_project_context_or_origin",
+      "identity_use": "project_context_id_uses_returned_project_id; source_project_uses_returned_tag; subject_primary_tag_is_independent",
+      "source_kind": "client_declared",
+      "read_context_field": "project_context_id",
+      "subject_field": "primary_tag"
+    }
   ],
   "clients": [
     {
@@ -55,15 +81,15 @@
     }
   ],
   "source_assets": [
-    {"path": "policy.json", "sha256": "59444344db909c2871c45a0d101dd40ab83af9b2bb930ed15b1584b439ceff0f"},
-    {"path": "templates/chatgpt-prompt.md.tmpl", "sha256": "6e100bf02d625ce8f8242b9a4a040e7d4696cb9a22f2b1c85be4f4c2b7b9fe71"},
-    {"path": "templates/chatgpt-registration.json.tmpl", "sha256": "39e9ee08afc2748acbb1b79fbbb23a9eee4b36595c602db232640244d838fbcc"},
-    {"path": "templates/claude-rules.md.tmpl", "sha256": "5e7c12b19f8f9bbd3948c529e4816624f3af7bdbe4689ae2d7979c814e9c69b5"},
+    {"path": "policy.json", "sha256": "2afde5195f4e05667bcb23186e89509eb333e9343d1f18c5a2e4df8d60376260"},
+    {"path": "templates/chatgpt-prompt.md.tmpl", "sha256": "ba4373c23a16e53516143429a20ffe84377124736a1a61c086ca37f099fb24c1"},
+    {"path": "templates/chatgpt-registration.json.tmpl", "sha256": "0ff13e7f06484ee05cb5b82be9437ac180ad4345906736352ba8059073bd0fb9"},
+    {"path": "templates/claude-rules.md.tmpl", "sha256": "f364efded7ceede5f27bfe5b23bf8d3191bbb3e9027397bd10361ba9f1f03366"},
     {"path": "templates/claude-settings.json.tmpl", "sha256": "7b2863b7619e45fe5847fe25961c85410398534c44aadc98c0f5fb7b950174a9"},
-    {"path": "templates/claude-skill.md.tmpl", "sha256": "115765dc6ccf0162fba559063eead0d5e3c5285d9993bf85229da762511c6116"},
-    {"path": "templates/codex-agents.md.tmpl", "sha256": "0fe35dc5567c53ea76ac6ad460d862a01fd7bd8ed4a42a19f81ad810c8ec6db0"},
-    {"path": "templates/codex-skill.md.tmpl", "sha256": "14fc21b25087fe3e8434f5293f423e90d0b7f85e7323d3f474a5895ea2b6b5d1"},
-    {"path": "templates/generic-policy.json.tmpl", "sha256": "33dfc03ec540bcb98a078f9153ef1be77cd1d48bfe44526235842319307587ba"},
-    {"path": "templates/generic-tools.json.tmpl", "sha256": "c918307aab26ca2b423217f9e7078ca18fb3ac49304cff3459e9ee564deca06e"}
+    {"path": "templates/claude-skill.md.tmpl", "sha256": "82c70fee1fd0f63d69021a7499726d236812ba1ff2fa03b51c8eab13ff3e9a6e"},
+    {"path": "templates/codex-agents.md.tmpl", "sha256": "b7edb403f6ec2d8b97f6cbc9c8390b160b68edee6deb2af73f0dfb96357b3652"},
+    {"path": "templates/codex-skill.md.tmpl", "sha256": "fbb45d987b6ca174121a94ebeb283f4331476ffb4fe12a719034755013de2a62"},
+    {"path": "templates/generic-policy.json.tmpl", "sha256": "b97ecbda2395dd8516f3fc33ea1c4ac20d41835dfd7e832979a6aa019f8c6e1b"},
+    {"path": "templates/generic-tools.json.tmpl", "sha256": "78a3fa53653720661aedd4a75bf83c0c9314dc217a03ce7f4d24dde350d634e3"}
   ]
 }

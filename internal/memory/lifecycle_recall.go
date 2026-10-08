@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Dzarlax-AI/personal-memory/internal/aijudgment"
 	"github.com/Dzarlax-AI/personal-memory/internal/memory/lifecycle"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 )
@@ -23,8 +24,11 @@ const (
 // LifecycleRecallOptions is the normalized runtime lifecycle contract for recall.
 // AsOf is populated only for RecallLifecycleAsOf and always uses YYYY-MM-DD.
 type LifecycleRecallOptions struct {
-	Mode RecallLifecycleMode
-	AsOf string
+	ProjectContext   *aijudgment.ProjectDescription
+	ProjectContextID string
+	CatalogHash      string
+	Mode             RecallLifecycleMode
+	AsOf             string
 }
 
 // LifecyclePresentationDecision is the stable MCP presentation action.
@@ -49,6 +53,7 @@ const (
 )
 
 type lifecycleRecallCandidate struct {
+	AIRelevance  *float64
 	point        qdrant.Point
 	view         lifecycle.View
 	Decision     LifecyclePresentationDecision
