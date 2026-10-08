@@ -105,11 +105,10 @@ func (b *aiTestBackend) handle(w http.ResponseWriter, r *http.Request) {
 }
 func aiPrivateRoot(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/private/tmp", "ai-memory-test-")
+	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir
 }
 func aiTestConfig(t *testing.T, write, read string) aipolicy.Config {
@@ -218,7 +217,7 @@ func TestAIActiveKeyErrorsAndStorageFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.StateDir = filepath.Join(blocker, "state")
-	if err := s.ConfigureAIWithProviders(context.Background(), cfg, &fakeAIProvider{}, nil); err != nil {
+	if err := configureAIForTest(t, s, context.Background(), cfg, &fakeAIProvider{}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if s.AIBudget() != nil {
@@ -254,7 +253,7 @@ func TestAIWriteInferencePreservesMetadataAndPrivateAudit(t *testing.T) {
 		}
 		return aijudgment.ClassifyResult{Status: "decided", PrimaryTag: "alpha", RelatedTags: []string{"beta"}}, aijudgment.Usage{Known: true, InputTokens: 10}, nil
 	}
-	if err := s.ConfigureAIWithProviders(context.Background(), cfg, p, nil); err != nil {
+	if err := configureAIForTest(t, s, context.Background(), cfg, p, nil); err != nil {
 		t.Fatal(err)
 	}
 	result := aiStoredResult(t, s, map[string]interface{}{"fact": "synthetic alpha source", "namespace": "projects", "source_project": "beta", "source_kind": "client_declared", "permanent": true, "valid_until": "2099-01-01"})
@@ -292,7 +291,7 @@ func TestAIWriteCallerGroupingAndNamespaceWin(t *testing.T) {
 		b := &aiTestBackend{}
 		s := newAIServer(t, b)
 		p := &fakeAIProvider{}
-		if err := s.ConfigureAIWithProviders(context.Background(), cfg, p, nil); err != nil {
+		if err := configureAIForTest(t, s, context.Background(), cfg, p, nil); err != nil {
 			t.Fatal(err)
 		}
 		result := aiStoredResult(t, s, args)
@@ -333,7 +332,7 @@ func TestAIWriteFallbacksAndEgressRefusal(t *testing.T) {
 				}
 				return tt.result, aijudgment.Usage{}, nil
 			}}
-			if err := s.ConfigureAIWithProviders(context.Background(), cfg, p, nil); err != nil {
+			if err := configureAIForTest(t, s, context.Background(), cfg, p, nil); err != nil {
 				t.Fatal(err)
 			}
 			args := map[string]interface{}{"fact": "synthetic fallback", "namespace": "projects", "tags": tt.tags}
@@ -356,7 +355,7 @@ func TestAIWriteDuplicateRemainsDuplicate(t *testing.T) {
 	b := &aiTestBackend{points: []qdrant.Point{aiPoint("1", .99, "", false)}}
 	s := newAIServer(t, b)
 	p := &fakeAIProvider{}
-	if err := s.ConfigureAIWithProviders(context.Background(), cfg, p, nil); err != nil {
+	if err := configureAIForTest(t, s, context.Background(), cfg, p, nil); err != nil {
 		t.Fatal(err)
 	}
 	result := aiStoredResult(t, s, map[string]interface{}{"fact": "synthetic duplicate", "namespace": "projects"})
@@ -371,7 +370,7 @@ func TestAIReadUsesWholePoolAndPreservesLifecycleAuthority(t *testing.T) {
 	b := &aiTestBackend{points: points}
 	s := newAIServer(t, b)
 	p := &fakeAIProvider{}
-	if err := s.ConfigureAIWithProviders(context.Background(), cfg, nil, p); err != nil {
+	if err := configureAIForTest(t, s, context.Background(), cfg, nil, p); err != nil {
 		t.Fatal(err)
 	}
 	result := aiRecallResult(t, s, map[string]interface{}{"query": "synthetic query", "namespace": "projects", "lifecycle_mode": "history", "limit": 6})
@@ -421,7 +420,7 @@ func TestAIReadFallbackWholeBaseline(t *testing.T) {
 				}
 				return tt.output, aijudgment.Usage{}, nil
 			}}
-			if err := s.ConfigureAIWithProviders(context.Background(), cfg, nil, p); err != nil {
+			if err := configureAIForTest(t, s, context.Background(), cfg, nil, p); err != nil {
 				t.Fatal(err)
 			}
 			result := aiRecallResult(t, s, map[string]interface{}{"query": "synthetic query", "namespace": "projects", "limit": 1})
@@ -458,7 +457,7 @@ func TestAIReadRefusesEntireEgressAndOversizedPool(t *testing.T) {
 			b := &aiTestBackend{points: points}
 			s := newAIServer(t, b)
 			p := &fakeAIProvider{}
-			if err := s.ConfigureAIWithProviders(context.Background(), cfg, nil, p); err != nil {
+			if err := configureAIForTest(t, s, context.Background(), cfg, nil, p); err != nil {
 				t.Fatal(err)
 			}
 			result := aiRecallResult(t, s, map[string]interface{}{"query": "synthetic query", "limit": 5})
@@ -498,7 +497,7 @@ func TestAIReadConcurrentMutationsReturnRefreshedEligibleBaseline(t *testing.T) 
 				}
 				return aijudgment.RankResult{Status: "decided", Scores: map[string]float64{"c1": .1, "c2": .9}}, aijudgment.Usage{Known: true, InputTokens: 10}, nil
 			}}
-			if err := s.ConfigureAIWithProviders(context.Background(), cfg, nil, p); err != nil {
+			if err := configureAIForTest(t, s, context.Background(), cfg, nil, p); err != nil {
 				t.Fatal(err)
 			}
 			args := map[string]interface{}{"query": "synthetic query", "namespace": "projects", "tags": "alpha", "limit": 2}
@@ -534,7 +533,7 @@ func TestAIReadUnverifiableCandidateFailsSafely(t *testing.T) {
 		b.mu.Unlock()
 		return aijudgment.RankResult{Status: "decided", Scores: map[string]float64{"c1": .9}}, aijudgment.Usage{}, nil
 	}}
-	if err := s.ConfigureAIWithProviders(context.Background(), cfg, nil, p); err != nil {
+	if err := configureAIForTest(t, s, context.Background(), cfg, nil, p); err != nil {
 		t.Fatal(err)
 	}
 	result, _ := s.recallFacts(context.Background(), toolRequest(map[string]interface{}{"query": "synthetic query"}))
@@ -560,7 +559,7 @@ func TestAIShadowWritesBaselineAndWorkerStops(t *testing.T) {
 		}
 		return aijudgment.ClassifyResult{Status: "decided", PrimaryTag: "alpha"}, aijudgment.Usage{}, nil
 	}}
-	if err := s.ConfigureAIWithProviders(context.Background(), cfg, p, p); err != nil {
+	if err := configureAIForTest(t, s, context.Background(), cfg, p, p); err != nil {
 		t.Fatal(err)
 	}
 	result := aiStoredResult(t, s, map[string]interface{}{"fact": "synthetic shadow", "namespace": "projects", "source_project": "beta", "source_kind": "client_declared"})
@@ -590,7 +589,7 @@ func TestAIShadowRecallDoesNotCountOrRequery(t *testing.T) {
 	b := &aiTestBackend{points: []qdrant.Point{aiPoint("1", .9, "", false), aiPoint("2", .8, "", false)}}
 	s := newAIServer(t, b)
 	p := &fakeAIProvider{}
-	if err := s.ConfigureAIWithProviders(context.Background(), cfg, nil, p); err != nil {
+	if err := configureAIForTest(t, s, context.Background(), cfg, nil, p); err != nil {
 		t.Fatal(err)
 	}
 	result := aiRecallResult(t, s, map[string]interface{}{"query": "synthetic query", "limit": 1})
@@ -618,7 +617,7 @@ func TestAISharedBudgetAndImmutableConfiguration(t *testing.T) {
 	b := &aiTestBackend{}
 	s := newAIServer(t, b)
 	p := &fakeAIProvider{}
-	if err := s.ConfigureAIWithProviders(context.Background(), cfg, p, p); err != nil {
+	if err := configureAIForTest(t, s, context.Background(), cfg, p, p); err != nil {
 		t.Fatal(err)
 	}
 	cfg.Egress.AllowedProjectTags[0] = "denied"
@@ -644,7 +643,7 @@ func TestAIWriteCanceledCallerDoesNotMutate(t *testing.T) {
 		cancel()
 		return aijudgment.ClassifyResult{Status: "decided", PrimaryTag: "alpha"}, aijudgment.Usage{}, nil
 	}}
-	if err := s.ConfigureAIWithProviders(context.Background(), cfg, p, nil); err != nil {
+	if err := configureAIForTest(t, s, context.Background(), cfg, p, nil); err != nil {
 		t.Fatal(err)
 	}
 	result, _ := s.storeFact(ctx, toolRequest(map[string]interface{}{"fact": "synthetic canceled", "namespace": "projects"}))
@@ -663,7 +662,7 @@ func TestAIProviderDeadlineFallsBack(t *testing.T) {
 		<-ctx.Done()
 		return aijudgment.ClassifyResult{}, aijudgment.Usage{}, ctx.Err()
 	}}
-	if err := s.ConfigureAIWithProviders(context.Background(), cfg, p, nil); err != nil {
+	if err := configureAIForTest(t, s, context.Background(), cfg, p, nil); err != nil {
 		t.Fatal(err)
 	}
 	begin := time.Now()
@@ -676,7 +675,7 @@ func TestAIShadowQueueIsBoundedAndConfigShutdownCancels(t *testing.T) {
 	cfg := aiTestConfig(t, "on", "off")
 	s := newAIServer(t, &aiTestBackend{})
 	p := &fakeAIProvider{}
-	if err := s.ConfigureAIWithProviders(context.Background(), cfg, p, nil); err != nil {
+	if err := configureAIForTest(t, s, context.Background(), cfg, p, nil); err != nil {
 		t.Fatal(err)
 	}
 	a := s.aiState()
@@ -761,7 +760,7 @@ func TestAIUpdateAndImportNeverClassify(t *testing.T) {
 	b := &aiTestBackend{points: []qdrant.Point{point}}
 	s := newAIServer(t, b)
 	p := &fakeAIProvider{}
-	if err := s.ConfigureAIWithProviders(context.Background(), cfg, p, nil); err != nil {
+	if err := configureAIForTest(t, s, context.Background(), cfg, p, nil); err != nil {
 		t.Fatal(err)
 	}
 	updated, err := s.updateFact(context.Background(), toolRequest(map[string]interface{}{"point_id": "1", "new_fact": "synthetic edited", "namespace": "projects"}))
@@ -781,7 +780,7 @@ func TestAIWriteAuditFailureReturnsBaseline(t *testing.T) {
 	b := &aiTestBackend{}
 	s := newAIServer(t, b)
 	p := &fakeAIProvider{}
-	if err := s.ConfigureAIWithProviders(context.Background(), cfg, p, nil); err != nil {
+	if err := configureAIForTest(t, s, context.Background(), cfg, p, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(cfg.StateDir, "write-audits"), []byte("blocked"), 0600); err != nil {
@@ -802,7 +801,7 @@ func TestAIWriteInferenceAddsGroupingWithoutRemovingCallerTags(t *testing.T) {
 	b := &aiTestBackend{}
 	s := newAIServer(t, b)
 	p := &fakeAIProvider{}
-	if err := s.ConfigureAIWithProviders(context.Background(), cfg, p, nil); err != nil {
+	if err := configureAIForTest(t, s, context.Background(), cfg, p, nil); err != nil {
 		t.Fatal(err)
 	}
 	result := aiStoredResult(t, s, map[string]interface{}{"fact": "synthetic topics", "namespace": "projects", "tags": "topic-a,topic-b"})
@@ -833,7 +832,7 @@ func TestAIReadWithoutContextDiscardsChangedCatalogRanking(t *testing.T) {
 		}
 		return aijudgment.RankResult{Status: "decided", Scores: map[string]float64{"c1": .1, "c2": .9}}, aijudgment.Usage{Known: true, InputTokens: 5}, nil
 	}}
-	if err := s.ConfigureAIWithProviders(context.Background(), cfg, nil, provider); err != nil {
+	if err := configureAIForTest(t, s, context.Background(), cfg, nil, provider); err != nil {
 		t.Fatal(err)
 	}
 	got := aiRecallResult(t, s, map[string]interface{}{"query": "synthetic query", "namespace": "projects"})
@@ -852,4 +851,20 @@ func TestAIReadWithoutContextDiscardsChangedCatalogRanking(t *testing.T) {
 	if gets != 2 {
 		t.Fatalf("candidate freshness omitted: gets=%d", gets)
 	}
+}
+
+// Stop shadow writers before t.TempDir removes their state directories.
+func configureAIForTest(t *testing.T, s *Server, ctx context.Context, cfg aipolicy.Config, write, read aijudgment.Provider) error {
+	t.Helper()
+	err := s.ConfigureAIWithProviders(ctx, cfg, write, read)
+	if err == nil {
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := s.ShutdownAI(ctx); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	return err
 }

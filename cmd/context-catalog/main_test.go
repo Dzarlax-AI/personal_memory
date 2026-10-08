@@ -75,3 +75,24 @@ func canonicalTempDir(t *testing.T) string {
 	}
 	return d
 }
+
+func TestWriteNewPreservesParentPermissions(t *testing.T) {
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeNew(filepath.Join(parent, "out.json"), []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(parent)
+	if err != nil || info.Mode().Perm() != 0755 {
+		t.Fatal("parent permissions changed", err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(parent, link); err != nil {
+		t.Fatal(err)
+	}
+	if writeNew(filepath.Join(link, "second.json"), []byte("{}")) == nil {
+		t.Fatal("symlink parent accepted")
+	}
+}

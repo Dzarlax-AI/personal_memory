@@ -509,6 +509,8 @@ func makeCatalogEvidence(catalog contextcatalog.Snapshot) []CatalogEvidence {
 		start := len(out)
 		if entry.DeclaredSummary != "" {
 			appendEvidence(entry.Namespace, entry.Tag, "user_declared", entry.DeclaredSummary)
+		} else if entry.DescriptionSource == "client_declared" {
+			appendEvidence(entry.Namespace, entry.Tag, "user_declared", entry.Summary)
 		}
 		for _, evidence := range entry.ClientEvidence {
 			appendEvidence(entry.Namespace, entry.Tag, evidence.Kind, evidence.Text)
@@ -819,6 +821,9 @@ func mergeDescriptiveProposal(current, allowed, proposal contextcatalog.Snapshot
 		durableRefs, ok := durableEvidenceRefs(in, candidate.Namespace, candidate.Tag, candidate.EvidenceRefs)
 		if !ok {
 			return contextcatalog.Snapshot{}, false
+		}
+		if active.DeclaredSummary == "" && active.DescriptionSource == "client_declared" {
+			active.DeclaredSummary = active.Summary
 		}
 		active.Summary = candidate.Summary
 		active.Aliases = cloneStrings(candidate.Aliases)

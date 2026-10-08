@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Dzarlax-AI/personal-memory/internal/aipolicy"
 	"github.com/Dzarlax-AI/personal-memory/internal/contextcatalog"
 	"golang.org/x/sys/unix"
 )
@@ -160,8 +159,8 @@ func readSnapshot(path string) (contextcatalog.Snapshot, error) {
 }
 
 func writeNew(path string, data []byte) error {
-	if err := aipolicy.SecureDir(filepath.Dir(path)); err != nil {
-		return err
+	if info, err := os.Lstat(filepath.Dir(path)); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("output parent must be an existing non-symlink directory")
 	}
 	fd, err := unix.Open(path, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0600)
 	if err != nil {

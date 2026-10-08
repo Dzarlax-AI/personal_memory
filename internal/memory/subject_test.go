@@ -20,7 +20,7 @@ func TestSubjectNonProjectWritesNeverInfer(t *testing.T) {
 			b := &aiTestBackend{}
 			s := newAIServer(t, b)
 			p := &fakeAIProvider{}
-			if err := s.ConfigureAIWithProviders(context.Background(), aiTestConfig(t, "on", "off"), p, nil); err != nil {
+			if err := configureAIForTest(t, s, context.Background(), aiTestConfig(t, "on", "off"), p, nil); err != nil {
 				t.Fatal(err)
 			}
 			r := aiStoredResult(t, s, map[string]interface{}{"fact": "I live in Serbia", "namespace": tc.ns, "subject_scope": tc.scope, "source_project": "alpha", "source_kind": "client_declared"})
@@ -59,7 +59,7 @@ func TestSubjectContextFlowsToProviderAndAbstentionsPreserveGrouping(t *testing.
 				}
 				return result, aijudgment.Usage{Known: true, InputTokens: 1}, nil
 			}}
-			if err := s.ConfigureAIWithProviders(context.Background(), aiTestConfig(t, "on", "off"), p, nil); err != nil {
+			if err := configureAIForTest(t, s, context.Background(), aiTestConfig(t, "on", "off"), p, nil); err != nil {
 				t.Fatal(err)
 			}
 			r := aiStoredResult(t, s, map[string]interface{}{"fact": "Component behavior", "namespace": "projects", "subject_context": "This component stores explicit assertions"})

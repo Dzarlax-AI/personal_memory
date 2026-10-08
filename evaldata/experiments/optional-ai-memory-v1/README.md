@@ -16,7 +16,7 @@ Score an offline response manifest against that exact preview without credential
 go run ./cmd/eval-ai-memory --corpus evaldata/experiments/optional-ai-memory-v1/synthetic.json --dir eval-results/optional-ai-memory-v1/preview --results /path/to/offline-results.json
 ```
 
-The optional results file has schema version 1 and binds its rows to the preview's `corpus_sha256`. Each row carries `request_sha256`, `task`, `case_id`, `provider`, `arm`, and `status` (`decided`, `abstained`, or `invalid`). Write rows use `primary_tag`; read rows use one finite `scores` value for every request-local candidate alias and a `none_relevant` boolean. Rows are joined to the exact provider/arm/case request and checked against its hash and labels. Duplicate or unknown rows, hash mismatches, and invalid statuses reject the results file. Missing rows and malformed decisions stay in the expected denominators as invalid; they are never dropped to improve a score.
+The optional results file has schema version 1 and binds its rows to the preview's `corpus_sha256`. Each row carries `request_sha256`, `task`, `case_id`, `provider`, `arm`, and `status` (`decided`, `abstained`, or `invalid`). Write rows use `primary_tag` for known projects and an explicit `subject_decision` for abstentions (`insufficient_context`, `other_project`, `non_project`, or `multiple_projects`); read rows use one finite `scores` value for every request-local candidate alias and a `none_relevant` boolean. Rows are joined to the exact provider/arm/case request and checked against its hash and labels. Duplicate or unknown rows, hash mismatches, and invalid statuses reject the results file. Missing rows and malformed decisions stay in the expected denominators as invalid; they are never dropped to improve a score.
 
 Schematic rows (replace the hashes with values copied from `preview.json`):
 
@@ -48,7 +48,7 @@ Schematic rows (replace the hashes with values copied from `preview.json`):
 }
 ```
 
-Provider, transport, malformed-response, or refusal failures should be represented as `status: "invalid"` for the bound request. `abstained` has no `primary_tag`, `scores`, or `none_relevant` field.
+Provider, transport, malformed-response, or refusal failures should be represented as `status: "invalid"` for the bound request. `abstained` write rows require the exact `subject_decision` and have no `primary_tag`, `scores`, or `none_relevant` field. Missing or mismatched abstention labels receive no credit.
 
 `report.json` is written beside `preview.json` with private file permissions. It reports write primary accuracy, abstention/invalid counts, and read MRR plus separate no-relevant accuracy for each paired provider/arm. Read order first follows lifecycle authority (`canonical_current`, `other_current`, `disputed`, `historical`, `superseded`); scores reorder candidates only within the same authority bucket, and score ties preserve input order. MRR is reported against that same comparator alongside baseline MRR and delta MRR; no-relevant cases contribute zero to MRR and have their own accuracy metric. The report marks the quality verdict `not_evaluated` and makes no model-quality claim. The bundled labels are synthetic author references, not human-adjudicated or independent holdout truth. Do not publish provider responses containing private memory facts as public fixtures.
 

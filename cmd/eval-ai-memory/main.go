@@ -129,7 +129,7 @@ func run(args []string, out io.Writer) error {
 		return errors.New("corpus exceeds byte limit")
 	}
 	var c Corpus
-	if json.Unmarshal(raw, &c) != nil {
+	if decodeStrictJSON(raw, &c) != nil {
 		return errors.New("invalid corpus")
 	}
 	m, err := preview(c, raw)

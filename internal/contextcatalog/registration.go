@@ -27,7 +27,7 @@ var (
 	projectKeyPattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$`)
 	secretPattern        = regexp.MustCompile(`(?i)(api[_-]?key|token|password|secret|authorization)\s*[:=]\s*[^\s]+|\bbearer\s+[a-z0-9._~-]{8,}|\b(?:sk-[a-z0-9]{12,}|gh[pousr]_[a-z0-9]{12,}|xox[baprs]-[a-z0-9-]{12,})`)
 	credentialURLPattern = regexp.MustCompile(`(?i)https?://[^/@\s]+:[^/@\s]+@`)
-	absolutePathPattern  = regexp.MustCompile(`(?:^|[\s"'=])/(?:[A-Za-z0-9._~-]+/)*[A-Za-z0-9._~-]+|(?:^|[\s"'=])[A-Za-z]:\\`)
+	absolutePathPattern  = regexp.MustCompile(`(?:^|[\s"'=])/(?:(?:[A-Za-z0-9._~-]+/)+[A-Za-z0-9._~-]+|(?:Users|home|root|private|tmp|etc|var)(?:/|\b))|(?:^|[\s"'=])[A-Za-z]:\\`)
 )
 
 type updateProposal struct {
@@ -121,7 +121,7 @@ func EnsureProject(dir, owner string, input RegistrationInput) (RegistrationResu
 	}
 	s.Entries = append(s.Entries, Entry{Namespace: input.Namespace, Tag: input.Tag, Name: input.Name, Summary: input.Summary,
 		Aliases: []string{}, OwnedComponents: []string{}, Boundaries: []string{}, Uses: []string{}, SharedWith: []string{}, PositiveExamples: []string{}, NegativeExamples: []string{}, EvidenceRefs: []string{}, ReviewStatus: "declared",
-		ProjectID: projectID, ProjectKey: input.ProjectKey, Owner: owner, ClientEvidence: cloneEvidence(input.Evidence), DescriptionSource: "client_declared", DeclaredSummary: input.Summary})
+		ProjectID: projectID, ProjectKey: input.ProjectKey, Owner: owner, ClientEvidence: cloneEvidence(input.Evidence), DescriptionSource: "client_declared"})
 	return publishRegistration(dir, s, hash, RegistrationResult{Status: "created", ProjectID: projectID, Tag: input.Tag})
 }
 

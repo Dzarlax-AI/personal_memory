@@ -203,3 +203,16 @@ func TestDeclaredStatusNeedsNoIdentityWhenSanitized(t *testing.T) {
 		t.Fatal("declared entry should be eligible")
 	}
 }
+
+func TestEndpointPathsRemainValidRegistrationEvidence(t *testing.T) {
+	for _, text := range []string{"Exposes GET /health", "Served at /mcp"} {
+		if absolutePathPattern.MatchString(text) {
+			t.Fatal("endpoint rejected", text)
+		}
+	}
+	for _, text := range []string{"file /Users/test/source", "file /home", "file /etc/secrets", "file C:\\private"} {
+		if !absolutePathPattern.MatchString(text) {
+			t.Fatal("private path accepted", text)
+		}
+	}
+}

@@ -33,13 +33,14 @@ type Maintenance struct {
 	GroupingApply   string `json:"grouping_apply"`
 }
 type Profile struct {
-	Protocol   string `json:"protocol"`
-	Model      string `json:"model"`
-	Endpoint   string `json:"endpoint"`
-	KeyFile    string `json:"key_file"`
-	Local      bool   `json:"local"`
-	TimeoutMS  int    `json:"timeout_ms"`
-	OutputMode string `json:"output_mode,omitempty"`
+	ResponseModels []string `json:"response_models,omitempty"`
+	Protocol       string   `json:"protocol"`
+	Model          string   `json:"model"`
+	Endpoint       string   `json:"endpoint"`
+	KeyFile        string   `json:"key_file"`
+	Local          bool     `json:"local"`
+	TimeoutMS      int      `json:"timeout_ms"`
+	OutputMode     string   `json:"output_mode,omitempty"`
 }
 type Egress struct {
 	AllowedNamespaces    []string `json:"allowed_namespaces"`
@@ -206,6 +207,15 @@ func (p Profile) Validate() error {
 	if strings.TrimSpace(p.Model) == "" || len(p.Model) > 255 || strings.ContainsAny(p.Model, "\r\n") {
 		return errors.New("inference model must be explicit")
 	}
+
+	if len(p.ResponseModels) > 16 || (len(p.ResponseModels) > 0 && p.Protocol != "openai-responses" && p.Protocol != "openai-compatible-chat") {
+		return errors.New("response model allowlist only applies to maintenance profiles, maximum 16")
+	}
+	for _, model := range p.ResponseModels {
+		if strings.TrimSpace(model) == "" || len(model) > 255 || strings.ContainsAny(model, "\r\n") {
+			return errors.New("invalid response model identifier")
+		}
+	}
 	u, err := url.Parse(p.Endpoint)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return errors.New("invalid inference endpoint")
@@ -299,4 +309,17 @@ func (p Profile) ReadKey() (string, error) {
 		return "", errors.New("invalid inference key")
 	}
 	return k, nil
+}
+
+// AcceptsResponseModel admits the requested identifier and explicit operator aliases.
+func (p Profile) AcceptsResponseModel(model string) bool {
+	if model == p.Model {
+		return true
+	}
+	for _, allowed := range p.ResponseModels {
+		if model == allowed {
+			return true
+		}
+	}
+	return false
 }

@@ -10,6 +10,7 @@ import (
 	"sort"
 
 	"github.com/Dzarlax-AI/personal-memory/internal/aijudgment"
+	"github.com/Dzarlax-AI/personal-memory/internal/contextcatalog"
 )
 
 // ResultManifest is an offline replay ledger. It is never an instruction to
@@ -21,15 +22,16 @@ type ResultManifest struct {
 }
 
 type ResultRow struct {
-	RequestSHA256 string             `json:"request_sha256"`
-	Task          string             `json:"task"`
-	CaseID        string             `json:"case_id"`
-	Provider      string             `json:"provider"`
-	Arm           string             `json:"arm"`
-	Status        string             `json:"status"`
-	PrimaryTag    string             `json:"primary_tag,omitempty"`
-	Scores        map[string]float64 `json:"scores,omitempty"`
-	NoneRelevant  *bool              `json:"none_relevant,omitempty"`
+	SubjectDecision string             `json:"subject_decision,omitempty"`
+	RequestSHA256   string             `json:"request_sha256"`
+	Task            string             `json:"task"`
+	CaseID          string             `json:"case_id"`
+	Provider        string             `json:"provider"`
+	Arm             string             `json:"arm"`
+	Status          string             `json:"status"`
+	PrimaryTag      string             `json:"primary_tag,omitempty"`
+	Scores          map[string]float64 `json:"scores,omitempty"`
+	NoneRelevant    *bool              `json:"none_relevant,omitempty"`
 }
 
 type ReplayReport struct {
@@ -141,7 +143,7 @@ func scoreReplay(c Corpus, previewManifest Manifest, results ResultManifest, res
 			allSynthetic = false
 		}
 		caseTags := projectTagsForNamespace(c, w.Input.Namespace)
-		if w.Expected != "insufficient_context" && w.Expected != "other_project" && !caseTags[w.Expected] {
+		if !abstentionDecision(w.Expected) && !caseTags[w.Expected] {
 			return ReplayReport{}, errors.New("write expectation is not an approved catalog tag")
 		}
 	}
@@ -259,9 +261,12 @@ func scoreWriteRow(row ResultRow, c WriteCase, allowed map[string]bool) (correct
 		if row.PrimaryTag != "" || row.Scores != nil || row.NoneRelevant != nil {
 			return false, false, true
 		}
-		return c.Expected == "insufficient_context" || c.Expected == "other_project", true, true
+		if !abstentionDecision(row.SubjectDecision) {
+			return false, false, true
+		}
+		return c.Expected == row.SubjectDecision, true, true
 	case "decided":
-		if row.PrimaryTag == "" || !allowed[row.PrimaryTag] || row.Scores != nil || row.NoneRelevant != nil {
+		if (row.SubjectDecision != "" && row.SubjectDecision != "known_project") || row.PrimaryTag == "" || !allowed[row.PrimaryTag] || row.Scores != nil || row.NoneRelevant != nil {
 			return false, false, false
 		}
 		return row.PrimaryTag == c.Expected, true, false
@@ -273,7 +278,7 @@ func scoreWriteRow(row ResultRow, c WriteCase, allowed map[string]bool) (correct
 func scoreReadRow(row ResultRow, c ReadCase, aliases map[string]bool) (mrr float64, noRelevantCorrect, valid, abstained bool) {
 	switch row.Status {
 	case "abstained":
-		if row.PrimaryTag != "" || row.Scores != nil || row.NoneRelevant != nil {
+		if row.SubjectDecision != "" || row.PrimaryTag != "" || row.Scores != nil || row.NoneRelevant != nil {
 			return 0, false, false, true
 		}
 		return 0, false, true, true
@@ -345,7 +350,7 @@ func reciprocalRank(expected, ranked []string) float64 {
 func projectTags(c Corpus) map[string]bool {
 	out := map[string]bool{}
 	for _, e := range c.Catalog.Entries {
-		if e.Namespace == "projects" && e.ReviewStatus == "approved" {
+		if e.Namespace == "projects" && contextcatalog.Eligible(e) {
 			out[e.Tag] = true
 		}
 	}
@@ -433,6 +438,26 @@ func rejectJSONDuplicates(data []byte) error {
 		return err
 	}
 	if _, err := d.Token(); err != io.EOF {
+		return errors.New("trailing JSON")
+	}
+	return nil
+}
+
+// An unspecified abstention remains invalid rather than receiving semantic credit.
+func abstentionDecision(s string) bool {
+	return s == "insufficient_context" || s == "other_project" || s == "non_project" || s == "multiple_projects"
+}
+func decodeStrictJSON(raw []byte, out any) error {
+	if err := rejectJSONDuplicates(raw); err != nil {
+		return err
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(out); err != nil {
+		return err
+	}
+	var extra any
+	if d.Decode(&extra) != io.EOF {
 		return errors.New("trailing JSON")
 	}
 	return nil

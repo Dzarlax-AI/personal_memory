@@ -405,3 +405,17 @@ func mustJSON(v any) []byte {
 	}
 	return b
 }
+
+func TestMaintenanceResponseSnapshotAllowlist(t *testing.T) {
+	proposal := Proposal{SchemaVersion: 1, BaseCatalogHash: testInput().baseCatalogHash, Grouping: []GroupingProposal{}, MissingEvidence: []string{}}
+	payload, _ := json.Marshal(proposal)
+	wire := []byte(`{"model":"local-snapshot","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":` + string(mustJSON(string(payload))) + `}]}],"usage":{"input_tokens":10,"output_tokens":5}}`)
+	profile := aipolicy.Profile{Protocol: "openai-responses", Model: "local"}
+	if _, _, err := decodeProviderResponse(profile, wire); err == nil {
+		t.Fatal("unlisted snapshot accepted")
+	}
+	profile.ResponseModels = []string{"local-snapshot"}
+	if _, _, err := decodeProviderResponse(profile, wire); err != nil {
+		t.Fatal(err)
+	}
+}

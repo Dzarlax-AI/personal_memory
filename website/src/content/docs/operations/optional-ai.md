@@ -179,3 +179,12 @@ Personal life facts and cross-project technical preferences use explicit
 `personal` or `tech` namespaces and bypass project inference. Project inference
 remains optional and disabled by default. Removing origin input does not establish
 model accuracy or authorize production activation.
+
+### Maintenance response model identifiers
+
+Maintenance profiles can set an optional `response_models` array (maximum 16
+explicit identifiers) when a provider returns a snapshot identifier for a requested
+model alias. The requested `model` and these exact identifiers are accepted;
+other identifiers remain invalid. No prefix or automatic alias matching occurs.
+This option is restricted to maintenance protocols and does not change the pinned
+Decisions/Jev judgment adapters.

@@ -169,7 +169,7 @@ func TestRecallProjectContextScopeCacheAndEgress(t *testing.T) {
 		}
 		return aijudgment.RankResult{Status: "decided", Scores: map[string]float64{"c1": .1, "c2": .9}}, aijudgment.Usage{Known: true, InputTokens: 5}, nil
 	}
-	if err := s.ConfigureAIWithProviders(context.Background(), cfg, nil, provider); err != nil {
+	if err := configureAIForTest(t, s, context.Background(), cfg, nil, provider); err != nil {
 		t.Fatal(err)
 	}
 	registered := ensureTestProject(t, s, registrationTestArgs("gamma-identity", "gamma"))
@@ -218,7 +218,7 @@ func TestRecallProjectContextScopeCacheAndEgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.Egress.AllowedProjectTags = []string{"alpha", "beta"}
-	if err := s.ConfigureAIWithProviders(context.Background(), cfg, nil, provider); err != nil {
+	if err := configureAIForTest(t, s, context.Background(), cfg, nil, provider); err != nil {
 		t.Fatal(err)
 	}
 	before := provider.reads.Load()
@@ -319,7 +319,7 @@ func TestShadowReadContextAndCatalogCacheIsolation(t *testing.T) {
 		}
 		return aijudgment.RankResult{Status: "decided", Scores: map[string]float64{"c1": .9}}, aijudgment.Usage{Known: true, InputTokens: 5}, nil
 	}
-	if err := s.ConfigureAIWithProviders(context.Background(), cfg, nil, provider); err != nil {
+	if err := configureAIForTest(t, s, context.Background(), cfg, nil, provider); err != nil {
 		t.Fatal(err)
 	}
 	first := ensureTestProject(t, s, registrationTestArgs("gamma-identity", "gamma"))
@@ -380,7 +380,7 @@ func TestRecallContextPreservesFiltersAndProtectedVisibility(t *testing.T) {
 		}
 		return aijudgment.RankResult{Status: "decided", Scores: map[string]float64{"c1": .8}}, aijudgment.Usage{Known: true, InputTokens: 1}, nil
 	}
-	if err := s.ConfigureAIWithProviders(context.Background(), cfg, nil, provider); err != nil {
+	if err := configureAIForTest(t, s, context.Background(), cfg, nil, provider); err != nil {
 		t.Fatal(err)
 	}
 	registered := ensureTestProject(t, s, registrationTestArgs("gamma-identity", "gamma"))

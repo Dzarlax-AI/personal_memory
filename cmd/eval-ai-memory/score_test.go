@@ -44,6 +44,7 @@ func completeResultRows(c Corpus, m Manifest) []ResultRow {
 			w := writes[req.CaseID]
 			if w.Expected == "insufficient_context" {
 				row.Status = "abstained"
+				row.SubjectDecision = w.Expected
 			} else {
 				row.PrimaryTag = w.Expected
 			}
@@ -115,6 +116,7 @@ func TestMissingAndInvalidRowsStayInDenominator(t *testing.T) {
 		}
 		if row.Provider == "decisions" && row.Arm == "catalog" && row.Task == "write" && row.CaseID == "w1" {
 			row.Status = "abstained"
+			row.SubjectDecision = "insufficient_context"
 			row.PrimaryTag = ""
 		}
 		filtered = append(filtered, row)
@@ -242,11 +244,10 @@ func TestResultManifestRejectsBindingAndIdentityErrors(t *testing.T) {
 func TestRunWritesPrivateReplayReport(t *testing.T) {
 	c, m, corpusRaw := replayFixture(t)
 	results := ResultManifest{SchemaVersion: 1, CorpusSHA256: m.CorpusSHA256, Rows: completeResultRows(c, m)}
-	tmp, err := os.MkdirTemp("/private/tmp", "eval-ai-memory-")
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(tmp) })
 	corpusPath := filepath.Join(tmp, "corpus.json")
 	resultsPath := filepath.Join(tmp, "results.json")
 	dir := filepath.Join(tmp, "out")
@@ -266,5 +267,29 @@ func TestRunWritesPrivateReplayReport(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0600 {
 		t.Fatalf("report mode=%o", info.Mode().Perm())
+	}
+}
+
+func TestExactAbstentionDecisionAndDeclaredProjects(t *testing.T) {
+	for _, expected := range []string{"insufficient_context", "other_project", "non_project", "multiple_projects"} {
+		for _, actual := range []string{"", "insufficient_context", "other_project", "non_project", "multiple_projects"} {
+			correct, valid, _ := scoreWriteRow(ResultRow{Status: "abstained", SubjectDecision: actual}, WriteCase{Expected: expected}, nil)
+			if correct != (actual == expected) || valid != (actual != "") {
+				t.Fatalf("expected %s actual %s: %v %v", expected, actual, correct, valid)
+			}
+		}
+	}
+	c, _, _ := replayFixture(t)
+	c.Catalog.Entries[0].ReviewStatus = "declared"
+	if !projectTags(c)[c.Catalog.Entries[0].Tag] {
+		t.Fatal("declared card rejected")
+	}
+}
+func TestStrictCorpusJSON(t *testing.T) {
+	for _, raw := range []string{`{"schema_version":1,"schema_version":2}`, `{"unknown":1}`, `{} {}`} {
+		var c Corpus
+		if decodeStrictJSON([]byte(raw), &c) == nil {
+			t.Fatal("malformed corpus accepted", raw)
+		}
 	}
 }

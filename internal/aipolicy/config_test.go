@@ -183,3 +183,10 @@ func TestRegistrationAndAllIndependentContours(t *testing.T) {
 		}
 	}
 }
+
+func TestMaintenanceResponseModelAllowlist(t *testing.T) {
+	p := Profile{Model: "alias", ResponseModels: []string{"snapshot"}}
+	if !p.AcceptsResponseModel("alias") || !p.AcceptsResponseModel("snapshot") || p.AcceptsResponseModel("unexpected") {
+		t.Fatal("response allowlist mismatch")
+	}
+}

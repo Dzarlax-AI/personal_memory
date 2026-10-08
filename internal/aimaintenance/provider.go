@@ -297,7 +297,7 @@ func decodeProviderResponse(profile aipolicy.Profile, raw []byte) (Proposal, aij
 				Output *int64 `json:"output_tokens"`
 			} `json:"usage"`
 		}
-		if json.Unmarshal(raw, &env) != nil || env.Model != profile.Model || env.Status != "completed" || env.Usage == nil || env.Usage.Input == nil || env.Usage.Output == nil {
+		if json.Unmarshal(raw, &env) != nil || !profile.AcceptsResponseModel(env.Model) || env.Status != "completed" || env.Usage == nil || env.Usage.Input == nil || env.Usage.Output == nil {
 			return Proposal{}, aijudgment.Usage{}, errors.New("invalid maintenance provider response")
 		}
 		model = env.Model
@@ -332,7 +332,7 @@ func decodeProviderResponse(profile aipolicy.Profile, raw []byte) (Proposal, aij
 				Completion *int64 `json:"completion_tokens"`
 			} `json:"usage"`
 		}
-		if json.Unmarshal(raw, &env) != nil || env.Model != profile.Model || len(env.Choices) != 1 || env.Choices[0].FinishReason != "stop" || env.Choices[0].Message.Refusal != "" || env.Usage == nil || env.Usage.Prompt == nil || env.Usage.Completion == nil {
+		if json.Unmarshal(raw, &env) != nil || !profile.AcceptsResponseModel(env.Model) || len(env.Choices) != 1 || env.Choices[0].FinishReason != "stop" || env.Choices[0].Message.Refusal != "" || env.Usage == nil || env.Usage.Prompt == nil || env.Usage.Completion == nil {
 			return Proposal{}, aijudgment.Usage{}, errors.New("invalid maintenance provider response")
 		}
 		model = env.Model
@@ -344,7 +344,7 @@ func decodeProviderResponse(profile aipolicy.Profile, raw []byte) (Proposal, aij
 			content = json.RawMessage(str)
 		}
 	}
-	if model != profile.Model || inTok == nil || outTok == nil || *inTok < 0 || *outTok < 0 || len(content) == 0 {
+	if !profile.AcceptsResponseModel(model) || inTok == nil || outTok == nil || *inTok < 0 || *outTok < 0 || len(content) == 0 {
 		return Proposal{}, aijudgment.Usage{}, errors.New("invalid maintenance provider response")
 	}
 	usage := aijudgment.Usage{InputTokens: *inTok, OutputTokens: *outTok, Known: true}

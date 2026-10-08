@@ -161,6 +161,10 @@ func cloneRecallFactsResult(result RecallFactsResult) RecallFactsResult {
 			value := *fact.AIRelevance
 			cloned.Facts[index].AIRelevance = &value
 		}
+		if fact.Subject != nil {
+			subject := *fact.Subject
+			cloned.Facts[index].Subject = &subject
+		}
 		if fact.Origin != nil {
 			origin := *fact.Origin
 			cloned.Facts[index].Origin = &origin

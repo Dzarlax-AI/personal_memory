@@ -1,5 +1,3 @@
-//go:build ignore
-
 package main
 
 import (
@@ -35,9 +33,11 @@ func assert(v bool, s string) {
 	}
 }
 func main() {
-	root, e := os.MkdirTemp("/private/tmp", "memory-release-client-")
+	root, e := os.MkdirTemp("", "memory-release-client-")
 	check(e)
 	defer os.RemoveAll(root)
+	root, e = filepath.EvalSymlinks(root)
+	check(e)
 	embed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/info" {
