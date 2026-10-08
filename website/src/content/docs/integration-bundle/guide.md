@@ -8,16 +8,27 @@ The client integration bundle turns the [Model Memory Usage Contract](../../refe
 
 ## Versions and architecture
 
-The first public release has these independently validated identities:
+The current release has these independently validated identities:
 
 | Component | Version |
 |---|---|
-| Bundle | `0.1.0` |
+| Bundle | `0.2.0` |
 | Contract | `1.0.0` |
 | Public conformance suite | `1.1.0` |
+| Project registration workflow suite | `1.0.0` (9 synthetic cases) |
 | Client artifact formats | `1.0.0` |
 
-The standalone executable embeds the manifest, canonical policy, client templates, normative contract, and public conformance suite. It verifies their bound identities, renders one capability-specific artifact set, then installs, updates, verifies, rolls back, or exports it. A client wrapper may make a rule more concrete, but it must preserve every canonical rule.
+The standalone executable embeds the manifest, canonical policy, client templates, normative contract, and public conformance suite. It verifies their bound identities, renders one capability-specific artifact set, then installs, updates, verifies, rolls back, or exports it. The 0.2.0 bundle adds a separately versioned optional project registration workflow while preserving the shared 1.0.0 policy and 1.1.0 public suite. A client wrapper may make a rule more concrete, but it must preserve every canonical rule.
+
+### Optional project registration
+
+When a user explicitly works in a project context, client instructions may call `ensure_project` before the first `recall_facts`, `search_documents`, or `store_fact` call for that project. The workflow is used only when the exact tool is discovered and enabled in the current MCP session. Tool presence signals the server's optional `client_declared` registration capability; no model or registration side effect is required for ordinary memory use.
+
+The client sends `namespace=projects`, a stable `project_key`, project name, proposed tag, short summary, and bounded evidence. The key must be persisted across sessions and remain stable across worktrees and path changes. A client can use a persistent UUID or a digest of credential-free repository identity. If it cannot persist the key, it skips registration. The server limits the request to 8 KiB, summary to 2 KiB, and evidence to four excerpts and 4 KiB total. Evidence kinds are `client_readme`, `client_agents`, and `user_declared`. Do not send absolute or private paths, credential-bearing URLs, secrets, or full repository files.
+
+Only a complete `created` or `existing` result with `project_id`, `tag`, and `catalog_hash` supplies identity. Both IDs must be lowercase 64-character SHA-256 hex digests, and the tag must be kebab-case. `proposed_update` does not supply an active identity. Reads may pass the returned `project_id` as `project_context_id`; writes may pass the returned `tag` as `source_project` and set `source_kind=client_declared`. The fact's `primary_tag` still describes what the fact is about, so its subject may differ from the project where the fact originated. For `proposed_update`, `ambiguous`, `disabled`, `unavailable`, malformed, or failed results, continue the baseline memory workflow without project context or source origin. Registration is a separate call; a read never registers a project implicitly, and hooks never register or store facts automatically.
+
+The bundle has nine synthetic workflow contract cases and package tests for prerequisite gating and returned-identity validation. These validate the rendered instructions and shared contract helpers; they do not constitute evidence from live Codex, Claude, ChatGPT, or generic MCP sessions.
 
 No prompt, memory content, document content, task content, credential, user identifier, path, endpoint, vector, or hidden reasoning is embedded in the bundle.
 

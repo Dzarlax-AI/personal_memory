@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Dzarlax-AI/personal-memory/internal/aipolicy"
 	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
 )
 
@@ -22,6 +23,8 @@ const (
 var immutableModelRevisionPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 
 type Config struct {
+	AI aipolicy.Config
+
 	// Server
 	Port              string
 	APIKey            string
@@ -194,6 +197,10 @@ func Load() (*Config, error) {
 		RAGCollectionChunks:  envOrDefault("RAG_COLLECTION_CHUNKS", "doc_chunks"),
 		RAGCollectionFolders: envOrDefault("RAG_COLLECTION_FOLDERS", "doc_folders"),
 		RAGReindexInterval:   ragReindexInterval,
+	}
+	cfg.AI, err = aipolicy.Load(os.Getenv("MEMORY_AI_CONFIG_FILE"))
+	if err != nil {
+		return nil, err
 	}
 	cfg.OAuth, err = loadOAuthConfig(cfg.MemoryDomain)
 	if err != nil {

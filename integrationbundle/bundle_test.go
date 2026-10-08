@@ -16,7 +16,7 @@ func TestLoadEmbeddedBundleAndCoverage(t *testing.T) {
 	b := loadTestBundle(t)
 	manifest := b.Manifest()
 	policy := b.Policy()
-	if manifest.BundleVersion != "0.1.0" || manifest.ContractVersion != "1.0.0" || manifest.ConformanceSuiteVersion != "1.1.0" {
+	if manifest.BundleVersion != "0.2.0" || manifest.ContractVersion != "1.0.0" || manifest.ConformanceSuiteVersion != "1.1.0" || manifest.WorkflowSuiteVersion != "1.0.0" {
 		t.Fatalf("unexpected versions: %+v", manifest)
 	}
 	wantClients := []conformance.ClientFamily{conformance.ClientCodex, conformance.ClientClaude, conformance.ClientChatGPT, conformance.ClientGenericMCP}
@@ -165,7 +165,8 @@ func TestAdversarialPolicyAndTemplateWeakeningIsRejected(t *testing.T) {
 func TestExactBundleAndArtifactFormatVersions(t *testing.T) {
 	b := loadTestBundle(t)
 	mutations := []struct{ old, new string }{
-		{`"bundle_version": "0.1.0"`, `"bundle_version": "0.2.0"`},
+		{`"bundle_version": "0.2.0"`, `"bundle_version": "0.3.0"`},
+		{`"workflow_suite_version": "1.0.0"`, `"workflow_suite_version": "1.1.0"`},
 		{`"artifact_format_version": "1.0.0"`, `"artifact_format_version": "1.1.0"`},
 	}
 	for _, mutation := range mutations {
@@ -225,7 +226,7 @@ func TestValidationRejectsInvalidClientsPathsToolsVersionsAndCoverage(t *testing
 		{"path traversal", `"path": "codex/AGENTS.personal-memory.md"`, `"path": "../AGENTS.md"`, "unsafe"},
 		{"unknown capability", `"id": "documents"`, `"id": "files"`, "unknown capability"},
 		{"unknown tool", `"search_documents"`, `"search_everything"`, "unknown tool"},
-		{"bad version", `"bundle_version": "0.1.0"`, `"bundle_version": "latest"`, "versions must"},
+		{"bad version", `"bundle_version": "0.2.0"`, `"bundle_version": "latest"`, "versions must"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -331,7 +332,7 @@ func TestRenderingIsDeterministicOwnedAndStructured(t *testing.T) {
 		}
 		for _, artifact := range set.Artifacts {
 			text := string(artifact.Content)
-			if !strings.Contains(text, "0.1.0") || !strings.Contains(text, "1.0.0") {
+			if !strings.Contains(text, "0.2.0") || !strings.Contains(text, "1.0.0") {
 				t.Fatalf("%s missing versions", artifact.Path)
 			}
 			if strings.Contains(strings.ToLower(text), "automatically installed") {

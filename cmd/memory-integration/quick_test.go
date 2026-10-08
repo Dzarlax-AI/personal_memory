@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Dzarlax-AI/personal-memory/integrationbundle"
 )
 
 func TestQuickInstallPresetsForCodexAndClaude(t *testing.T) {
@@ -26,7 +28,7 @@ func TestQuickInstallPresetsForCodexAndClaude(t *testing.T) {
 				}
 				args := append([]string{"quick-install", client, "--target-root", root, "--confirm-tools-discovered", "--json"}, tc.flags...)
 				result := runQuickJSON(t, args)
-				if result.Client != client || result.Root != root || result.BundleVersion != "0.1.0" || result.Outcome != quickOutcomeInstalled {
+				if result.Client != client || result.Root != root || result.BundleVersion != integrationbundle.BundleVersion || result.Outcome != quickOutcomeInstalled {
 					t.Fatalf("unexpected result: %+v", result)
 				}
 				if result.Capabilities.Memory != "available" || result.Capabilities.Documents != tc.wantDocuments || result.Capabilities.Todoist != "disabled" {

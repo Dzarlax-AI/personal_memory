@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Dzarlax-AI/personal-memory/internal/aimaintenance"
 	"github.com/Dzarlax-AI/personal-memory/internal/backup"
 	"github.com/Dzarlax-AI/personal-memory/internal/config"
 	"github.com/Dzarlax-AI/personal-memory/internal/embeddingidentity"
@@ -83,6 +84,33 @@ func main() {
 	// finish recording recalls during graceful shutdown. It is stopped explicitly
 	// after srv.Shutdown has drained handlers.
 	memSrv.Start(context.Background())
+	// Registry-only mode initializes no model adapters, keys, budget or AI workers.
+	if err := memSrv.ConfigureAI(ctx, cfg.AI); err != nil {
+		slog.Error("invalid optional AI configuration", "error", err)
+		os.Exit(1)
+	}
+	var aiWorker *aimaintenance.Worker
+	if cfg.AI.Maintenance.Enabled && memSrv.AIBudget() != nil {
+		profile := cfg.AI.Profiles[cfg.AI.Maintenance.Profile]
+		key, err := profile.ReadKey()
+		if err != nil {
+			slog.Error("invalid maintenance credentials", "error", err)
+			os.Exit(1)
+		}
+		provider, err := aimaintenance.NewProvider(profile, key, nil)
+		if err != nil {
+			slog.Error("invalid maintenance provider", "error", err)
+			os.Exit(1)
+		}
+		aiWorker, err = aimaintenance.NewWorker(cfg.AI, qc, provider, memSrv.AIBudget())
+		if err != nil {
+			slog.Warn("optional maintenance unavailable; baseline enabled")
+			aiWorker = nil
+		} else if err = aiWorker.Start(ctx); err != nil {
+			slog.Warn("optional maintenance worker unavailable")
+			aiWorker = nil
+		}
+	}
 
 	// Create MCP server for memory.
 	mcpMemory := server.NewMCPServer("personal-memory", "1.0.0",
@@ -278,6 +306,12 @@ func main() {
 
 	workCtx, workCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer workCancel()
+	if aiWorker != nil {
+		aiWorker.Stop()
+		if err := aiWorker.Wait(workCtx); err != nil {
+			slog.Error("AI maintenance shutdown failed")
+		}
+	}
 	if err := memSrv.Shutdown(workCtx); err != nil {
 		slog.Error("memory background shutdown failed", "error", err)
 	}

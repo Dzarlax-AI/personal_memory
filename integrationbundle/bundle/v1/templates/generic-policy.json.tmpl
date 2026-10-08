@@ -3,5 +3,7 @@
   "bundle_version": "{{.BundleVersion}}",
   "contract_version": "{{.ContractVersion}}",
   "capability_states": {"memory": "{{.Memory}}", "documents": "{{.Documents}}", "todoist": "{{.Todoist}}"},
-  "canonical_policy": {{.CanonicalPolicyJSON}}
+  "canonical_policy": {{.CanonicalPolicyJSON}},
+  "optional_workflows": {{.ProjectRegistrationJSON}},
+  "workflow_instructions": {{printf "%q" .ProjectRegistrationText}}
 }

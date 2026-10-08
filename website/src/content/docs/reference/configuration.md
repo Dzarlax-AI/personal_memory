@@ -36,6 +36,7 @@ Use `.env` (not source control) for deployment values. Required values are enfor
 
 | Variable | Default | Requirement / purpose |
 | --- | --- | --- |
+| `MEMORY_AI_CONFIG_FILE` | none | Private JSON configuration for independent project registration and optional maintenance/write/read AI. Absent means disabled; see [operator guide](../../operations/optional-ai/). |
 | `ENABLE_TODOIST` | `false` | Registers Todoist only when true; requires `TODOIST_TOKEN` and `API_KEY`. |
 | `TODOIST_TOKEN` | none | Todoist API token, only when enabled. |
 | `ENABLE_VIZ` | `false` | Registers visualization only when true. |
