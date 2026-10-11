@@ -215,3 +215,25 @@ func TestWriteAdmissionConfiguration(t *testing.T) {
 		}
 	}
 }
+
+func TestScopedPreparationRefusesUnassignedWrites(t *testing.T) {
+	raw, err := os.ReadFile("../../docs/examples/optional-ai/decisions-scoped-shadow-preparation.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "config.json")
+	if err = os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Write.Admission != "client_opt_in" || c.Egress.Allows("projects", nil) || len(c.Egress.AllowedProjectTags) != 0 {
+		t.Fatal("preparation configuration permits unapproved unassigned writes")
+	}
+}

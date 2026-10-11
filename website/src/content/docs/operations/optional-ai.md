@@ -207,7 +207,7 @@ Omission of `write.admission`, or `operator_policy`, retains the earlier operato
 policy behavior. `client_opt_in` must be explicit for restricted shared-server
 shadow. Admission is unsupported on read configuration. The preparation example
 `docs/examples/optional-ai/decisions-scoped-shadow-preparation.json` starts with
-an empty project-tag allowlist: approve and enumerate the full catalog before
+empty project-tag and unassigned-namespace allowlists: approve and enumerate the full catalog, then explicitly permit unassigned projects before
 activation. It is not a deployment instruction or a live enablement.
 
 Disable write inference to roll back behavior. Remove the new admission property

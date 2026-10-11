@@ -34,9 +34,7 @@
       "projects"
     ],
     "allowed_project_tags": [],
-    "unassigned_namespaces": [
-      "projects"
-    ]
+    "unassigned_namespaces": []
   },
   "limits": {
     "daily_calls": 6,
