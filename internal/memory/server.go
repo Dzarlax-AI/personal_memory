@@ -190,6 +190,7 @@ func (s *Server) RegisterTools(srv *server.MCPServer) {
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("fact", mcp.Description("The fact to store"), mcp.Required()),
+		mcp.WithBoolean("allow_ai_processing", mcp.Description("Optional per-request permission for write classification of this assertion and subject context under operator policy; required when write admission is client_opt_in. Does not authorize read inference or maintenance.")),
 		mcp.WithString("tags", mcp.Description("Comma-separated semantic tags")),
 		mcp.WithString("primary_tag", mcp.Description("Single primary tag for overview grouping; must also be present in tags")),
 		mcp.WithString("source_project", mcp.Description("Declared origin project; separate from the subject primary_tag")),
@@ -792,6 +793,14 @@ func formatFindRelatedResult(result FindRelatedResult) string {
 
 func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
+	allowAI := false
+	if raw, present := args["allow_ai_processing"]; present {
+		var ok bool
+		allowAI, ok = raw.(bool)
+		if !ok {
+			return mcp.NewToolResultError("allow_ai_processing must be a boolean"), nil
+		}
+	}
 	subject, subjectErr := subjectArguments(args)
 	if subjectErr != nil {
 		return mcp.NewToolResultError(subjectErr.Error()), nil
@@ -831,7 +840,7 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	aiDecision := s.aiClassify(ctx, fact, namespace, tags, primaryTag, origin, subject)
+	aiDecision := s.aiClassify(ctx, fact, namespace, tags, primaryTag, origin, subject, allowAI)
 	vec, err := s.embed.Embed(ctx, fact)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("embedding failed: %v", err)), nil

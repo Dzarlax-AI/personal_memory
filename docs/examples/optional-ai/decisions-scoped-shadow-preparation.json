@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "catalog_dir": "/var/lib/personal-memory/catalog",
+  "state_dir": "/var/lib/personal-memory/ai-state",
+  "registration": {
+    "mode": "client_declared"
+  },
+  "maintenance": {
+    "enabled": false,
+    "catalog_publish": "review",
+    "grouping_apply": "manual"
+  },
+  "write": {
+    "mode": "shadow",
+    "provider": "decisions",
+    "profile": "decisions",
+    "admission": "client_opt_in"
+  },
+  "read": {
+    "mode": "off",
+    "provider": "none"
+  },
+  "profiles": {
+    "decisions": {
+      "protocol": "decisions",
+      "model": "gpt-6-luna",
+      "endpoint": "https://api.openai.com/v1/decisions",
+      "key_file": "/run/secrets/decisions-api-key",
+      "timeout_ms": 1000
+    }
+  },
+  "egress": {
+    "allowed_namespaces": [
+      "projects"
+    ],
+    "allowed_project_tags": [],
+    "unassigned_namespaces": []
+  },
+  "limits": {
+    "daily_calls": 6,
+    "daily_input_tokens": 2000000,
+    "reservation_tokens": 65536
+  }
+}

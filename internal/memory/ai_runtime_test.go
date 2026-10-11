@@ -117,7 +117,7 @@ func aiTestConfig(t *testing.T, write, read string) aipolicy.Config {
 	cfg := aipolicy.Off()
 	cfg.CatalogDir = filepath.Join(dir, "catalog")
 	cfg.StateDir = filepath.Join(dir, "state")
-	cfg.Write = aipolicy.Feature{Mode: write, Provider: "decisions", Profile: "judge"}
+	cfg.Write = aipolicy.WriteFeature{Mode: write, Provider: "decisions", Profile: "judge"}
 	cfg.Read = aipolicy.Feature{Mode: read, Provider: "decisions", Profile: "judge"}
 	cfg.Profiles = map[string]aipolicy.Profile{"judge": {Protocol: "decisions", Model: aijudgment.DecisionsModel, Endpoint: aijudgment.DecisionsURL, KeyFile: filepath.Join(dir, "missing-key")}}
 	cfg.Egress = aipolicy.Egress{AllowedNamespaces: []string{"projects"}, AllowedProjectTags: []string{"alpha", "beta"}, UnassignedNamespaces: []string{"projects"}}

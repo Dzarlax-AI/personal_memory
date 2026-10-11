@@ -22,7 +22,7 @@ func TestEightCombinations(t *testing.T) {
 		c.Defaults()
 		c.Profiles = map[string]Profile{"d": {Protocol: "decisions", Model: "gpt-6-luna", Endpoint: "https://api.openai.com/v1/decisions", KeyFile: "/missing"}, "m": {Protocol: "openai-compatible-chat", Model: "operator-chosen", Endpoint: "http://localhost:11434/v1/chat/completions", Local: true}}
 		if mask&1 != 0 {
-			c.Write = Feature{Mode: "on", Provider: "decisions", Profile: "d"}
+			c.Write = WriteFeature{Mode: "on", Provider: "decisions", Profile: "d"}
 		}
 		if mask&2 != 0 {
 			c.Read = Feature{Mode: "shadow", Provider: "decisions", Profile: "d"}
@@ -169,7 +169,7 @@ func TestRegistrationAndAllIndependentContours(t *testing.T) {
 			c.Registration.Mode = "client_declared"
 		}
 		if mask&2 != 0 {
-			c.Write = Feature{Mode: "on", Provider: "decisions", Profile: "d"}
+			c.Write = WriteFeature{Mode: "on", Provider: "decisions", Profile: "d"}
 		}
 		if mask&4 != 0 {
 			c.Read = Feature{Mode: "shadow", Provider: "decisions", Profile: "d"}
@@ -188,5 +188,52 @@ func TestMaintenanceResponseModelAllowlist(t *testing.T) {
 	p := Profile{Model: "alias", ResponseModels: []string{"snapshot"}}
 	if !p.AcceptsResponseModel("alias") || !p.AcceptsResponseModel("snapshot") || p.AcceptsResponseModel("unexpected") {
 		t.Fatal("response allowlist mismatch")
+	}
+}
+
+func TestWriteAdmissionConfiguration(t *testing.T) {
+	for _, mode := range []string{"", "operator_policy", "client_opt_in", "invalid"} {
+		c := Off()
+		c.Write.Admission = mode
+		err := c.Validate()
+		if (err != nil) != (mode == "invalid") {
+			t.Fatalf("admission %q: %v", mode, err)
+		}
+	}
+	for _, value := range []string{`"client_opt_in"`, `""`, `null`} {
+		dir, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, "config.json")
+		raw := `{"schema_version":1,"read":{"mode":"off","admission":` + value + `}}`
+		if err = os.WriteFile(path, []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = Load(path); err == nil {
+			t.Fatal("read admission accepted")
+		}
+	}
+}
+
+func TestScopedPreparationRefusesUnassignedWrites(t *testing.T) {
+	raw, err := os.ReadFile("../../docs/examples/optional-ai/decisions-scoped-shadow-preparation.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "config.json")
+	if err = os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Write.Admission != "client_opt_in" || c.Egress.Allows("projects", nil) || len(c.Egress.AllowedProjectTags) != 0 {
+		t.Fatal("preparation configuration permits unapproved unassigned writes")
 	}
 }
