@@ -169,6 +169,20 @@ legacy classification requests keep their original shape. Existing experiment
 results therefore do not establish the quality of the extended rubric. Validate
 it on synthetic inputs before transmitting new private life facts.
 
+AI write classification applies only its selected primary project to grouping.
+Client-supplied tags remain intact, including a tag that also appears in the
+model's secondary recommendations. When classification selects a primary project,
+secondary `related_tags` are retained only
+as `recommended_related_tags` in private schema-v2 write journals; they are
+advisory evidence and never become stored fact tags. Older schema-v1 journals
+remain readable. The shared Decisions and Jev classifier rubric requires a
+secondary project to own the actual component in the assertion or to have a
+concrete interaction supported by its catalog description. Shared languages,
+file formats, tools, generic workflows and merely possible integrations do not
+support a secondary recommendation. Primary classification, abstention and the
+explicit grouping bypass remain unchanged. The classify rubric version is
+separate from the unchanged read-ranking rubric version.
+
 Subject metadata does not authorize maintenance to move a fact between namespaces
 or infer its origin. All optional AI features remain disabled by default.
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -76,7 +77,7 @@ func TestShadowConfiguredDeadlineAndFailureJournal(t *testing.T) {
 				case "invalid-response":
 					return aijudgment.ClassifyResult{Status: "invalid"}, aijudgment.Usage{}, nil
 				}
-				return aijudgment.ClassifyResult{Status: "decided", PrimaryTag: "alpha"}, aijudgment.Usage{Known: true, InputTokens: 10}, nil
+				return aijudgment.ClassifyResult{Status: "decided", PrimaryTag: "alpha", RelatedTags: []string{"alpha", "beta"}}, aijudgment.Usage{Known: true, InputTokens: 10}, nil
 			}}
 			if err := configureAIForTest(t, s, context.Background(), cfg, p, nil); err != nil {
 				t.Fatal(err)
@@ -90,14 +91,18 @@ func TestShadowConfiguredDeadlineAndFailureJournal(t *testing.T) {
 					res.Finish(0, true)
 				}
 			}
-			result := aiStoredResult(t, s, map[string]interface{}{"fact": "PRIVATE_ASSERTION", "namespace": "projects", "allow_ai_processing": true})
+			args := map[string]interface{}{"fact": "PRIVATE_ASSERTION", "namespace": "projects", "allow_ai_processing": true}
+			if variant == "success-after-one-second" {
+				args["tags"] = "beta,alpha"
+			}
+			result := aiStoredResult(t, s, args)
 			if !result.Stored || result.AI == nil || result.AI.Applied {
 				t.Fatal("storage/shadow contract changed")
 			}
 			j := shadowJournal(t, cfg.StateDir)
 			want := map[string]string{"timeout": "timeout", "unsafe-error": "provider_transport", "invalid-response": "invalid_response", "egress": "egress_denied", "budget": "budget_unavailable"}[variant]
 			if variant == "success-after-one-second" {
-				if j.Status != "decided" || j.After.Primary != "alpha" || j.DurationMS < 1000 {
+				if j.Status != "decided" || j.After.Primary != "alpha" || !reflect.DeepEqual(j.After.Tags, []string{"beta", "alpha"}) || j.DurationMS < 1000 || j.SchemaVersion != 2 || !reflect.DeepEqual(j.RecommendedRelatedTags, []string{"beta"}) {
 					t.Fatalf("configured timeout ineffective: %+v", j)
 				}
 			} else if j.Status != "failed" || j.ReasonCode != want {
@@ -106,12 +111,38 @@ func TestShadowConfiguredDeadlineAndFailureJournal(t *testing.T) {
 			if value, _ := b.stored.Payload["primary_tag"].(string); value != "" {
 				t.Fatal("shadow changed stored grouping")
 			}
+			if variant == "success-after-one-second" {
+				if got := b.stored.Payload["tags"].([]interface{}); !reflect.DeepEqual(got, []interface{}{"beta", "alpha"}) {
+					t.Fatalf("shadow changed explicit client tags: %#v", got)
+				}
+			}
 			if variant == "egress" || variant == "budget" {
 				if p.writes.Load() != 0 {
 					t.Fatal("rejected job dispatched")
 				}
 			}
 		})
+	}
+}
+
+func TestShadowSecondaryRecommendationDoesNotEnterProposedGrouping(t *testing.T) {
+	cfg := aiTestConfig(t, "shadow", "off")
+	cfg.Write.Admission = "client_opt_in"
+	b := &aiTestBackend{}
+	s := newAIServer(t, b)
+	if err := configureAIForTest(t, s, context.Background(), cfg, &fakeAIProvider{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	result := aiStoredResult(t, s, map[string]interface{}{"fact": "PRIVATE_ASSERTION", "namespace": "projects", "allow_ai_processing": true})
+	if result.AI == nil || result.AI.Applied {
+		t.Fatalf("shadow result changed storage contract: %+v", result.AI)
+	}
+	j := shadowJournal(t, cfg.StateDir)
+	if j.Status != "decided" || j.SchemaVersion != 2 || !reflect.DeepEqual(j.After.Tags, []string{"alpha"}) || !reflect.DeepEqual(j.RecommendedRelatedTags, []string{"beta"}) {
+		t.Fatalf("shadow journal mixed recommendation into grouping: %+v", j)
+	}
+	if got := b.stored.Payload["tags"].([]interface{}); len(got) != 0 {
+		t.Fatalf("shadow changed untagged storage: %#v", got)
 	}
 }
 

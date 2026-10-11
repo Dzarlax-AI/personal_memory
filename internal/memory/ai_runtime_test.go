@@ -267,17 +267,51 @@ func TestAIWriteInferencePreservesMetadataAndPrivateAudit(t *testing.T) {
 	if payload["text"] != "synthetic alpha source" || payload["namespace"] != "projects" || payload["permanent"] != true || payload["valid_until"] != "2099-01-01" || payload["primary_tag"] != "alpha" {
 		t.Fatalf("changed non-grouping metadata %#v", payload)
 	}
+	if got := payload["tags"].([]interface{}); !reflect.DeepEqual(got, []interface{}{"alpha"}) {
+		t.Fatalf("advisory related project entered stored tags: %#v", got)
+	}
 	path := filepath.Join(cfg.StateDir, "write-audits", result.AI.OperationRef+".json")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	info, _ := os.Stat(path)
-	if info.Mode().Perm() != 0600 || strings.Contains(string(raw), "synthetic alpha source") || !strings.Contains(string(raw), `"status":"stored"`) {
+	var journal aiWriteJournal
+	if err := json.Unmarshal(raw, &journal); err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 || strings.Contains(string(raw), "synthetic alpha source") || journal.Status != "stored" || journal.SchemaVersion != 2 || !reflect.DeepEqual(journal.RecommendedRelatedTags, []string{"beta"}) {
 		t.Fatalf("unsafe audit %s", raw)
 	}
 	if payload["ai_grouping_ref"] != result.AI.OperationRef {
 		t.Fatal("audit reference missing")
+	}
+}
+
+func TestAIWritePreservesClientTagThatAlsoAppearsAsRecommendation(t *testing.T) {
+	cfg := aiTestConfig(t, "on", "off")
+	b := &aiTestBackend{}
+	s := newAIServer(t, b)
+	if err := configureAIForTest(t, s, context.Background(), cfg, &fakeAIProvider{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	result := aiStoredResult(t, s, map[string]interface{}{"fact": "synthetic explicit beta", "namespace": "projects", "tags": "beta,alpha"})
+	if got := b.stored.Payload["tags"].([]interface{}); !reflect.DeepEqual(got, []interface{}{"beta", "alpha"}) {
+		t.Fatalf("explicit beta tag was not preserved alongside primary: %#v", got)
+	}
+	if result.AI == nil || !result.AI.Applied || result.AI.Status != "decided" {
+		t.Fatalf("AI classification did not apply: %+v", result.AI)
+	}
+}
+
+func TestAIWriteJournalSchemaOneRemainsReadable(t *testing.T) {
+	const old = `{"schema_version":1,"operation_ref":"old","point_id":"p1","profile":"judge","model":"gpt-6-luna","rubric_version":"optional-ai-subject-v2","mode":"shadow","status":"decided","created_at":"2026-10-01T00:00:00Z","before":{"tags":[],"primary_tag":""},"after":{"tags":["alpha"],"primary_tag":"alpha"},"retention":"manual"}`
+	var journal aiWriteJournal
+	if err := json.Unmarshal([]byte(old), &journal); err != nil {
+		t.Fatal(err)
+	}
+	if journal.SchemaVersion != 1 || journal.After.Primary != "alpha" || len(journal.RecommendedRelatedTags) != 0 {
+		t.Fatalf("legacy journal changed while reading: %+v", journal)
 	}
 }
 func TestAIWriteCallerGroupingAndNamespaceWin(t *testing.T) {
@@ -805,7 +839,7 @@ func TestAIWriteInferenceAddsGroupingWithoutRemovingCallerTags(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := aiStoredResult(t, s, map[string]interface{}{"fact": "synthetic topics", "namespace": "projects", "tags": "topic-a,topic-b"})
-	if !result.AI.Applied || !reflect.DeepEqual(relatedCandidateTags(b.stored.Payload["tags"]), []string{"topic-a", "topic-b", "beta", "alpha"}) {
+	if !result.AI.Applied || !reflect.DeepEqual(relatedCandidateTags(b.stored.Payload["tags"]), []string{"topic-a", "topic-b", "alpha"}) {
 		t.Fatal("caller topical tags lost")
 	}
 }
