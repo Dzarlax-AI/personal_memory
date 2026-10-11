@@ -188,3 +188,27 @@ model alias. The requested `model` and these exact identifiers are accepted;
 other identifiers remain invalid. No prefix or automatic alias matching occurs.
 This option is restricted to maintenance protocols and does not change the pinned
 Decisions/Jev judgment adapters.
+
+### Per-request write admission
+
+Set `write.admission` to `client_opt_in` to require an explicit boolean
+`allow_ai_processing=true` on each eligible `store_fact` request. Missing or false
+preserves baseline storage without allocating AI work or budget; other types are
+rejected before storage. The permission covers this assertion and submitted
+subject context for write classification only. It is not persisted or reused by
+read, maintenance, update or import. Existing explicit grouping and non-project
+bypasses still apply.
+
+The flag cannot override feature switches, budgets or the operator egress policy.
+All eligible owner-scoped catalog cards must be permitted; a forbidden card rejects
+the entire request. Recording origin is neither consent nor subject evidence.
+
+Omission of `write.admission`, or `operator_policy`, retains the earlier operator
+policy behavior. `client_opt_in` must be explicit for restricted shared-server
+shadow. Admission is unsupported on read configuration. The preparation example
+`docs/examples/optional-ai/decisions-scoped-shadow-preparation.json` starts with
+an empty project-tag allowlist: approve and enumerate the full catalog before
+activation. It is not a deployment instruction or a live enablement.
+
+Disable write inference to roll back behavior. Remove the new admission property
+before using an older binary whose strict loader does not recognize it.

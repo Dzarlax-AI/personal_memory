@@ -72,7 +72,7 @@ func (s *Server) configureAI(ctx context.Context, cfg aipolicy.Config, write, re
 		for _, slot := range []struct {
 			feature aipolicy.Feature
 			target  *aijudgment.Provider
-		}{{cfg.Write, &write}, {cfg.Read, &read}} {
+		}{{aipolicy.Feature{Mode: cfg.Write.Mode, Provider: cfg.Write.Provider, Profile: cfg.Write.Profile}, &write}, {cfg.Read, &read}} {
 			if !slot.feature.Active() {
 				continue
 			}
@@ -96,7 +96,7 @@ func (s *Server) configureAI(ctx context.Context, cfg aipolicy.Config, write, re
 		slog.Warn("optional AI state unavailable; baseline enabled")
 		if cfg.Registration.Active() {
 			cfg.Read = aipolicy.Feature{Mode: "off", Provider: "none"}
-			cfg.Write = aipolicy.Feature{Mode: "off", Provider: "none"}
+			cfg.Write = aipolicy.WriteFeature{Mode: "off", Provider: "none"}
 			cfg.Maintenance.Enabled = false
 			return s.configureRegistry(ctx, cfg)
 		}

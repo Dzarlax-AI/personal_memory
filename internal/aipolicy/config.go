@@ -18,6 +18,20 @@ type Feature struct {
 	Provider string `json:"provider"`
 	Profile  string `json:"profile"`
 }
+
+// WriteFeature separates write admission from read configuration.
+type WriteFeature struct {
+	Mode      string `json:"mode"`
+	Provider  string `json:"provider"`
+	Profile   string `json:"profile"`
+	Admission string `json:"admission,omitempty"`
+}
+
+func (f WriteFeature) judgment() Feature {
+	return Feature{Mode: f.Mode, Provider: f.Provider, Profile: f.Profile}
+}
+func (f WriteFeature) Active() bool { return f.judgment().Active() }
+
 type Registration struct {
 	Mode string `json:"mode"`
 }
@@ -58,7 +72,7 @@ type Config struct {
 	StateDir      string             `json:"state_dir"`
 	Registration  Registration       `json:"registration"`
 	Maintenance   Maintenance        `json:"maintenance"`
-	Write         Feature            `json:"write"`
+	Write         WriteFeature       `json:"write"`
 	Read          Feature            `json:"read"`
 	Profiles      map[string]Profile `json:"profiles"`
 	Egress        Egress             `json:"egress"`
@@ -66,7 +80,7 @@ type Config struct {
 }
 
 func Off() Config {
-	return Config{SchemaVersion: 1, Registration: Registration{Mode: "off"}, Write: Feature{Mode: "off", Provider: "none"}, Read: Feature{Mode: "off", Provider: "none"}}
+	return Config{SchemaVersion: 1, Registration: Registration{Mode: "off"}, Write: WriteFeature{Mode: "off", Provider: "none"}, Read: Feature{Mode: "off", Provider: "none"}}
 }
 func (f Feature) Active() bool { return f.Mode == "on" || f.Mode == "shadow" }
 func (c Config) Active() bool  { return c.Write.Active() || c.Read.Active() || c.Maintenance.Enabled }
@@ -136,13 +150,16 @@ func (c Config) Validate() error {
 	if c.SchemaVersion != 1 {
 		return errors.New("unsupported optional AI configuration schema")
 	}
+	if c.Write.Admission != "" && c.Write.Admission != "operator_policy" && c.Write.Admission != "client_opt_in" {
+		return errors.New("invalid write admission mode")
+	}
 	if c.Registration.Mode != "" && c.Registration.Mode != "off" && c.Registration.Mode != "client_declared" {
 		return errors.New("invalid project registration mode")
 	}
 	if c.Registration.Active() && strings.TrimSpace(c.CatalogDir) == "" {
 		return errors.New("project registration requires catalog directory")
 	}
-	for _, f := range []Feature{c.Write, c.Read} {
+	for _, f := range []Feature{c.Write.judgment(), c.Read} {
 		if f.Mode != "off" && f.Mode != "shadow" && f.Mode != "on" {
 			return errors.New("invalid optional AI feature mode")
 		}

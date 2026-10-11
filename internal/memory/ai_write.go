@@ -41,9 +41,12 @@ type aiWriteJournal struct {
 	Retention       string     `json:"retention"`
 }
 
-func (s *Server) aiClassify(ctx context.Context, fact, namespace string, tags []string, primary string, origin *FactOrigin, subject *FactSubject) *aiWriteDecision {
+func (s *Server) aiClassify(ctx context.Context, fact, namespace string, tags []string, primary string, origin *FactOrigin, subject *FactSubject, allowAI bool) *aiWriteDecision {
 	a := s.aiState()
 	if a == nil || !a.cfg.Write.Active() || namespace != "projects" || primary != "" || subjectDecision(namespace, subject) != "" {
+		return nil
+	}
+	if a.cfg.Write.Admission == "client_opt_in" && !allowAI {
 		return nil
 	}
 	d := &aiWriteDecision{runtime: a, outcome: &AIOutcome{Mode: a.cfg.Write.Mode, Status: "unavailable"}, before: aiGrouping{append([]string{}, tags...), primary}}
