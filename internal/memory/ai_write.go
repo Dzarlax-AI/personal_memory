@@ -268,3 +268,19 @@ func (d *aiWriteDecision) recordShadow(pointID string) {
 		slog.Warn("optional AI shadow journal unavailable")
 	}
 }
+
+// guardAIWrite pins both policy identity and catalog publication through Upsert.
+// The provider call happens before this interval and never holds these locks.
+func (s *Server) guardAIWrite(ctx context.Context, d *aiWriteDecision) (func(), bool) {
+	s.aiMu.RLock()
+	if s.ai != d.runtime || d.runtime.ctx.Err() != nil {
+		s.aiMu.RUnlock()
+		return nil, false
+	}
+	release, err := contextcatalog.GuardGeneration(ctx, d.runtime.cfg.CatalogDir, d.outcome.CatalogHash)
+	if err != nil {
+		s.aiMu.RUnlock()
+		return nil, false
+	}
+	return func() { release(); s.aiMu.RUnlock() }, true
+}

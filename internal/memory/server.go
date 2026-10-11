@@ -899,8 +899,17 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		return mcp.NewToolResultStructured(result, formatStoreFactResult(result)), nil
 	}
 
-	if aiDecision != nil && aiDecision.prepare(pointID) {
-		tags, primaryTag = aiDecision.after.Tags, aiDecision.after.Primary
+	if aiDecision != nil && aiDecision.outcome.Status == "decided" {
+		release, guarded := s.guardAIWrite(ctx, aiDecision)
+		if guarded {
+			defer release()
+			if aiDecision.prepare(pointID) {
+				tags, primaryTag = aiDecision.after.Tags, aiDecision.after.Primary
+			}
+		} else {
+			aiDecision.outcome.Status = "catalog_changed"
+			aiDecision.after = aiDecision.before
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return mcp.NewToolResultError("store canceled"), nil

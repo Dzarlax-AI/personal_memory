@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 	"net/http"
 	"net/http/httptest"
@@ -276,5 +277,75 @@ func TestRegisteredReadPolicyReplacementDuringRefresh(t *testing.T) {
 	_, out, err := s.aiRerank(context.Background(), "Synthetic query", "projects", nil, LifecycleRecallOptions{}, candidates)
 	if err != nil || out == nil || out.Applied || out.Status != "catalog_changed" {
 		t.Fatalf("old policy applied: %+v %v", out, err)
+	}
+}
+
+func TestRegisteredWriteSerializesPublicationAndPolicyWithUpsert(t *testing.T) {
+	for _, change := range []string{"publication", "policy"} {
+		t.Run(change, func(t *testing.T) {
+			s, p := registeredConfig(t, "on", "off")
+			ensureTestProject(t, s, registrationTestArgs("stable-key-alpha", "alpha"))
+			p.classify = func(context.Context, aijudgment.ClassifyInput) (aijudgment.ClassifyResult, aijudgment.Usage, error) {
+				return aijudgment.ClassifyResult{Status: "decided", PrimaryTag: "alpha"}, aijudgment.Usage{Known: true, InputTokens: 1}, nil
+			}
+			a := s.aiState()
+			snap, hash, err := contextcatalog.LoadActive(a.cfg.CatalogDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entered, release := make(chan struct{}), make(chan struct{})
+			backend := &aiTestBackend{}
+			qs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPut && r.URL.Path == "/collections/memory/points" {
+					close(entered)
+					<-release
+				}
+				backend.handle(w, r)
+			}))
+			defer qs.Close()
+			s.qdrant = qdrant.NewClient(qs.URL, "memory")
+			storeDone := make(chan error, 1)
+			go func() {
+				r, e := s.storeFact(context.Background(), toolRequest(map[string]interface{}{"fact": "Synthetic serialized assertion", "namespace": "projects", "allow_ai_processing": true}))
+				if e == nil && r.IsError {
+					e = fmt.Errorf("store failed")
+				}
+				storeDone <- e
+			}()
+			select {
+			case <-entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("upsert not entered")
+			}
+			mutationDone := make(chan error, 1)
+			go func() {
+				if change == "publication" {
+					snap.ParentHash = hash
+					snap.Version = "next-generation"
+					_, e := contextcatalog.Publish(a.cfg.CatalogDir, snap, hash)
+					mutationDone <- e
+				} else {
+					cfg := a.cfg
+					cfg.Egress.DeniedProjectTags = []string{"alpha"}
+					mutationDone <- s.ConfigureAIWithProviders(context.Background(), cfg, p, nil)
+				}
+			}()
+			select {
+			case e := <-mutationDone:
+				close(release)
+				t.Fatalf("mutation completed before Upsert: %v", e)
+			case <-time.After(40 * time.Millisecond):
+			}
+			close(release)
+			if err := <-storeDone; err != nil {
+				t.Fatal(err)
+			}
+			if err := <-mutationDone; err != nil {
+				t.Fatal(err)
+			}
+			if backend.stored.Payload["primary_tag"] != "alpha" {
+				t.Fatal("serialized valid grouping not stored")
+			}
+		})
 	}
 }
