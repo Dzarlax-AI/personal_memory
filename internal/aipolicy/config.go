@@ -69,6 +69,8 @@ type Egress struct {
 	AllowedNamespaces    []string `json:"allowed_namespaces"`
 	AllowedProjectTags   []string `json:"allowed_project_tags"`
 	UnassignedNamespaces []string `json:"unassigned_namespaces"`
+	ProjectPolicy        string   `json:"project_policy,omitempty"`
+	DeniedProjectTags    []string `json:"denied_project_tags,omitempty"`
 }
 type Limits struct {
 	DailyCalls        int64 `json:"daily_calls"`
@@ -118,6 +120,9 @@ func Load(path string) (Config, error) {
 	return c, nil
 }
 func (c *Config) Defaults() {
+	if c.Egress.ProjectPolicy == "" {
+		c.Egress.ProjectPolicy = "explicit"
+	}
 	if c.Registration.Mode == "" {
 		c.Registration.Mode = "off"
 	}
@@ -156,6 +161,9 @@ func (c *Config) Defaults() {
 	}
 }
 func (c Config) Validate() error {
+	if c.Egress.ProjectPolicy != "" && c.Egress.ProjectPolicy != "explicit" && c.Egress.ProjectPolicy != "registered" {
+		return errors.New("invalid egress project policy")
+	}
 	if c.Write.ShadowTimeoutMS < 0 || c.Write.ShadowTimeoutMS > 30_000 {
 		return errors.New("invalid write shadow timeout")
 	}
@@ -289,11 +297,41 @@ func (e Egress) Allows(ns string, tags []string) bool {
 	if !contains(e.AllowedNamespaces, ns) {
 		return false
 	}
+	for _, tag := range tags {
+		if contains(e.DeniedProjectTags, tag) {
+			return false
+		}
+	}
 	if len(tags) == 0 {
 		return contains(e.UnassignedNamespaces, ns)
 	}
 	for _, tag := range tags {
 		if !contains(e.AllowedProjectTags, tag) {
+			return false
+		}
+	}
+	return true
+}
+
+// AllowsRegistered additionally permits tags backed by the active registered project catalog.
+// Static explicit grants continue to apply in either policy mode; deny rules always win.
+func (e Egress) AllowsRegistered(ns string, tags []string, registeredTags map[string]bool) bool {
+	if !contains(e.AllowedNamespaces, ns) {
+		return false
+	}
+	for _, tag := range tags {
+		if contains(e.DeniedProjectTags, tag) {
+			return false
+		}
+	}
+	if len(tags) == 0 {
+		return contains(e.UnassignedNamespaces, ns)
+	}
+	for _, tag := range tags {
+		if contains(e.AllowedProjectTags, tag) {
+			continue
+		}
+		if e.ProjectPolicy != "registered" || !registeredTags[tag] {
 			return false
 		}
 	}

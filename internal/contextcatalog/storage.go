@@ -2,6 +2,7 @@ package contextcatalog
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -344,4 +346,45 @@ func syncDir(path string) error {
 	}
 	defer f.Close()
 	return f.Sync()
+}
+
+// GuardGeneration prevents cooperating publishers from changing the active
+// generation until release. Lock acquisition is bounded by the caller context.
+func GuardGeneration(ctx context.Context, dir, expected string) (func(), error) {
+	if err := checkDirTree(dir, false); err != nil {
+		return nil, err
+	}
+	f, err := openRegular(filepath.Join(dir, lockName), unix.O_CREAT|unix.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	release := func() { _ = unix.Flock(int(f.Fd()), unix.LOCK_UN); _ = f.Close() }
+	for {
+		if err = ctx.Err(); err != nil {
+			release()
+			return nil, err
+		}
+		err = unix.Flock(int(f.Fd()), unix.LOCK_SH|unix.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+			release()
+			return nil, err
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			release()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	_, hash, err := LoadActive(dir)
+	if err != nil || hash != expected {
+		release()
+		return nil, ErrConflict
+	}
+	return release, nil
 }

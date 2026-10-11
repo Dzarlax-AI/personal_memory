@@ -44,6 +44,59 @@ func TestEgress(t *testing.T) {
 		t.Fatal("egress scope")
 	}
 }
+
+func TestRegisteredProjectEgress(t *testing.T) {
+	t.Run("default preserves explicit behavior", func(t *testing.T) {
+		c := Off()
+		c.Defaults()
+		if c.Egress.ProjectPolicy != "explicit" {
+			t.Fatalf("project policy default = %q", c.Egress.ProjectPolicy)
+		}
+		e := Egress{AllowedNamespaces: []string{"projects"}, UnassignedNamespaces: []string{"projects"}}
+		registered := map[string]bool{"known": true}
+		if !e.AllowsRegistered("projects", nil, registered) || e.AllowsRegistered("projects", []string{"known"}, registered) {
+			t.Fatal("empty project policy must retain explicit-only behavior")
+		}
+	})
+	t.Run("unknown policy rejected while AI is off", func(t *testing.T) {
+		c := Off()
+		c.Egress.ProjectPolicy = "automatic"
+		if err := c.Validate(); err == nil {
+			t.Fatal("unknown policy accepted")
+		}
+	})
+	t.Run("registered tags and denial precedence", func(t *testing.T) {
+		e := Egress{
+			AllowedNamespaces:  []string{"projects"},
+			AllowedProjectTags: []string{"static"},
+			ProjectPolicy:      "registered",
+			DeniedProjectTags:  []string{"blocked"},
+		}
+		registered := map[string]bool{"known": true, "blocked": true}
+		if !e.Allows("projects", []string{"static"}) {
+			t.Fatal("static explicit grant should remain allowed")
+		}
+		if e.AllowsRegistered("projects", []string{"unknown"}, registered) {
+			t.Fatal("unregistered tag accepted")
+		}
+		if e.AllowsRegistered("projects", []string{"blocked"}, registered) {
+			t.Fatal("denied tag overrode registered grant")
+		}
+		if !e.AllowsRegistered("projects", []string{"known"}, registered) {
+			t.Fatal("registered tag rejected")
+		}
+	})
+	t.Run("every mixed tag must be allowed", func(t *testing.T) {
+		e := Egress{AllowedNamespaces: []string{"projects"}, AllowedProjectTags: []string{"static"}, ProjectPolicy: "registered"}
+		registered := map[string]bool{"known": true}
+		if !e.AllowsRegistered("projects", []string{"static", "known"}, registered) {
+			t.Fatal("static and registered grants should compose")
+		}
+		if e.AllowsRegistered("projects", []string{"static", "unknown"}, registered) {
+			t.Fatal("mixed tags with an ungranted tag accepted")
+		}
+	})
+}
 func TestBudgetPersistenceUnknownAndCapacity(t *testing.T) {
 	d, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
