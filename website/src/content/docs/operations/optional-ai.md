@@ -57,6 +57,8 @@ Project catalog egress uses `egress.project_policy`, which defaults to `explicit
 
 In registered mode, the provider receives only eligible catalog cards granted by policy. Raw README text, submitted evidence excerpts, repository identity, private project key, and local evidence references are stripped before transmission. Project descriptions and documented examples can still be sent. For facts, optional origin metadata, and read candidates, scope is checked independently: a forbidden project tag in any of those inputs blocks the entire affected request rather than being silently removed. Life facts do not need a project registration; use the existing namespace policy to decide whether a life fact may be processed.
 
+The example explicitly grants untagged `projects` facts through `unassigned_namespaces: ["projects"]`; combined with client opt-in this lets a new fact receive a project proposal. Leaving that list empty blocks untagged fact inference.
+
 The approved egress-only example is `docs/examples/optional-ai/registered-projects-egress.json`. It contains only the exact `egress` configuration fragment and is not a standalone configuration file.
 
 `shadow` also transmits data. It serves the ordinary baseline answer before bounded background evaluation. It does not change tags or increment recall counters a second time. Shadow jobs may be dropped when the queue is full. Hosted model retention follows the selected provider and account settings; feature flags do not create zero data retention guarantees.
