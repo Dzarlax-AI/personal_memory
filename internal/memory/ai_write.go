@@ -82,17 +82,13 @@ func (d *aiWriteDecision) classify(ctx context.Context, fact, namespace string, 
 		d.reason = "canceled"
 		return
 	}
-	if !a.cfg.Egress.Allows(namespace, d.before.Tags) {
-		d.reason = "egress_denied"
-		return
-	}
-	if origin != nil && !a.cfg.Egress.Allows("projects", []string{origin.SourceProject}) {
-		d.reason = "egress_denied"
-		return
-	}
 	catalog, hash, reason := a.catalogWithReason()
 	if reason != "" {
 		d.reason = reason
+		return
+	}
+	if !a.allowsCatalogScope(catalog, namespace, d.before.Tags) || (origin != nil && !a.allowsCatalogScope(catalog, "projects", []string{origin.SourceProject})) {
+		d.reason = "egress_denied"
 		return
 	}
 	d.outcome.CatalogHash = hash
@@ -179,6 +175,12 @@ func newAIRef() (string, error) {
 }
 func (d *aiWriteDecision) prepare(pointID string) bool {
 	if d == nil || d.outcome.Status != "decided" {
+		return false
+	}
+	_, hash, ok := d.runtime.catalog()
+	if !ok || hash != d.outcome.CatalogHash || d.runtime.ctx.Err() != nil {
+		d.outcome.Status = "catalog_changed"
+		d.after = d.before
 		return false
 	}
 	ref, err := newAIRef()

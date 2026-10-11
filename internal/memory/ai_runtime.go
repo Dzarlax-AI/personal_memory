@@ -229,13 +229,32 @@ func (a *aiRuntime) catalogWithReason() (contextcatalog.Snapshot, string, string
 		if e.Namespace != "projects" || !contextcatalog.Eligible(e) || (e.Owner != "" && e.Owner != a.owner) {
 			continue
 		}
-		if !a.cfg.Egress.Allows(e.Namespace, []string{e.Tag}) {
+		registered := map[string]bool{e.Tag: e.Owner == a.owner && e.Owner != "" && e.ProjectID != "" && e.ProjectKey != ""}
+		if !a.cfg.Egress.AllowsRegistered(e.Namespace, []string{e.Tag}, registered) {
+			if a.cfg.Egress.ProjectPolicy == "registered" {
+				continue
+			}
 			return contextcatalog.Snapshot{}, "", "egress_denied"
 		}
 		e = safeCatalogEntry(e)
 		safe.Entries = append(safe.Entries, e)
 	}
+	if a.cfg.Egress.ProjectPolicy == "registered" && len(safe.Entries) == 0 {
+		return contextcatalog.Snapshot{}, "", "catalog_unavailable"
+	}
 	return safe, hash, ""
+}
+
+// The provider projection contains only permitted cards from this generation.
+// It supplies automatic grants without retaining private identity in provider input.
+func (a *aiRuntime) allowsCatalogScope(catalog contextcatalog.Snapshot, namespace string, tags []string) bool {
+	registered := map[string]bool{}
+	if namespace == "projects" {
+		for _, e := range catalog.Entries {
+			registered[e.Tag] = true
+		}
+	}
+	return a.cfg.Egress.AllowsRegistered(namespace, tags, registered)
 }
 
 // Drop local identity and source excerpts before crossing even an injected

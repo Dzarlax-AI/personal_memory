@@ -63,15 +63,23 @@ func (a *aiRuntime) rank(ctx context.Context, query string, options LifecycleRec
 		return candidates, outcome, false
 	}
 	outcome.CatalogHash = hash
-	if options.ProjectContext != nil && (options.CatalogHash != hash || !a.cfg.Egress.Allows(options.ProjectContext.Namespace, []string{options.ProjectContext.Tag})) {
+	if options.ProjectContext != nil && (options.CatalogHash != hash || !a.allowsCatalogScope(catalog, options.ProjectContext.Namespace, []string{options.ProjectContext.Tag})) {
 		return candidates, outcome, false
 	}
 	in := aijudgment.RankInput{ProjectContext: options.ProjectContext, Query: query, LifecycleMode: string(options.normalizedMode()), Catalog: &catalog}
 	for i, c := range candidates {
 		ns := stringFromPayload(c.point.Payload["namespace"])
 		tags := relatedCandidateTags(c.point.Payload["tags"])
-		if !a.cfg.Egress.Allows(ns, tags) || math.IsNaN(c.point.Score) || math.IsInf(c.point.Score, 0) || aiFingerprint(c.point.Payload) == "" {
+		if !a.allowsCatalogScope(catalog, ns, tags) || math.IsNaN(c.point.Score) || math.IsInf(c.point.Score, 0) || aiFingerprint(c.point.Payload) == "" {
 			return candidates, outcome, false
+		}
+		if a.cfg.Egress.ProjectPolicy == "registered" || len(a.cfg.Egress.DeniedProjectTags) > 0 {
+			if _, present := c.point.Payload["origin"]; present {
+				origin := originPayload(c.point.Payload)
+				if origin == nil || !a.allowsCatalogScope(catalog, "projects", []string{origin.SourceProject}) {
+					return candidates, outcome, false
+				}
+			}
 		}
 		bucket, _ := aiAuthority(c.view)
 		in.Candidates = append(in.Candidates, aijudgment.Candidate{Alias: fmt.Sprintf("c%d", i+1), Text: stringFromPayload(c.point.Payload["text"]), Namespace: ns, Tags: tags, AuthorityBucket: bucket})
@@ -86,7 +94,12 @@ func (a *aiRuntime) rank(ctx context.Context, query string, options LifecycleRec
 	}
 	result, usage, err := a.read.Rank(ctx, in)
 	reservation.Finish(usage.InputTokens, usage.Known)
-	if err != nil || ctx.Err() != nil {
+	if err != nil || ctx.Err() != nil || a.ctx.Err() != nil {
+		return candidates, outcome, true
+	}
+	_, latestHash, catalogOK := a.catalog()
+	if !catalogOK || latestHash != hash {
+		outcome.Status = "catalog_changed"
 		return candidates, outcome, true
 	}
 	if result.Status != "decided" {
@@ -210,7 +223,7 @@ func (s *Server) aiRerank(ctx context.Context, query, namespace string, tags []s
 	// Every rank request depends on its catalog generation, including calls
 	// from older clients that omit explicit project context.
 	_, currentHash, catalogOK := a.catalog()
-	if !catalogOK || currentHash != outcome.CatalogHash {
+	if !catalogOK || currentHash != outcome.CatalogHash || a.ctx.Err() != nil || s.aiState() != a {
 		outcome.Status = "catalog_changed"
 		outcome.Applied = false
 		return refreshed, outcome, nil
