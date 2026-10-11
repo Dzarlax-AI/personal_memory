@@ -3,6 +3,7 @@ package contextcatalog
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -11,6 +12,9 @@ import (
 func TestGenerationGuardCancellationWaitingForPublication(t *testing.T) {
 	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
 	release, err := acquireLock(filepath.Join(dir, lockName))
