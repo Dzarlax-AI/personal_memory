@@ -45,7 +45,10 @@ class SummarizeAIShadowCompatibilityTest(unittest.TestCase):
                  ({"recommended_related_tags": "beta"}, 1),
                  ({"recommended_related_tags": [42]}, 1),
                  ({"recommended_related_tags": ["beta"] * 33}, 1),
-                 ({"schema_version": 3}, 1)]
+                 ({"schema_version": 3}, 1),
+                 ({"schema_version": True}, 1),
+                 ({"schema_version": False}, 1),
+                 ({"schema_version": 2.0}, 1)]
         for fields, expected_status in cases:
             with self.subTest(fields=fields), tempfile.TemporaryDirectory() as tmp:
                 directory = Path(tmp).resolve() / "write-audits"
