@@ -341,7 +341,11 @@ func TestDeclaredProjectDescriptionAndExplicitRankContext(t *testing.T) {
 			}
 		}
 		classification, err := BuildClassifyRequest(providerName, modelFor(providerName), ClassifyInput{FactText: "Synthetic fact", Namespace: "projects", Catalog: catalog})
-		if err != nil || !strings.Contains(string(classification), "related_declared") {
+		if err != nil || !strings.Contains(string(classification), "related_declared") ||
+			!strings.Contains(string(classification), "actual owned component") ||
+			!strings.Contains(string(classification), "concrete catalog-supported interaction") ||
+			!strings.Contains(string(classification), "Shared languages") ||
+			!strings.Contains(string(classification), "merely possible integrations") {
 			t.Fatalf("declared class membership %v %s", err, classification)
 		}
 	}

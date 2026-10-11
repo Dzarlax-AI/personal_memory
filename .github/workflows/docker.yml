@@ -86,6 +86,8 @@ jobs:
             -- ./...
         env:
           QDRANT_TEST_URL: http://127.0.0.1:6333
+      - name: Test write-shadow journal compatibility
+        run: python3 -m unittest scripts/test_summarize_ai_shadow.py
       - name: Publish test summary
         if: always()
         shell: bash

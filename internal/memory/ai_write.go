@@ -19,31 +19,33 @@ type aiGrouping struct {
 	Primary string   `json:"primary_tag"`
 }
 type aiWriteDecision struct {
-	subject       *FactSubject
-	runtime       *aiRuntime
-	outcome       *AIOutcome
-	before, after aiGrouping
-	journal       *aiWriteJournal
-	reason        string
-	durationMS    int64
+	subject                *FactSubject
+	runtime                *aiRuntime
+	outcome                *AIOutcome
+	before, after          aiGrouping
+	recommendedRelatedTags []string
+	journal                *aiWriteJournal
+	reason                 string
+	durationMS             int64
 }
 type aiWriteJournal struct {
-	SubjectDecision string     `json:"subject_decision,omitempty"`
-	ReasonCode      string     `json:"reason_code,omitempty"`
-	DurationMS      int64      `json:"duration_ms"`
-	SchemaVersion   int        `json:"schema_version"`
-	OperationRef    string     `json:"operation_ref"`
-	PointID         string     `json:"point_id"`
-	CatalogHash     string     `json:"catalog_hash,omitempty"`
-	Profile         string     `json:"profile"`
-	Model           string     `json:"model"`
-	RubricVersion   string     `json:"rubric_version"`
-	Mode            string     `json:"mode"`
-	Status          string     `json:"status"`
-	CreatedAt       string     `json:"created_at"`
-	Before          aiGrouping `json:"before"`
-	After           aiGrouping `json:"after"`
-	Retention       string     `json:"retention"`
+	SubjectDecision        string     `json:"subject_decision,omitempty"`
+	ReasonCode             string     `json:"reason_code,omitempty"`
+	DurationMS             int64      `json:"duration_ms"`
+	SchemaVersion          int        `json:"schema_version"`
+	OperationRef           string     `json:"operation_ref"`
+	PointID                string     `json:"point_id"`
+	CatalogHash            string     `json:"catalog_hash,omitempty"`
+	Profile                string     `json:"profile"`
+	Model                  string     `json:"model"`
+	RubricVersion          string     `json:"rubric_version"`
+	Mode                   string     `json:"mode"`
+	Status                 string     `json:"status"`
+	CreatedAt              string     `json:"created_at"`
+	Before                 aiGrouping `json:"before"`
+	After                  aiGrouping `json:"after"`
+	RecommendedRelatedTags []string   `json:"recommended_related_tags,omitempty"`
+	Retention              string     `json:"retention"`
 }
 
 func (s *Server) aiClassify(ctx context.Context, fact, namespace string, tags []string, primary string, origin *FactOrigin, subject *FactSubject, allowAI bool) *aiWriteDecision {
@@ -154,7 +156,7 @@ func (d *aiWriteDecision) classify(ctx context.Context, fact, namespace string, 
 		}
 		seen[tag] = true
 	}
-	inferred := append(append([]string{}, d.before.Tags...), result.RelatedTags...)
+	inferred := append(append([]string{}, d.before.Tags...), result.PrimaryTag)
 	inferred, primary := normalizeFactTags(inferred, result.PrimaryTag)
 	if len(inferred) > maxTags {
 		d.reason = "invalid_response"
@@ -162,6 +164,14 @@ func (d *aiWriteDecision) classify(ctx context.Context, fact, namespace string, 
 		return
 	}
 	d.after = aiGrouping{inferred, primary}
+	d.recommendedRelatedTags = append([]string(nil), result.RelatedTags...)
+	filtered := d.recommendedRelatedTags[:0]
+	for _, tag := range d.recommendedRelatedTags {
+		if tag != result.PrimaryTag {
+			filtered = append(filtered, tag)
+		}
+	}
+	d.recommendedRelatedTags = filtered
 	d.outcome.Status = "decided"
 	d.outcome.SubjectDecision = "known_project"
 }
@@ -190,10 +200,7 @@ func (d *aiWriteDecision) prepare(pointID string) bool {
 		return false
 	}
 	p := d.runtime.cfg.Profiles[d.runtime.cfg.Write.Profile]
-	d.journal = &aiWriteJournal{SchemaVersion: 1, OperationRef: ref, PointID: pointID, CatalogHash: d.outcome.CatalogHash, Profile: d.runtime.cfg.Write.Profile, Model: p.Model, RubricVersion: aijudgment.RubricVersion, Mode: d.outcome.Mode, Status: "prepared", CreatedAt: nowISO(), Before: d.before, After: d.after, Retention: "manual"}
-	if d.subject != nil {
-		d.journal.RubricVersion = "optional-ai-subject-v2"
-	}
+	d.journal = &aiWriteJournal{SchemaVersion: 2, OperationRef: ref, PointID: pointID, CatalogHash: d.outcome.CatalogHash, Profile: d.runtime.cfg.Write.Profile, Model: p.Model, RubricVersion: writeRubricVersion(d.subject), Mode: d.outcome.Mode, Status: "prepared", CreatedAt: nowISO(), Before: d.before, After: d.after, RecommendedRelatedTags: append([]string(nil), d.recommendedRelatedTags...), Retention: "manual"}
 	d.journal.SubjectDecision = d.outcome.SubjectDecision
 	if !d.saveJournal() {
 		d.journal = nil
@@ -260,13 +267,17 @@ func (d *aiWriteDecision) recordShadow(pointID string) {
 		return
 	}
 	p := d.runtime.cfg.Profiles[d.runtime.cfg.Write.Profile]
-	d.journal = &aiWriteJournal{SchemaVersion: 1, OperationRef: ref, PointID: pointID, CatalogHash: d.outcome.CatalogHash, Profile: d.runtime.cfg.Write.Profile, Model: p.Model, Mode: "shadow", Status: d.outcome.Status, CreatedAt: nowISO(), Before: d.before, After: d.after, Retention: "manual", RubricVersion: aijudgment.RubricVersion, SubjectDecision: d.outcome.SubjectDecision, ReasonCode: d.reason, DurationMS: d.durationMS}
-	if d.subject != nil {
-		d.journal.RubricVersion = "optional-ai-subject-v2"
-	}
+	d.journal = &aiWriteJournal{SchemaVersion: 2, OperationRef: ref, PointID: pointID, CatalogHash: d.outcome.CatalogHash, Profile: d.runtime.cfg.Write.Profile, Model: p.Model, Mode: "shadow", Status: d.outcome.Status, CreatedAt: nowISO(), Before: d.before, After: d.after, RecommendedRelatedTags: append([]string(nil), d.recommendedRelatedTags...), Retention: "manual", RubricVersion: writeRubricVersion(d.subject), SubjectDecision: d.outcome.SubjectDecision, ReasonCode: d.reason, DurationMS: d.durationMS}
 	if !d.saveJournal() {
 		slog.Warn("optional AI shadow journal unavailable")
 	}
+}
+
+func writeRubricVersion(subject *FactSubject) string {
+	if subject != nil && (subject.Scope != "" || subject.Context != "") {
+		return aijudgment.ClassifySubjectRubricVersion
+	}
+	return aijudgment.ClassifyRubricVersion
 }
 
 // guardAIWrite pins both policy identity and catalog publication through Upsert.

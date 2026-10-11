@@ -56,8 +56,12 @@ def main():
     for path in paths:
         try:
             row = read_journal(path)
-            if not isinstance(row, dict) or row.get("schema_version") != 1:
+            if not isinstance(row, dict) or row.get("schema_version") not in (1, 2):
                 raise ValueError("invalid journal schema")
+            if row.get("schema_version") == 2:
+                recommendations = row.get("recommended_related_tags", [])
+                if not isinstance(recommendations, list) or len(recommendations) > 32 or not all(isinstance(tag, str) for tag in recommendations):
+                    raise ValueError("invalid advisory recommendations")
             if row.get("mode") != "shadow":
                 counts["non_shadow_ignored"] += 1
                 continue
