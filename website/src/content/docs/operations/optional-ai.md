@@ -41,7 +41,7 @@ Judgment profiles use these exact current protocol/model/endpoint triples:
 | `decisions` | `gpt-6-luna` | `https://api.openai.com/v1/decisions` |
 | `jev` | `jev-1.13.0` | `https://api.typesafe.ai/v1/systemone` |
 
-Each hosted profile includes `key_file` pointing to a regular private mounted file. Profiles have optional `timeout_ms`; read/write budgets remain bounded to one second. The runtime does not switch to another provider on failure. A model/version change requires contract and quality review.
+Each hosted profile includes `key_file` pointing to a regular private mounted file. Profiles have optional `timeout_ms`; interactive read/write budgets remain bounded to one second. Write-shadow jobs use `write.shadow_timeout_ms`: omitted or zero preserves the 1000 ms default; explicit values must be 1–30000 ms. The write provider defaults to this shadow timeout; an explicit profile `timeout_ms` can impose a shorter deadline. Set both fields when increasing an existing profile. Read-shadow jobs remain bounded to one second. The runtime does not switch to another provider on failure. A model/version change requires contract and quality review.
 
 A maintenance profile uses `protocol: openai-responses` or `openai-compatible-chat`, an explicit full endpoint URL, and the operator's `model`. Set `local: true` explicitly to permit HTTP for a local model server. Local unauthenticated profiles may omit `key_file`. Compatibility is checked by strict response validation; arbitrary models are not guaranteed to satisfy the proposal schema. A local gateway may itself forward data externally: review its configuration.
 
@@ -212,3 +212,9 @@ activation. It is not a deployment instruction or a live enablement.
 
 Disable write inference to roll back behavior. Remove the new admission property
 before using an older binary whose strict loader does not recognize it.
+
+### Write-shadow terminal outcomes
+
+Private `write-audits` journals now record `failed` outcomes with a fixed `reason_code` and elapsed `duration_ms`, alongside existing `decided` and `abstained` proposals. Codes include `timeout`, `canceled`, `provider_auth`, `provider_rate_limit`, `provider_http`, `provider_transport`, `invalid_response`, `invalid_request`, `catalog_unavailable`, `egress_denied`, `budget_unavailable`, `queue_full` and `provider_unavailable`. No raw error, provider body, assertion or credential is stored in these fields. The existing private operator journal retains its point reference and grouping metadata; it is not telemetry. Bypassed or duplicate writes create no inference job or journal. Queue saturation records a failed job without calling the provider. Graceful cancellation records queued failures; a hard kill can still lose jobs. Journal persistence failure produces a fixed warning and cannot be recorded in the unavailable store.
+
+A failed shadow job never changes stored grouping. Unknown usage reservations remain conservative after a timeout; `pending` does not mean the request is still executing. No automatic retry or provider fallback is added. Older binaries reject `shadow_timeout_ms`; rollback restores the previous image and configuration together.

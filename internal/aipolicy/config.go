@@ -21,14 +21,23 @@ type Feature struct {
 
 // WriteFeature separates write admission from read configuration.
 type WriteFeature struct {
-	Mode      string `json:"mode"`
-	Provider  string `json:"provider"`
-	Profile   string `json:"profile"`
-	Admission string `json:"admission,omitempty"`
+	Mode            string `json:"mode"`
+	Provider        string `json:"provider"`
+	Profile         string `json:"profile"`
+	Admission       string `json:"admission,omitempty"`
+	ShadowTimeoutMS int    `json:"shadow_timeout_ms,omitempty"`
 }
 
 func (f WriteFeature) judgment() Feature {
 	return Feature{Mode: f.Mode, Provider: f.Provider, Profile: f.Profile}
+}
+
+// ShadowTimeout bounds asynchronous jobs independently of interactive inference.
+func (f WriteFeature) ShadowTimeout() time.Duration {
+	if f.ShadowTimeoutMS > 0 {
+		return time.Duration(f.ShadowTimeoutMS) * time.Millisecond
+	}
+	return time.Second
 }
 func (f WriteFeature) Active() bool { return f.judgment().Active() }
 
@@ -147,6 +156,9 @@ func (c *Config) Defaults() {
 	}
 }
 func (c Config) Validate() error {
+	if c.Write.ShadowTimeoutMS < 0 || c.Write.ShadowTimeoutMS > 30_000 {
+		return errors.New("invalid write shadow timeout")
+	}
 	if c.SchemaVersion != 1 {
 		return errors.New("unsupported optional AI configuration schema")
 	}
