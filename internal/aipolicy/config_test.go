@@ -237,3 +237,26 @@ func TestScopedPreparationRefusesUnassignedWrites(t *testing.T) {
 		t.Fatal("preparation configuration permits unapproved unassigned writes")
 	}
 }
+
+func TestWriteShadowTimeoutBoundsAndDefault(t *testing.T) {
+	c := Off()
+	if c.Write.ShadowTimeout() != time.Second {
+		t.Fatal("default changed")
+	}
+	for _, value := range []int{-1, 30001} {
+		c.Write.ShadowTimeoutMS = value
+		if c.Validate() == nil {
+			t.Fatalf("invalid timeout accepted: %d", value)
+		}
+	}
+	for _, value := range []int{0, 1, 10000, 30000} {
+		c.Write.ShadowTimeoutMS = value
+		if err := c.Validate(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.Write.ShadowTimeoutMS = 10000
+	if c.Write.ShadowTimeout() != 10*time.Second {
+		t.Fatal("configured timeout ignored")
+	}
+}

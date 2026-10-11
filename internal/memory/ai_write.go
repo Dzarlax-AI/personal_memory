@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"path/filepath"
 	"time"
 
@@ -23,9 +24,13 @@ type aiWriteDecision struct {
 	outcome       *AIOutcome
 	before, after aiGrouping
 	journal       *aiWriteJournal
+	reason        string
+	durationMS    int64
 }
 type aiWriteJournal struct {
 	SubjectDecision string     `json:"subject_decision,omitempty"`
+	ReasonCode      string     `json:"reason_code,omitempty"`
+	DurationMS      int64      `json:"duration_ms,omitempty"`
 	SchemaVersion   int        `json:"schema_version"`
 	OperationRef    string     `json:"operation_ref"`
 	PointID         string     `json:"point_id"`
@@ -69,14 +74,25 @@ func (s *Server) aiClassify(ctx context.Context, fact, namespace string, tags []
 
 func (d *aiWriteDecision) classify(ctx context.Context, fact, namespace string, origin *FactOrigin) {
 	a := d.runtime
-	if ctx.Err() != nil || a.ctx.Err() != nil || !a.cfg.Egress.Allows(namespace, d.before.Tags) {
+	if ctx.Err() != nil {
+		d.reason = aijudgment.FailureReason(ctx.Err())
+		return
+	}
+	if a.ctx.Err() != nil {
+		d.reason = "canceled"
+		return
+	}
+	if !a.cfg.Egress.Allows(namespace, d.before.Tags) {
+		d.reason = "egress_denied"
 		return
 	}
 	if origin != nil && !a.cfg.Egress.Allows("projects", []string{origin.SourceProject}) {
+		d.reason = "egress_denied"
 		return
 	}
-	catalog, hash, ok := a.catalog()
-	if !ok {
+	catalog, hash, reason := a.catalogWithReason()
+	if reason != "" {
+		d.reason = reason
 		return
 	}
 	d.outcome.CatalogHash = hash
@@ -88,16 +104,26 @@ func (d *aiWriteDecision) classify(ctx context.Context, fact, namespace string, 
 	// Recording origin is stored provenance, not evidence of the assertion's subject.
 	// Both synchronous and shadow classification omit it from provider input.
 	p := a.cfg.Profiles[a.cfg.Write.Profile]
-	if _, err := aijudgment.BuildClassifyRequest(a.cfg.Write.Provider, p.Model, in); err != nil || ctx.Err() != nil {
+	if _, err := aijudgment.BuildClassifyRequest(a.cfg.Write.Provider, p.Model, in); err != nil {
+		d.reason = "invalid_request"
+		return
+	}
+	if ctx.Err() != nil {
+		d.reason = aijudgment.FailureReason(ctx.Err())
 		return
 	}
 	reservation, err := a.budget.Begin(time.Now())
 	if err != nil {
+		d.reason = "budget_unavailable"
 		return
 	}
 	result, usage, err := a.write.Classify(ctx, in)
 	reservation.Finish(usage.InputTokens, usage.Known)
 	if err != nil || ctx.Err() != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+		d.reason = aijudgment.FailureReason(err)
 		return
 	}
 	if result.Status == "abstained" {
@@ -107,6 +133,7 @@ func (d *aiWriteDecision) classify(ctx context.Context, fact, namespace string, 
 	}
 	if result.Status != "decided" || result.PrimaryTag == "" {
 		if result.Status != "unavailable" {
+			d.reason = "invalid_response"
 			d.outcome.Status = "invalid"
 		}
 		return
@@ -118,12 +145,14 @@ func (d *aiWriteDecision) classify(ctx context.Context, fact, namespace string, 
 		}
 	}
 	if !allowed[result.PrimaryTag] || len(result.RelatedTags) > 32 {
+		d.reason = "invalid_response"
 		d.outcome.Status = "invalid"
 		return
 	}
 	seen := map[string]bool{}
 	for _, tag := range result.RelatedTags {
 		if !allowed[tag] || seen[tag] {
+			d.reason = "invalid_response"
 			d.outcome.Status = "invalid"
 			return
 		}
@@ -132,6 +161,7 @@ func (d *aiWriteDecision) classify(ctx context.Context, fact, namespace string, 
 	inferred := append(append([]string{}, d.before.Tags...), result.RelatedTags...)
 	inferred, primary := normalizeFactTags(inferred, result.PrimaryTag)
 	if len(inferred) > maxTags {
+		d.reason = "invalid_response"
 		d.outcome.Status = "invalid"
 		return
 	}
@@ -199,22 +229,40 @@ func (d *aiWriteDecision) shadow(pointID, fact, namespace string, origin *FactOr
 		copy := *origin
 		origin = &copy
 	}
-	d.runtime.enqueue(func(ctx context.Context) {
+	job.reason = ""
+	queued := d.runtime.enqueueShadow(func(ctx context.Context) {
+		started := time.Now()
 		job.classify(ctx, fact, namespace, origin)
-		if job.outcome.Status != "decided" && job.outcome.Status != "abstained" {
-			return
+		job.durationMS = time.Since(started).Milliseconds()
+		job.recordShadow(pointID)
+	}, d.runtime.cfg.Write.ShadowTimeout(), func() { job.reason = "canceled"; job.recordShadow(pointID) })
+	if !queued {
+		job.reason = "queue_full"
+		if d.runtime.ctx.Err() != nil {
+			job.reason = "canceled"
 		}
-		ref, err := newAIRef()
-		if err != nil {
-			return
+		job.recordShadow(pointID)
+	}
+}
+
+func (d *aiWriteDecision) recordShadow(pointID string) {
+	if d.outcome.Status != "decided" && d.outcome.Status != "abstained" {
+		d.outcome.Status = "failed"
+		if d.reason == "" {
+			d.reason = "provider_unavailable"
 		}
-		p := job.runtime.cfg.Profiles[job.runtime.cfg.Write.Profile]
-		job.journal = &aiWriteJournal{SchemaVersion: 1, OperationRef: ref, PointID: pointID, CatalogHash: job.outcome.CatalogHash, Profile: job.runtime.cfg.Write.Profile, Model: p.Model, Mode: "shadow", Status: job.outcome.Status, CreatedAt: nowISO(), Before: job.before, After: job.after, Retention: "manual"}
-		job.journal.RubricVersion = aijudgment.RubricVersion
-		if job.subject != nil {
-			job.journal.RubricVersion = "optional-ai-subject-v2"
-		}
-		job.journal.SubjectDecision = job.outcome.SubjectDecision
-		job.saveJournal()
-	})
+	}
+	ref, err := newAIRef()
+	if err != nil {
+		slog.Warn("optional AI shadow journal unavailable")
+		return
+	}
+	p := d.runtime.cfg.Profiles[d.runtime.cfg.Write.Profile]
+	d.journal = &aiWriteJournal{SchemaVersion: 1, OperationRef: ref, PointID: pointID, CatalogHash: d.outcome.CatalogHash, Profile: d.runtime.cfg.Write.Profile, Model: p.Model, Mode: "shadow", Status: d.outcome.Status, CreatedAt: nowISO(), Before: d.before, After: d.after, Retention: "manual", RubricVersion: aijudgment.RubricVersion, SubjectDecision: d.outcome.SubjectDecision, ReasonCode: d.reason, DurationMS: d.durationMS}
+	if d.subject != nil {
+		d.journal.RubricVersion = "optional-ai-subject-v2"
+	}
+	if !d.saveJournal() {
+		slog.Warn("optional AI shadow journal unavailable")
+	}
 }

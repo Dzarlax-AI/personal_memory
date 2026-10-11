@@ -16,6 +16,12 @@ import (
 const aiOperationTimeout = time.Second
 const aiShadowQueueSize = 8
 
+type aiShadowJob struct {
+	run      func(context.Context)
+	timeout  time.Duration
+	canceled func()
+}
+
 type aiRuntime struct {
 	owner       string
 	cfg         aipolicy.Config
@@ -23,7 +29,7 @@ type aiRuntime struct {
 	budget      *aipolicy.Budget
 	ctx         context.Context
 	cancel      context.CancelFunc
-	jobs        chan func(context.Context)
+	jobs        chan aiShadowJob
 	done        chan struct{}
 	mu          sync.Mutex
 	closed      bool
@@ -81,7 +87,11 @@ func (s *Server) configureAI(ctx context.Context, cfg aipolicy.Config, write, re
 			if err != nil {
 				return err
 			}
-			adapter, err := aijudgment.New(slot.feature.Provider, aijudgment.Config{Model: p.Model, Endpoint: p.Endpoint, APIKey: key, Timeout: p.Timeout(aiOperationTimeout)})
+			fallback := aiOperationTimeout
+			if slot.target == &write && cfg.Write.Mode == "shadow" {
+				fallback = cfg.Write.ShadowTimeout()
+			}
+			adapter, err := aijudgment.New(slot.feature.Provider, aijudgment.Config{Model: p.Model, Endpoint: p.Endpoint, APIKey: key, Timeout: p.Timeout(fallback)})
 			if err != nil {
 				return err
 			}
@@ -103,7 +113,7 @@ func (s *Server) configureAI(ctx context.Context, cfg aipolicy.Config, write, re
 		return s.replaceAI(nil)
 	}
 	runtimeCtx, cancel := context.WithCancel(ctx)
-	a := &aiRuntime{owner: s.user, cfg: cfg, write: write, read: read, budget: budget, ctx: runtimeCtx, cancel: cancel, jobs: make(chan func(context.Context), aiShadowQueueSize), done: make(chan struct{})}
+	a := &aiRuntime{owner: s.user, cfg: cfg, write: write, read: read, budget: budget, ctx: runtimeCtx, cancel: cancel, jobs: make(chan aiShadowJob, aiShadowQueueSize), done: make(chan struct{})}
 	go a.run()
 	return s.replaceAI(a)
 }
@@ -154,29 +164,49 @@ func (s *Server) ShutdownAI(ctx context.Context) error {
 	}
 }
 func (a *aiRuntime) stop() { a.mu.Lock(); a.closed = true; a.cancel(); a.mu.Unlock() }
-func (a *aiRuntime) enqueue(job func(context.Context)) {
+func (a *aiRuntime) enqueue(job func(context.Context)) bool {
+	return a.enqueueShadow(job, aiOperationTimeout, nil)
+}
+func (a *aiRuntime) enqueueShadow(job func(context.Context), duration time.Duration, canceled func()) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.closed || a.ctx.Err() != nil {
-		return
+		return false
 	}
 	select {
-	case a.jobs <- job:
+	case a.jobs <- aiShadowJob{run: job, timeout: duration, canceled: canceled}:
+		return true
 	default:
+		return false
 	}
 }
 func (a *aiRuntime) run() {
 	defer close(a.done)
+	defer func() {
+		for {
+			select {
+			case job := <-a.jobs:
+				if job.canceled != nil {
+					job.canceled()
+				}
+			default:
+				return
+			}
+		}
+	}()
 	for {
 		select {
 		case <-a.ctx.Done():
 			return
 		case job := <-a.jobs:
 			if a.ctx.Err() != nil {
+				if job.canceled != nil {
+					job.canceled()
+				}
 				return
 			}
-			ctx, cancel := context.WithTimeout(a.ctx, aiOperationTimeout)
-			job(ctx)
+			ctx, cancel := context.WithTimeout(a.ctx, job.timeout)
+			job.run(ctx)
 			cancel()
 		}
 	}
@@ -185,9 +215,13 @@ func (a *aiRuntime) run() {
 // Eligible project descriptions can leave the server. Evidence references
 // remain local even when using an injected provider.
 func (a *aiRuntime) catalog() (contextcatalog.Snapshot, string, bool) {
+	snap, hash, reason := a.catalogWithReason()
+	return snap, hash, reason == ""
+}
+func (a *aiRuntime) catalogWithReason() (contextcatalog.Snapshot, string, string) {
 	snap, hash, err := contextcatalog.LoadActive(a.cfg.CatalogDir)
 	if err != nil {
-		return contextcatalog.Snapshot{}, "", false
+		return contextcatalog.Snapshot{}, "", "catalog_unavailable"
 	}
 	safe := snap
 	safe.Entries = nil
@@ -196,12 +230,12 @@ func (a *aiRuntime) catalog() (contextcatalog.Snapshot, string, bool) {
 			continue
 		}
 		if !a.cfg.Egress.Allows(e.Namespace, []string{e.Tag}) {
-			return contextcatalog.Snapshot{}, "", false
+			return contextcatalog.Snapshot{}, "", "egress_denied"
 		}
 		e = safeCatalogEntry(e)
 		safe.Entries = append(safe.Entries, e)
 	}
-	return safe, hash, true
+	return safe, hash, ""
 }
 
 // Drop local identity and source excerpts before crossing even an injected

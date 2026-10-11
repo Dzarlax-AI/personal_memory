@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -176,11 +175,12 @@ func (p *provider) Classify(ctx context.Context, in ClassifyInput) (ClassifyResu
 	}
 	answers, usage, err := decodeResponse(p.name, data)
 	if err != nil {
-		return result, Usage{}, err
+		return result, Usage{}, invalidResponseError{err}
 	}
 	result, err = validateClassify(in, answers)
 	if err != nil {
 		result.Status = "invalid"
+		err = invalidResponseError{err}
 	}
 	return result, usage, err
 }
@@ -236,7 +236,7 @@ func (p *provider) call(ctx context.Context, body []byte) ([]byte, error) {
 		return nil, errors.New("judgment provider response exceeds configured limit")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("judgment provider returned HTTP %d", resp.StatusCode)
+		return nil, providerHTTPError{status: resp.StatusCode}
 	}
 	return data, nil
 }
