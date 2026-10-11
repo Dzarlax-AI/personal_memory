@@ -30,7 +30,7 @@ type aiWriteDecision struct {
 type aiWriteJournal struct {
 	SubjectDecision string     `json:"subject_decision,omitempty"`
 	ReasonCode      string     `json:"reason_code,omitempty"`
-	DurationMS      int64      `json:"duration_ms,omitempty"`
+	DurationMS      int64      `json:"duration_ms"`
 	SchemaVersion   int        `json:"schema_version"`
 	OperationRef    string     `json:"operation_ref"`
 	PointID         string     `json:"point_id"`

@@ -27,6 +27,10 @@ func shadowJournal(t *testing.T, dir string) aiWriteJournal {
 			if info.Mode().Perm() != 0600 || strings.Contains(string(raw), "PRIVATE_ASSERTION") || strings.Contains(string(raw), "SECRET_ERROR") {
 				t.Fatal("unsafe journal")
 			}
+			var fields map[string]json.RawMessage
+			if json.Unmarshal(raw, &fields) != nil || fields["duration_ms"] == nil {
+				t.Fatal("terminal duration missing")
+			}
 			var j aiWriteJournal
 			if err = json.Unmarshal(raw, &j); err != nil {
 				t.Fatal(err)
