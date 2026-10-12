@@ -15,18 +15,37 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Dzarlax-AI/personal-memory/internal/conformance"
 )
 
 const installerStateSchema = 1
+const predecessorBundleVersion = "0.2.0"
 const codexBegin = "<!-- BEGIN PERSONAL_MEMORY_INTEGRATION v1 -->"
 const codexEnd = "<!-- END PERSONAL_MEMORY_INTEGRATION v1 -->"
 const claudeHookCommandIdentity = "Apply Personal Memory bundle "
 const currentContractSHA256 = "b425bb25ea0ecaa85ddaafacb9e5af9970d11a985a482b8d8fabcc612fa69668"
 const currentSuiteSHA256 = "bd10ce7d22054210ad6798b3a75f48379ccb8063a52d620677b67b36509fcd1f"
 const keepCompletedBackups = 3
+
+var predecessorBundleOnce sync.Once
+var predecessorBundle *Bundle
+var predecessorBundleErr error
+
+var predecessorV02AssetSHA256 = map[string]string{
+	"policy.json":                              "2afde5195f4e05667bcb23186e89509eb333e9343d1f18c5a2e4df8d60376260",
+	"templates/chatgpt-prompt.md.tmpl":         "ba4373c23a16e53516143429a20ffe84377124736a1a61c086ca37f099fb24c1",
+	"templates/chatgpt-registration.json.tmpl": "0ff13e7f06484ee05cb5b82be9437ac180ad4345906736352ba8059073bd0fb9",
+	"templates/claude-rules.md.tmpl":           "f364efded7ceede5f27bfe5b23bf8d3191bbb3e9027397bd10361ba9f1f03366",
+	"templates/claude-settings.json.tmpl":      "7b2863b7619e45fe5847fe25961c85410398534c44aadc98c0f5fb7b950174a9",
+	"templates/claude-skill.md.tmpl":           "82c70fee1fd0f63d69021a7499726d236812ba1ff2fa03b51c8eab13ff3e9a6e",
+	"templates/codex-agents.md.tmpl":           "b7edb403f6ec2d8b97f6cbc9c8390b160b68edee6deb2af73f0dfb96357b3652",
+	"templates/codex-skill.md.tmpl":            "fbb45d987b6ca174121a94ebeb283f4331476ffb4fe12a719034755013de2a62",
+	"templates/generic-policy.json.tmpl":       "b97ecbda2395dd8516f3fc33ea1c4ac20d41835dfd7e832979a6aa019f8c6e1b",
+	"templates/generic-tools.json.tmpl":        "78a3fa53653720661aedd4a75bf83c0c9314dc217a03ce7f4d24dde350d634e3",
+}
 
 var errDiscoveryRequired = errors.New("tool discovery must be explicitly performed")
 
@@ -206,7 +225,14 @@ func LoadInstalledConfig(targetRoot string, bundle *Bundle, client conformance.C
 	if err = compatibleState(st, client); err != nil {
 		return CapabilityConfig{}, err
 	}
-	set, err := renderClient(bundle, client, st.CapabilityConfig)
+	installedBundle := bundle
+	if st.BundleVersion == predecessorBundleVersion {
+		installedBundle, err = loadPinnedPredecessorV02()
+		if err != nil {
+			return CapabilityConfig{}, err
+		}
+	}
+	set, err := renderClient(installedBundle, client, st.CapabilityConfig)
 	if err != nil {
 		return CapabilityConfig{}, err
 	}
@@ -1139,7 +1165,7 @@ func stateDigest(st installState) string {
 }
 func compatibleState(st installState, c conformance.ClientFamily) error {
 	formatVersion, supported := artifactFormatVersion(c)
-	if st.SchemaVersion != installerStateSchema || st.Client != c || !supported || st.BundleVersion != BundleVersion || st.ContractVersion != ContractVersion || st.ArtifactFormatVersion != formatVersion || st.ContractSHA256 != currentContractSHA256 || st.SuiteSHA256 != currentSuiteSHA256 || !validConfigState(st.CapabilityConfig.Memory) || !validConfigState(st.CapabilityConfig.Documents) || !validConfigState(st.CapabilityConfig.Todoist) || st.CapabilityConfigSHA256 != capabilityConfigDigest(st.CapabilityConfig) || st.DigestSHA256 != stateDigest(st) || len(st.Owned) < 1 || len(st.Owned) > 16 {
+	if st.SchemaVersion != installerStateSchema || st.Client != c || !supported || (st.BundleVersion != BundleVersion && st.BundleVersion != predecessorBundleVersion) || st.ContractVersion != ContractVersion || st.ArtifactFormatVersion != formatVersion || st.ContractSHA256 != currentContractSHA256 || st.SuiteSHA256 != currentSuiteSHA256 || !validConfigState(st.CapabilityConfig.Memory) || !validConfigState(st.CapabilityConfig.Documents) || !validConfigState(st.CapabilityConfig.Todoist) || st.CapabilityConfigSHA256 != capabilityConfigDigest(st.CapabilityConfig) || st.DigestSHA256 != stateDigest(st) || len(st.Owned) < 1 || len(st.Owned) > 16 {
 		return fmt.Errorf("incompatible installation state")
 	}
 	seenOwned := map[string]bool{}
@@ -1149,13 +1175,162 @@ func compatibleState(st installState, c conformance.ClientFamily) error {
 		}
 		seenOwned[o.Path] = true
 	}
+	if st.BundleVersion == predecessorBundleVersion && (!predecessorInventoryMatches(st, c) || !predecessorArtifactsMatch(st, c)) {
+		return fmt.Errorf("incompatible installation state")
+	}
 	return nil
+}
+
+func predecessorInventoryMatches(st installState, c conformance.ClientFamily) bool {
+	var want map[string]artifactKind
+	switch c {
+	case conformance.ClientCodex:
+		want = map[string]artifactKind{"AGENTS.md": kindCodexBlock, "skills/personal-memory/SKILL.md": kindFile}
+	case conformance.ClientClaude:
+		want = map[string]artifactKind{"rules/personal-memory.md": kindFile, "skills/personal-memory/SKILL.md": kindFile, "settings.json": kindClaudeSettings}
+	case conformance.ClientChatGPT:
+		want = map[string]artifactKind{"chatgpt/behavior-prompt.md": kindFile, "chatgpt/remote-mcp-registration.json": kindFile}
+	case conformance.ClientGenericMCP:
+		want = map[string]artifactKind{"generic-mcp/policy.json": kindFile, "generic-mcp/tool-mapping.json": kindFile}
+	default:
+		return false
+	}
+	if len(st.Owned) != len(want) {
+		return false
+	}
+	for _, owned := range st.Owned {
+		if want[owned.Path] != owned.Kind {
+			return false
+		}
+		delete(want, owned.Path)
+	}
+	return len(want) == 0
+}
+
+func loadPinnedPredecessorV02() (*Bundle, error) {
+	predecessorBundleOnce.Do(func() {
+		current, err := LoadEmbedded()
+		if err != nil {
+			predecessorBundleErr = err
+			return
+		}
+		manifest := current.manifest
+		manifest.BundleVersion = predecessorBundleVersion
+		manifest.WorkflowSuiteVersion = "1.0.0"
+		manifest.OptionalWorkflows = append([]ClientWorkflow(nil), manifest.OptionalWorkflows[:1]...)
+		policy := current.policy
+		policy.BundleVersion = predecessorBundleVersion
+		policySource := bytes.Replace(current.policySource, []byte(`"bundle_version": "0.3.0"`), []byte(`"bundle_version": "0.2.0"`), 1)
+		if digest(policySource) != predecessorV02AssetSHA256["policy.json"] {
+			predecessorBundleErr = fmt.Errorf("pinned 0.2.0 policy source mismatch")
+			return
+		}
+		templates := cloneBytesMap(current.templates)
+		removeOnce := func(name, old string) bool {
+			content := templates[name]
+			if !bytes.Contains(content, []byte(old)) {
+				return false
+			}
+			templates[name] = bytes.Replace(content, []byte(old), nil, 1)
+			return true
+		}
+		for _, name := range []string{
+			"templates/chatgpt-prompt.md.tmpl", "templates/claude-rules.md.tmpl", "templates/claude-skill.md.tmpl",
+			"templates/codex-agents.md.tmpl", "templates/codex-skill.md.tmpl",
+		} {
+			if !removeOnce(name, "{{.WriteRecommendationText}}\n") {
+				predecessorBundleErr = fmt.Errorf("pinned 0.2.0 template %s cannot be reconstructed", name)
+				return
+			}
+		}
+		const recommendationRegistration = ",\n    \"Use get_write_recommendation only when that exact tool is discovered and enabled, and a successful eligible store_fact result returned its operation reference.\""
+		if !removeOnce("templates/chatgpt-registration.json.tmpl", recommendationRegistration) {
+			predecessorBundleErr = fmt.Errorf("pinned 0.2.0 ChatGPT registration template cannot be reconstructed")
+			return
+		}
+		const currentGenericPolicy = "{{.WorkflowInstructionsJSON}}"
+		if !bytes.Contains(templates["templates/generic-policy.json.tmpl"], []byte(currentGenericPolicy)) {
+			predecessorBundleErr = fmt.Errorf("pinned 0.2.0 generic policy template cannot be reconstructed")
+			return
+		}
+		templates["templates/generic-policy.json.tmpl"] = bytes.Replace(templates["templates/generic-policy.json.tmpl"], []byte(currentGenericPolicy), []byte(`{{printf "%q" .ProjectRegistrationText}}`), 1)
+		const genericToolsAppend = ",\n  \"workflow_instructions\": {{.WorkflowInstructionsJSON}}"
+		if !removeOnce("templates/generic-tools.json.tmpl", genericToolsAppend) {
+			predecessorBundleErr = fmt.Errorf("pinned 0.2.0 generic tools template cannot be reconstructed")
+			return
+		}
+		for name, expected := range predecessorV02AssetSHA256 {
+			if name == "policy.json" {
+				continue // The policy is pinned and checked from policySource above.
+			}
+			content, ok := templates[name]
+			if !ok {
+				predecessorBundleErr = fmt.Errorf("pinned 0.2.0 asset %s is missing", name)
+				return
+			}
+			if digest(content) != expected {
+				predecessorBundleErr = fmt.Errorf("pinned 0.2.0 asset %s checksum mismatch", name)
+				return
+			}
+		}
+		predecessorBundle = &Bundle{manifest: manifest, policy: policy, suite: current.suite, policySource: policySource, manifestSource: current.manifestSource, templates: templates, telemetryTuples: current.telemetryTuples}
+	})
+	return predecessorBundle, predecessorBundleErr
+}
+
+func predecessorArtifactsMatch(st installState, c conformance.ClientFamily) bool {
+	legacy, err := loadPinnedPredecessorV02()
+	if err != nil {
+		return false
+	}
+	sets, err := legacy.renderUnchecked(st.CapabilityConfig)
+	if err != nil {
+		return false
+	}
+	for _, set := range sets {
+		if set.ClientID != c {
+			continue
+		}
+		active, err := activate(set)
+		if err != nil || len(active) != len(st.Owned) {
+			return false
+		}
+		want := make(map[string]ownedState, len(active))
+		for _, artifact := range active {
+			want[artifact.Path] = ownedState{Path: artifact.Path, Kind: artifact.Kind, ManagedDigest: artifact.ManagedDigest}
+		}
+		for _, owned := range st.Owned {
+			if want[owned.Path] != owned {
+				return false
+			}
+			delete(want, owned.Path)
+		}
+		if len(want) != 0 {
+			return false
+		}
+		overrides, err := activeOverridePaths(set)
+		if err != nil || len(overrides) != len(st.Overrides) {
+			return false
+		}
+		for i, override := range overrides {
+			if st.Overrides[i] != (overrideState{Path: override, UserOwned: true}) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 var errOverrideMissing = errors.New("required user override is missing")
 
 func validateInstalledState(r *rootContext, st installState, set ArtifactSet, requireOverrides bool) error {
-	if err := validateSetStructure(set); err != nil {
+	if st.BundleVersion == predecessorBundleVersion && set.BundleVersion == predecessorBundleVersion {
+		// Exact pinned predecessor identity is required; arbitrary old sets remain invalid.
+		if err := validatePriorState(st, set); err != nil {
+			return err
+		}
+	} else if err := validateSetStructure(set); err != nil {
 		return err
 	}
 	if err := compatibleState(st, set.ClientID); err != nil {
@@ -1381,7 +1556,14 @@ func loadBackup(r *rootContext, c conformance.ClientFamily, tx string, set Artif
 	if m.State != nil {
 		priorSet := set
 		if bundle != nil {
-			priorSet, err = renderClient(bundle, c, m.State.CapabilityConfig)
+			priorBundle := bundle
+			if m.State.BundleVersion == predecessorBundleVersion {
+				priorBundle, err = loadPinnedPredecessorV02()
+				if err != nil {
+					return m, fmt.Errorf("backup prior state incompatible")
+				}
+			}
+			priorSet, err = renderClient(priorBundle, c, m.State.CapabilityConfig)
 			if err != nil {
 				return m, fmt.Errorf("backup prior state incompatible")
 			}
