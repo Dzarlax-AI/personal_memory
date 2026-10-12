@@ -244,3 +244,17 @@ before using an older binary whose strict loader does not recognize it.
 Private `write-audits` journals now record `failed` outcomes with a fixed `reason_code` and elapsed `duration_ms`, alongside existing `decided` and `abstained` proposals. Codes include `timeout`, `canceled`, `provider_auth`, `provider_rate_limit`, `provider_http`, `provider_transport`, `invalid_response`, `invalid_request`, `catalog_unavailable`, `egress_denied`, `budget_unavailable`, `queue_full` and `provider_unavailable`. No raw error, provider body, assertion or credential is stored in these fields. The existing private operator journal retains its point reference and grouping metadata; it is not telemetry. Bypassed or duplicate writes create no inference job or journal. Queue saturation records a failed job without calling the provider. Graceful cancellation records queued failures; a hard kill can still lose jobs. Journal persistence failure produces a fixed warning and cannot be recorded in the unavailable store.
 
 A failed shadow job never changes stored grouping. Unknown usage reservations remain conservative after a timeout; `pending` does not mean the request is still executing. No automatic retry or provider fallback is added. Older binaries reject `shadow_timeout_ms`; rollback restores the previous image and configuration together.
+
+### Bounded classification request size
+
+Write classification keeps primary-selection and abstention instructions in the
+primary question. Each related-project question carries independent, concise
+evidence and trust rules; it does not rely on another question's instructions.
+The write rubric identifiers are `optional-ai-primary-only-v4` and
+`optional-ai-primary-only-subject-v4`. Read-ranking instructions are unchanged.
+
+Decisions and Jev serialize the complete eligible catalog without truncating
+candidates. The final provider-specific JSON request must fit within 64 KiB.
+Larger payloads fail locally as `invalid_request`, before budget reservation or
+HTTP dispatch, and preserve baseline grouping. Catalog growth may still exceed
+this cap; compact instructions do not guarantee that every catalog will fit.
