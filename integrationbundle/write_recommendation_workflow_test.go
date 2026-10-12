@@ -232,6 +232,10 @@ func TestPinnedV02UpgradeRollbackRestoresExactPredecessor(t *testing.T) {
 			}
 			oldState := stateFor(oldSet, active, "")
 			rewriteStateForTest(t, root, oldState)
+			installedConfig, err := LoadInstalledConfig(root, current, oldSet.ClientID, nil)
+			if err != nil || installedConfig != config {
+				t.Fatalf("preserve predecessor config = %#v, %v", installedConfig, err)
+			}
 			if result, err := Update(InstallOptions{TargetRoot: root, set: newSet}); err != nil || !result.Changed {
 				t.Fatalf("upgrade = %#v, %v", result, err)
 			}

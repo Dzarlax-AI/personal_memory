@@ -225,7 +225,14 @@ func LoadInstalledConfig(targetRoot string, bundle *Bundle, client conformance.C
 	if err = compatibleState(st, client); err != nil {
 		return CapabilityConfig{}, err
 	}
-	set, err := renderClient(bundle, client, st.CapabilityConfig)
+	installedBundle := bundle
+	if st.BundleVersion == predecessorBundleVersion {
+		installedBundle, err = loadPinnedPredecessorV02()
+		if err != nil {
+			return CapabilityConfig{}, err
+		}
+	}
+	set, err := renderClient(installedBundle, client, st.CapabilityConfig)
 	if err != nil {
 		return CapabilityConfig{}, err
 	}
@@ -1175,7 +1182,7 @@ func compatibleState(st installState, c conformance.ClientFamily) error {
 }
 
 func predecessorInventoryMatches(st installState, c conformance.ClientFamily) bool {
-	want := map[string]artifactKind{}
+	var want map[string]artifactKind
 	switch c {
 	case conformance.ClientCodex:
 		want = map[string]artifactKind{"AGENTS.md": kindCodexBlock, "skills/personal-memory/SKILL.md": kindFile}
@@ -1318,7 +1325,12 @@ func predecessorArtifactsMatch(st installState, c conformance.ClientFamily) bool
 var errOverrideMissing = errors.New("required user override is missing")
 
 func validateInstalledState(r *rootContext, st installState, set ArtifactSet, requireOverrides bool) error {
-	if err := validateSetStructure(set); err != nil {
+	if st.BundleVersion == predecessorBundleVersion && set.BundleVersion == predecessorBundleVersion {
+		// Exact pinned predecessor identity is required; arbitrary old sets remain invalid.
+		if err := validatePriorState(st, set); err != nil {
+			return err
+		}
+	} else if err := validateSetStructure(set); err != nil {
 		return err
 	}
 	if err := compatibleState(st, set.ClientID); err != nil {
