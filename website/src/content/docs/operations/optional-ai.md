@@ -173,7 +173,8 @@ AI write classification applies only its selected primary project to grouping.
 Client-supplied tags remain intact, including a tag that also appears in the
 model's secondary recommendations. When classification selects a primary project,
 secondary `related_tags` are retained only
-as `recommended_related_tags` in private schema-v2 write journals; they are
+as `recommended_related_tags` in private write journals (v2 for synchronous mode,
+v3 for shadow mode); they are
 advisory evidence and never become stored fact tags. Older schema-v1 journals
 remain readable. The shared Decisions and Jev classifier rubric requires a
 secondary project to own the actual component in the assertion or to have a
@@ -241,7 +242,7 @@ before using an older binary whose strict loader does not recognize it.
 
 ### Write-shadow terminal outcomes
 
-Private `write-audits` journals now record `failed` outcomes with a fixed `reason_code` and elapsed `duration_ms`, alongside existing `decided` and `abstained` proposals. Codes include `timeout`, `canceled`, `provider_auth`, `provider_rate_limit`, `provider_http`, `provider_transport`, `invalid_response`, `invalid_request`, `catalog_unavailable`, `egress_denied`, `budget_unavailable`, `queue_full` and `provider_unavailable`. No raw error, provider body, assertion or credential is stored in these fields. The existing private operator journal retains its point reference and grouping metadata; it is not telemetry. Bypassed or duplicate writes create no inference job or journal. Queue saturation records a failed job without calling the provider. Graceful cancellation records queued failures; a hard kill can still lose jobs. Journal persistence failure produces a fixed warning and cannot be recorded in the unavailable store.
+Private `write-audits` journals now record `failed` outcomes with a fixed `reason_code` and elapsed `duration_ms`, alongside existing `decided` and `abstained` proposals. Codes include `timeout`, `canceled`, `provider_auth`, `provider_rate_limit`, `provider_http`, `provider_transport`, `invalid_response`, `invalid_request`, `catalog_unavailable`, `egress_denied`, `budget_unavailable`, `queue_full` and `provider_unavailable`. No raw error, provider body, assertion or credential is stored in these fields. The existing private operator journal retains its point reference and grouping metadata; it is not telemetry. Bypassed or duplicate writes create no inference job or journal. Queue saturation records a failed job without calling the provider. Graceful cancellation records queued failures; a hard kill can still lose jobs. Version-3 shadow journals save a pending record before queueing, allowing clients to detect interrupted or expired work without resuming it. Journal persistence failure produces a fixed warning and cannot be recorded in the unavailable store.
 
 A failed shadow job never changes stored grouping. Unknown usage reservations remain conservative after a timeout; `pending` does not mean the request is still executing. No automatic retry or provider fallback is added. Older binaries reject `shadow_timeout_ms`; rollback restores the previous image and configuration together.
 
@@ -258,3 +259,48 @@ candidates. The final provider-specific JSON request must fit within 64 KiB.
 Larger payloads fail locally as `invalid_request`, before budget reservation or
 HTTP dispatch, and preserve baseline grouping. Catalog growth may still exceed
 this cap; compact instructions do not guarantee that every catalog will fit.
+
+
+### Reading a write recommendation through MCP
+
+With write AI in `shadow` mode, `get_write_recommendation(operation_ref)` reads an
+existing judgment. Successful eligible writes return `ai.operation_ref` after a
+private pending journal is saved; the text fallback includes `ai_operation_ref`.
+It is a random 32-character lowercase hexadecimal handle, not an authentication
+credential. The existing `/memory` authentication and configured deployment owner
+apply. Clients sharing credentials are not separate memory identities.
+
+The tool returns `pending`, `decided`, `abstained`, `failed`, `outdated`,
+`not_found` or `unavailable`. Every response has `applied: false`. Only a fresh
+`decided` result exposes `suggested_primary_tag` and `recommended_related_tags`.
+Abstentions preserve `subject_decision` and validated `missing_context_codes`.
+Failures expose fixed reason codes. No fact text, component context, point ID,
+owner identifier, path, model explanation or raw journal is returned.
+
+Reading performs no provider calls, embedding, budget reservation, recall-counter
+increment or fact mutation. After an initial read, allow at most one delayed
+follow-up for `pending`, then retain the reference for a later explicit check.
+Do not apply recommendations automatically. Explicit client tags remain
+unchanged. Off mode, denied admission and duplicate writes create no new
+recommendation operation. The lookup tool is registered only in shadow mode.
+
+New private schema-v3 shadow journals bind the reference to owner, point, a
+canonical input fingerprint, catalog generation and runtime instance. Changed
+facts, visibility or catalogs suppress suggested tags. Recall telemetry is
+excluded from the fingerprint; creation identity is included to detect deletion
+and recreation. A pending operation from a different runtime reports
+`failed/interrupted`. Abandoned pending work expires after nine times the larger
+of the configured write-shadow timeout and the one-second read-job timeout,
+plus one second of scheduling grace. A failed terminal save therefore cannot
+leave a readable pending operation pending forever. This is a status expiry
+bound, not a completion-latency guarantee.
+
+Version-2 and older journals remain private operator artifacts; the new lookup
+refuses them. No migration or automatic conversion occurs. An initial journal
+failure leaves the fact stored and returns an unavailable AI outcome without a
+reference. Current fact/catalog observations can become stale after lookup;
+reading a suggestion does not authorize its application.
+
+See the repository example `docs/examples/write-recommendations-client.md` for
+requests and status handling. Local synthetic protocol verification is distinct
+from installing an updated proprietary client or deploying this server version.

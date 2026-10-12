@@ -182,6 +182,7 @@ func NewServer(qc *qdrant.Client, ec *embeddings.Client, cache *Cache, user stri
 // RegisterTools registers all memory MCP tools on the given MCP server.
 func (s *Server) RegisterTools(srv *server.MCPServer) {
 	s.registerProjectTool(srv)
+	s.registerWriteRecommendationTool(srv)
 	srv.AddTool(mcp.NewTool("store_fact",
 		mcp.WithDescription("Store a fact in semantic memory. Cosine similarity identifies related candidates and prevents duplicate writes at the deduplication threshold; valid superseded facts remain related context and do not block storage."),
 		mcp.WithOutputSchema[StoreFactResult](),
@@ -751,6 +752,9 @@ func formatStoreFactResult(result StoreFactResult) string {
 	}
 	if result.AI != nil {
 		lines = append(lines, "ai: "+result.AI.Status)
+		if result.AI.OperationRef != "" {
+			lines = append(lines, "ai_operation_ref: "+result.AI.OperationRef)
+		}
 	}
 	if result.SubjectDecision != "" {
 		lines = append(lines, "subject_decision: "+result.SubjectDecision)
@@ -958,7 +962,7 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 
 	if aiDecision != nil {
 		aiDecision.complete()
-		aiDecision.shadow(pointID, fact, namespace, origin)
+		aiDecision.shadow(pointID, fact, namespace, origin, payload)
 	}
 	result := StoreFactResult{
 		SubjectDecision: subjectDecision(namespace, subject),

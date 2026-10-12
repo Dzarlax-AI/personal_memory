@@ -68,6 +68,39 @@ class SummarizeAIShadowCompatibilityTest(unittest.TestCase):
                 report = json.loads(result.stdout)
                 self.assertEqual(report["counts"]["unreadable_or_invalid"], expected_status)
 
+    def test_schema_three_pending_and_terminal_are_private_read_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp).resolve() / "write-audits"
+            directory.mkdir(mode=0o700)
+            originals = []
+            for index, status in enumerate(("pending", "decided", "abstained", "failed")):
+                row = {"schema_version": 3, "mode": "shadow", "status": status,
+                       "operation_ref": "a" * 32, "runtime_instance": "b" * 32,
+                       "input_fingerprint": "c" * 64, "owner": "PRIVATE_OWNER",
+                       "point_id": "PRIVATE_POINT", "pending_until": "2026-10-12T00:00:00Z",
+                       "before": {"tags": [], "primary_tag": ""},
+                       "after": {"tags": [], "primary_tag": ""},
+                       "recommended_related_tags": ["PRIVATE_TAG"]}
+                if status == "decided":
+                    row["after"] = {"tags": ["PRIVATE_TAG"], "primary_tag": "PRIVATE_TAG"}
+                if status == "failed":
+                    row["reason_code"] = "catalog_changed"
+                path = directory / f"{index}.json"
+                raw = json.dumps(row).encode()
+                path.write_bytes(raw)
+                path.chmod(0o600)
+                originals.append(raw)
+            result = subprocess.run([sys.executable, str(SCRIPT), "--directory", str(directory)],
+                                    check=False, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("PRIVATE_", result.stdout)
+            report = json.loads(result.stdout)
+            self.assertEqual(report["counts"]["shadow_journals"], 4)
+            for status in ("pending", "decided", "abstained", "failed"):
+                self.assertEqual(report["counts"][status], 1)
+            self.assertEqual(report["counts"]["proposed_grouping_changes"], 1)
+            self.assertEqual([p.read_bytes() for p in sorted(directory.glob("*.json"))], originals)
+
 
 if __name__ == "__main__":
     unittest.main()

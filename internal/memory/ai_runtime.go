@@ -23,6 +23,7 @@ type aiShadowJob struct {
 }
 
 type aiRuntime struct {
+	instanceID  string
 	owner       string
 	cfg         aipolicy.Config
 	write, read aijudgment.Provider
@@ -112,8 +113,12 @@ func (s *Server) configureAI(ctx context.Context, cfg aipolicy.Config, write, re
 		}
 		return s.replaceAI(nil)
 	}
+	instanceID, err := newAIRef()
+	if err != nil {
+		return errors.New("optional AI runtime identity unavailable")
+	}
 	runtimeCtx, cancel := context.WithCancel(ctx)
-	a := &aiRuntime{owner: s.user, cfg: cfg, write: write, read: read, budget: budget, ctx: runtimeCtx, cancel: cancel, jobs: make(chan aiShadowJob, aiShadowQueueSize), done: make(chan struct{})}
+	a := &aiRuntime{instanceID: instanceID, owner: s.user, cfg: cfg, write: write, read: read, budget: budget, ctx: runtimeCtx, cancel: cancel, jobs: make(chan aiShadowJob, aiShadowQueueSize), done: make(chan struct{})}
 	go a.run()
 	return s.replaceAI(a)
 }
