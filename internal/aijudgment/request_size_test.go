@@ -64,7 +64,7 @@ func TestClassificationSizeAndIndependentRulesBothProviders(t *testing.T) {
 							qs = append(qs, q)
 						}
 					}
-					if len(state.Catalog) != 25 || state.SubjectScope != scope || state.SubjectContext != component {
+					if len(state.Catalog) != len(catalog.Entries) || state.SubjectScope != scope || state.SubjectContext != component {
 						t.Fatal("catalog or subject lost")
 					}
 					for i, e := range eligibleEntries(catalog, "projects") {
@@ -72,7 +72,7 @@ func TestClassificationSizeAndIndependentRulesBothProviders(t *testing.T) {
 							t.Fatal("catalog truncated or changed")
 						}
 					}
-					if len(qs) != 26 {
+					if len(qs) != len(catalog.Entries)+1 {
 						t.Fatalf("questions=%d", len(qs))
 					}
 					seen := map[string]bool{}
@@ -147,6 +147,26 @@ func TestOversizedClassificationRejectedBeforeTransportBothProviders(t *testing.
 			}
 			if *calls != 0 {
 				t.Fatal("oversized request dispatched")
+			}
+		})
+	}
+}
+
+func TestEncodedRequestExactSizeBoundaryBothProviders(t *testing.T) {
+	for _, name := range []string{"decisions", "jev"} {
+		t.Run(name, func(t *testing.T) {
+			state := func(padding int) []byte { return []byte(`{"value":"` + strings.Repeat("x", padding) + `"}`) }
+			base, err := encodeRequest(name, modelFor(name), state(0), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			padding := MaxRequestBytes - len(base)
+			exact, err := encodeRequest(name, modelFor(name), state(padding), nil)
+			if err != nil || len(exact) != MaxRequestBytes {
+				t.Fatalf("exact boundary bytes=%d error=%v", len(exact), err)
+			}
+			if _, err := encodeRequest(name, modelFor(name), state(padding+1), nil); err == nil {
+				t.Fatal("one-byte excess accepted")
 			}
 		})
 	}
