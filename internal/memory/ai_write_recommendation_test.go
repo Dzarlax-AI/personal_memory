@@ -616,3 +616,35 @@ func TestWriteRecommendationUnavailableUsesFiniteCodes(t *testing.T) {
 		})
 	}
 }
+
+func TestWriteRecommendationImportCannotReplayCreationBinding(t *testing.T) {
+	s, b, _, ref := recommendationFixture(t, &fakeAIProvider{})
+	b.mu.Lock()
+	raw, err := json.Marshal([]map[string]interface{}{b.stored.Payload})
+	originalID := b.stored.ID
+	originalCreated := b.stored.Payload["created_at"]
+	generation, _ := b.stored.Payload["ai_shadow_generation"].(string)
+	b.stored = nil
+	b.mu.Unlock()
+	if err != nil || !recommendationRefPattern.MatchString(generation) {
+		t.Fatal("missing creation generation")
+	}
+	imported, err := s.importFacts(context.Background(), toolRequest(map[string]interface{}{"facts": string(raw)}))
+	if err != nil || imported.IsError {
+		t.Fatalf("import: %v %+v", err, imported)
+	}
+	b.mu.Lock()
+	if b.stored == nil || b.stored.ID != originalID || b.stored.Payload["created_at"] != originalCreated {
+		b.mu.Unlock()
+		t.Fatal("restore did not reproduce legacy creation identity")
+	}
+	_, copied := b.stored.Payload["ai_shadow_generation"]
+	b.mu.Unlock()
+	if copied {
+		t.Fatal("import trusted caller-supplied private generation")
+	}
+	got := s.writeRecommendation(context.Background(), ref)
+	if got.Status != "outdated" || got.SuggestedPrimaryTag != "" {
+		t.Fatalf("replayed creation exposed old recommendation: %+v", got)
+	}
+}

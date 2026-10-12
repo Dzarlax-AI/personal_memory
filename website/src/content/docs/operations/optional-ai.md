@@ -287,8 +287,9 @@ recommendation operation. The lookup tool is registered only in shadow mode.
 New private schema-v3 shadow journals bind the reference to owner, point, a
 canonical input fingerprint, catalog generation and runtime instance. Changed
 facts, visibility or catalogs suppress suggested tags. Recall telemetry is
-excluded from the fingerprint; creation identity is included to detect deletion
-and recreation. A pending operation from a different runtime reports
+excluded from the fingerprint; a random server-generated shadow creation marker is included to detect
+deletion and recreation. Import discards the marker even when replaying the
+original creation timestamp. A pending operation from a different runtime reports
 `failed/interrupted`. Abandoned pending work expires after nine times the larger
 of the configured write-shadow timeout and the one-second read-job timeout,
 plus one second of scheduling grace. A failed terminal save therefore cannot

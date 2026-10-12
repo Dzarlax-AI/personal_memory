@@ -66,11 +66,11 @@ func recommendationResult(ref, status, reason string) WriteRecommendation {
 	return WriteRecommendation{OperationRef: ref, Status: status, ReasonCode: reason, RecommendedRelatedTags: []string{}}
 }
 
-// Fingerprint excludes recall telemetry, but includes storage creation identity
-// so a deleted and recreated deterministic point does not revive an old result.
+// Fingerprint excludes recall telemetry and includes the random server-created
+// shadow generation. Import drops this marker even when creation time is replayed.
 func recommendationFingerprint(payload map[string]interface{}) (string, error) {
 	selected := map[string]interface{}{}
-	for _, key := range []string{"text", "user", "namespace", "tags", "primary_tag", "origin", "subject", "created_at", "permanent", "valid_until", "lifecycle_state", "canonical", "provenance", "verified_at", "lifecycle_transitioned_at", "supersedes", "superseded_by", "maintenance_status"} {
+	for _, key := range []string{"text", "user", "namespace", "tags", "primary_tag", "origin", "subject", "ai_shadow_generation", "created_at", "permanent", "valid_until", "lifecycle_state", "canonical", "provenance", "verified_at", "lifecycle_transitioned_at", "supersedes", "superseded_by", "maintenance_status"} {
 		if value, exists := payload[key]; exists {
 			selected[key] = value
 		}

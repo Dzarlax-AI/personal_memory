@@ -242,7 +242,7 @@ func (d *aiWriteDecision) complete() {
 	d.saveJournal()
 }
 func (d *aiWriteDecision) shadow(pointID, fact, namespace string, origin *FactOrigin, payload map[string]interface{}) {
-	if d == nil || d.runtime.cfg.Write.Mode != "shadow" {
+	if d == nil || d.runtime.cfg.Write.Mode != "shadow" || d.outcome.Status != "shadow" {
 		return
 	}
 	ref, err := newAIRef()

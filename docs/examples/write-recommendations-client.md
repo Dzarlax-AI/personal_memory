@@ -72,7 +72,7 @@ are not credentials: MCP authentication remains required.
 
 ## Freshness and recovery
 
-Input, grouping, origin, subject, creation identity, lifecycle/expiry/maintenance
+Input, grouping, origin, subject, random shadow creation generation, lifecycle/expiry/maintenance
 changes invalidate suggestions. Recall-only updates do not. Changed catalogs
 invalidate completed proposals. Pending jobs from another runtime report
 `failed/interrupted`; a saved deadline bounds abandoned pending work. Reading never

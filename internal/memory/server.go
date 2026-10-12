@@ -935,6 +935,15 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	if subject != nil {
 		payload["subject"] = subject
 	}
+	if aiDecision != nil && aiDecision.outcome.Mode == "shadow" {
+		// Private server-generated creation binding. Import never copies this
+		// marker, even if it appears in an exported or caller-supplied payload.
+		if generation, err := newAIRef(); err == nil {
+			payload["ai_shadow_generation"] = generation
+		} else {
+			aiDecision.outcome.Status = "unavailable"
+		}
+	}
 	if aiDecision != nil && aiDecision.outcome.OperationRef != "" {
 		payload["ai_grouping_ref"] = aiDecision.outcome.OperationRef
 	}
