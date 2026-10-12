@@ -1,9 +1,11 @@
 # Reading a shadow write recommendation
 
 This workflow uses the same authenticated `/memory` MCP connection as ordinary
-memory tools. It requires write AI in `shadow` mode. When the tool is not present,
-keep the normal memory workflow. This does not enable AI, alter its provider or
-grant permission to apply suggested tags.
+memory tools. It requires write AI in `shadow` mode. First discover the exact
+`get_write_recommendation` tool and its `operation_ref` schema in the current
+session. If it is absent or disabled, say recommendation lookup is unavailable
+and keep the normal memory workflow. This does not enable AI, alter its provider
+or grant permission to apply suggested tags.
 
 ## 1. Supply the assertion's actual context
 
@@ -35,9 +37,11 @@ for future requests.
 ## 2. Keep the returned reference
 
 Only successful eligible shadow writes whose pending journal was saved return
-`ai.operation_ref`. The fallback text includes `ai_operation_ref`. A duplicate,
-bypassed write or unavailable journal has no new reference. The initial
-`ai.status: shadow` is not a completed judgment.
+`ai.operation_ref`. The fallback text includes `ai_operation_ref`. Pass the exact
+returned 32-character lowercase hexadecimal reference; do not infer one. A
+duplicate, bypassed write or unavailable journal has no new reference. The
+initial `ai.status: shadow` is not a completed judgment and does not by itself
+make the write eligible for lookup.
 
 ```json
 {
@@ -49,9 +53,9 @@ bypassed write or unavailable journal has no new reference. The initial
 ```
 
 Read the reference once. If `pending`, allow one delayed follow-up. If still
-pending, stop polling and retain it for a later explicit check. Each read performs
-zero provider calls. It neither retries inference nor changes facts or recall
-counters.
+pending, stop polling and retain it for a later explicit user-requested check.
+Each read performs zero provider calls. It neither retries inference nor changes
+fact content, tags, namespace, lifecycle, or recall counters.
 
 ## 3. Present the outcome
 
@@ -65,10 +69,12 @@ counters.
 | `not_found` | The reference is unknown or belongs to another deployment owner. |
 | `unavailable` | The result cannot currently be read safely; keep the stored fact and baseline grouping. |
 
-All results have `applied: false`. Non-decided results have no suggested primary
-and an empty related list. The response includes no fact text, component context,
-point ID, local path, private owner, model rationale or raw journal. Lookup handles
-are not credentials: MCP authentication remains required.
+All results have `applied: false`. Never apply recommendations automatically,
+add `allow_ai_processing`, or infer consent. Explicit client tags remain
+authoritative. Non-decided results have no suggested primary and an empty related
+list. The response includes no fact text, component context, point ID, local path,
+private owner, model rationale or raw journal. Lookup handles are not credentials:
+MCP authentication remains required.
 
 ## Freshness and recovery
 

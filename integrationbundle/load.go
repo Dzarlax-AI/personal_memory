@@ -71,11 +71,23 @@ var canonicalClientWorkflows = []ClientWorkflow{{
 	FailureBehavior:  "continue_baseline_without_project_context_or_origin",
 	IdentityUse:      "project_context_id_uses_returned_project_id; source_project_uses_returned_tag; subject_primary_tag_is_independent",
 	SourceKind:       "client_declared", ReadContextField: "project_context_id", SubjectField: "primary_tag",
+}, {
+	ID: "write_recommendation", Tool: "get_write_recommendation",
+	Trigger:         "after_successful_eligible_store_fact_with_operation_reference",
+	InputFields:     []string{"operation_ref"},
+	Statuses:        []string{"pending", "decided", "abstained", "failed", "outdated", "not_found", "unavailable"},
+	OutputFields:    []string{"status", "applied", "suggested_primary_tag", "recommended_related_tags", "subject_decision", "reason_code", "missing_context_codes"},
+	FailureBehavior: "preserve_baseline_fact_and_grouping; disclose_distinct_status_without_automatic_inference_retry",
+	Capability:      "get_write_recommendation", EligibleOutcome: "store_fact_success_with_ai_operation_ref",
+	ReferenceField: "ai.operation_ref_or_text_fallback_ai_operation_ref", ReadLimit: 1, PendingReadLimit: 1,
+	TerminalStatuses: []string{"decided", "abstained", "failed", "outdated", "not_found", "unavailable"},
+	ApplyBehavior:    "never_apply_suggested_or_related_tags_automatically",
+	ConsentBehavior:  "never_add_allow_ai_processing_or_infer_consent",
 }}
 
 // Updated alongside bundle/v1/policy.json. It is independent of the manifest
 // inventory so a rewritten manifest cannot bless weakened shared rules.
-const canonicalPolicySHA256 = "48df6bda3701858e6f80543c46d410f3c551e815da94169a54d473dc0ec382cd"
+const canonicalPolicySHA256 = "6fbc2f94ba12eb5bd0cbb4c572cd3e144e93f51c2b4302c137fea4471d5975b0"
 
 // EmbeddedSources returns private copies of the normative contract and public
 // conformance suite shipped with the standalone integration binary.
@@ -174,8 +186,8 @@ func (b *Bundle) validate(contractSource, suiteSource []byte) error {
 	if m.SchemaVersion != currentBundleSchema {
 		return fmt.Errorf("manifest schema_version must be %d", currentBundleSchema)
 	}
-	if m.BundleVersion != BundleVersion || m.ContractVersion != ContractVersion || m.ConformanceSuiteVersion != SuiteVersion || m.WorkflowSuiteVersion != ProjectRegistrationWorkflowSuiteVersion {
-		return fmt.Errorf("manifest versions must be bundle %s, contract %s, public suite %s, and project workflow suite %s", BundleVersion, ContractVersion, SuiteVersion, ProjectRegistrationWorkflowSuiteVersion)
+	if m.BundleVersion != BundleVersion || m.ContractVersion != ContractVersion || m.ConformanceSuiteVersion != SuiteVersion || m.WorkflowSuiteVersion != ClientWorkflowSuiteVersion {
+		return fmt.Errorf("manifest versions must be bundle %s, contract %s, public suite %s, and client workflow suite %s", BundleVersion, ContractVersion, SuiteVersion, ClientWorkflowSuiteVersion)
 	}
 	if digest(contractSource) != m.SourceIdentity.ContractSHA256 {
 		return fmt.Errorf("contract source checksum mismatch")

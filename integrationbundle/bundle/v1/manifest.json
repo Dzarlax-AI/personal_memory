@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "bundle_version": "0.2.0",
+  "bundle_version": "0.3.0",
   "contract_version": "1.0.0",
   "conformance_suite_version": "1.1.0",
-  "workflow_suite_version": "1.0.0",
+  "workflow_suite_version": "1.1.0",
   "source_identity": {
     "contract_sha256": "b425bb25ea0ecaa85ddaafacb9e5af9970d11a985a482b8d8fabcc612fa69668",
     "conformance_suite_sha256": "bd10ce7d22054210ad6798b3a75f48379ccb8063a52d620677b67b36509fcd1f"
@@ -39,6 +39,23 @@
       "source_kind": "client_declared",
       "read_context_field": "project_context_id",
       "subject_field": "primary_tag"
+    },
+    {
+      "id": "write_recommendation",
+      "tool": "get_write_recommendation",
+      "trigger": "after_successful_eligible_store_fact_with_operation_reference",
+      "input_fields": ["operation_ref"],
+      "statuses": ["pending", "decided", "abstained", "failed", "outdated", "not_found", "unavailable"],
+      "output_fields": ["status", "applied", "suggested_primary_tag", "recommended_related_tags", "subject_decision", "reason_code", "missing_context_codes"],
+      "failure_behavior": "preserve_baseline_fact_and_grouping; disclose_distinct_status_without_automatic_inference_retry",
+      "capability": "get_write_recommendation",
+      "eligible_outcome": "store_fact_success_with_ai_operation_ref",
+      "reference_field": "ai.operation_ref_or_text_fallback_ai_operation_ref",
+      "read_limit": 1,
+      "pending_read_limit": 1,
+      "terminal_statuses": ["decided", "abstained", "failed", "outdated", "not_found", "unavailable"],
+      "apply_behavior": "never_apply_suggested_or_related_tags_automatically",
+      "consent_behavior": "never_add_allow_ai_processing_or_infer_consent"
     }
   ],
   "clients": [
@@ -81,15 +98,15 @@
     }
   ],
   "source_assets": [
-    {"path": "policy.json", "sha256": "2afde5195f4e05667bcb23186e89509eb333e9343d1f18c5a2e4df8d60376260"},
-    {"path": "templates/chatgpt-prompt.md.tmpl", "sha256": "ba4373c23a16e53516143429a20ffe84377124736a1a61c086ca37f099fb24c1"},
-    {"path": "templates/chatgpt-registration.json.tmpl", "sha256": "0ff13e7f06484ee05cb5b82be9437ac180ad4345906736352ba8059073bd0fb9"},
-    {"path": "templates/claude-rules.md.tmpl", "sha256": "f364efded7ceede5f27bfe5b23bf8d3191bbb3e9027397bd10361ba9f1f03366"},
+    {"path": "policy.json", "sha256": "a9bafae8da5468b595652b74ab9ac8558c975d8158423f63f20335ee3f75206c"},
+    {"path": "templates/chatgpt-prompt.md.tmpl", "sha256": "b06aed821552b436bb336b8d53c01be3f4fc3eb1343fe3c8ff2a1bbd90529aa0"},
+    {"path": "templates/chatgpt-registration.json.tmpl", "sha256": "2065929d14108f750ae187b6ff8deb6a78e98a2b6d2a9842c29c0be628f64ffe"},
+    {"path": "templates/claude-rules.md.tmpl", "sha256": "fe05c64a9fdbaf285843f0f46e11499b28f026cdc7669bb7fb7e68b520d1d872"},
     {"path": "templates/claude-settings.json.tmpl", "sha256": "7b2863b7619e45fe5847fe25961c85410398534c44aadc98c0f5fb7b950174a9"},
-    {"path": "templates/claude-skill.md.tmpl", "sha256": "82c70fee1fd0f63d69021a7499726d236812ba1ff2fa03b51c8eab13ff3e9a6e"},
-    {"path": "templates/codex-agents.md.tmpl", "sha256": "b7edb403f6ec2d8b97f6cbc9c8390b160b68edee6deb2af73f0dfb96357b3652"},
-    {"path": "templates/codex-skill.md.tmpl", "sha256": "fbb45d987b6ca174121a94ebeb283f4331476ffb4fe12a719034755013de2a62"},
-    {"path": "templates/generic-policy.json.tmpl", "sha256": "b97ecbda2395dd8516f3fc33ea1c4ac20d41835dfd7e832979a6aa019f8c6e1b"},
-    {"path": "templates/generic-tools.json.tmpl", "sha256": "78a3fa53653720661aedd4a75bf83c0c9314dc217a03ce7f4d24dde350d634e3"}
+    {"path": "templates/claude-skill.md.tmpl", "sha256": "f3094a9be10c7b23aed2995cdab9e818de98b24402bbca3a731e706d85e6a794"},
+    {"path": "templates/codex-agents.md.tmpl", "sha256": "2bfbd1b02989decf1dd953e080d77f0d87bff3d0d4b8484e5b537333d78f3e49"},
+    {"path": "templates/codex-skill.md.tmpl", "sha256": "fc830793bf7b9d4e7f84dcd5dbca53a43c77ccbe9cef2af25ffc00c731a3b803"},
+    {"path": "templates/generic-policy.json.tmpl", "sha256": "968a81fb247a14a78df07419e8aa6728625915da6c7bc840798fad4a601d0aa0"},
+    {"path": "templates/generic-tools.json.tmpl", "sha256": "9cffa0107a393be00697694fc527faf521b75f83076962ea622a1ce5d43f5f43"}
   ]
 }

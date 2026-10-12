@@ -12,13 +12,13 @@ The current release has these independently validated identities:
 
 | Component | Version |
 |---|---|
-| Bundle | `0.2.0` |
+| Bundle | `0.3.0` |
 | Contract | `1.0.0` |
 | Public conformance suite | `1.1.0` |
-| Project registration workflow suite | `1.0.0` (9 synthetic cases) |
+| Client workflow suite | `1.1.0` (synthetic checks for project registration and write recommendations) |
 | Client artifact formats | `1.0.0` |
 
-The standalone executable embeds the manifest, canonical policy, client templates, normative contract, and public conformance suite. It verifies their bound identities, renders one capability-specific artifact set, then installs, updates, verifies, rolls back, or exports it. The 0.2.0 bundle adds a separately versioned optional project registration workflow while preserving the shared 1.0.0 policy and 1.1.0 public suite. A client wrapper may make a rule more concrete, but it must preserve every canonical rule.
+The standalone executable embeds the manifest, canonical policy, client templates, normative contract, and public conformance suite. It verifies their bound identities, renders one capability-specific artifact set, then installs, updates, verifies, rolls back, or exports it. Bundle 0.3.0 adds an optional shadow write recommendation workflow and retains project registration, while preserving the normative 1.0.0 contract and 1.1.0 public suite. The canonical policy payload's bundle identity changes with the bundle version; canonical rule IDs and normative text do not. A client wrapper may make a rule more concrete, but it must preserve every canonical rule.
 
 ### Optional project registration
 
@@ -29,6 +29,14 @@ The client sends `namespace=projects`, a stable `project_key`, project name, pro
 Only a complete `created` or `existing` result with `project_id`, `tag`, and `catalog_hash` supplies identity. Both IDs must be lowercase 64-character SHA-256 hex digests, and the tag must be kebab-case. `proposed_update` does not supply an active identity. Reads may pass the returned `project_id` as `project_context_id`; writes may pass the returned `tag` as `source_project` and set `source_kind=client_declared`. The fact's `primary_tag` still describes what the fact is about, so its subject may differ from the project where the fact originated. For `proposed_update`, `ambiguous`, `disabled`, `unavailable`, malformed, or failed results, continue the baseline memory workflow without project context or source origin. Registration is a separate call; a read never registers a project implicitly, and hooks never register or store facts automatically.
 
 The bundle has nine synthetic workflow contract cases and package tests for prerequisite gating and returned-identity validation. These validate the rendered instructions and shared contract helpers; they do not constitute evidence from live Codex, Claude, ChatGPT, or generic MCP sessions.
+
+### Optional shadow write recommendations
+
+Use the recommendation workflow only after discovering the exact `get_write_recommendation` tool and its `operation_ref` input schema in the current MCP session. If unavailable, say the lookup is unavailable and keep the baseline memory flow. After a successful eligible `store_fact`, read a recommendation only when the result returned `ai.operation_ref` or the text fallback `ai_operation_ref`; do not infer eligibility from a shadow status, duplicate, bypass, or missing reference. Validate and pass the exact returned 32-character lowercase hexadecimal reference.
+
+Read once. If the result is `pending`, make at most one delayed follow-up read with the same reference. If it remains pending, stop and retain the reference for a later explicit user-requested check. Never retry inference. Preserve `pending`, `decided`, `abstained`, `failed`, `outdated`, `not_found`, and `unavailable` as distinct statuses. Show `suggested_primary_tag` and `recommended_related_tags` as recommendations. Keep abstention distinctions such as `non_project`, `multiple_projects`, `other_project`, and `insufficient_context`. Every response is unapplied. Do not add `allow_ai_processing`, infer consent, automatically apply tags, or edit fact content, namespace, or lifecycle. Explicit client tags and primary tags remain authoritative.
+
+The English [client example](https://github.com/Dzarlax-AI/personal_memory/blob/main/docs/examples/write-recommendations-client.md) shows the bounded read sequence and status handling. The recommendation workflow cases are synthetic contract checks, not evidence from a live proprietary client.
 
 No prompt, memory content, document content, task content, credential, user identifier, path, endpoint, vector, or hidden reasoning is embedded in the bundle.
 

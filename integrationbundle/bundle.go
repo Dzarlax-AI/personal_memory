@@ -10,12 +10,12 @@ import (
 )
 
 const (
-	currentBundleSchema                     = 1
-	currentPolicySchema                     = 1
-	BundleVersion                           = "0.2.0"
-	ContractVersion                         = "1.0.0"
-	SuiteVersion                            = "1.1.0"
-	ProjectRegistrationWorkflowSuiteVersion = "1.0.0"
+	currentBundleSchema        = 1
+	currentPolicySchema        = 1
+	BundleVersion              = "0.3.0"
+	ContractVersion            = "1.0.0"
+	SuiteVersion               = "1.1.0"
+	ClientWorkflowSuiteVersion = "1.1.0"
 )
 
 var canonicalClientInventories = map[conformance.ClientFamily]ClientManifest{
@@ -93,24 +93,32 @@ type ClientWorkflow struct {
 	ID                 string   `json:"id"`
 	Tool               string   `json:"tool"`
 	Trigger            string   `json:"trigger"`
-	InputFields        []string `json:"input_fields"`
-	RequiresStableKey  bool     `json:"requires_stable_key"`
-	MinProjectKeyBytes int      `json:"min_project_key_bytes"`
-	MaxProjectKeyBytes int      `json:"max_project_key_bytes"`
-	ProjectKeyPattern  string   `json:"project_key_pattern"`
-	MaxRequestBytes    int      `json:"max_request_bytes"`
-	MaxSummaryBytes    int      `json:"max_summary_bytes"`
-	MaxEvidenceItems   int      `json:"max_evidence_items"`
-	MaxEvidenceBytes   int      `json:"max_evidence_bytes"`
-	EvidenceKinds      []string `json:"evidence_kinds"`
-	Statuses           []string `json:"statuses"`
-	IdentityStatuses   []string `json:"identity_statuses"`
-	OutputFields       []string `json:"output_fields"`
-	FailureBehavior    string   `json:"failure_behavior"`
-	IdentityUse        string   `json:"identity_use"`
-	SourceKind         string   `json:"source_kind"`
-	ReadContextField   string   `json:"read_context_field"`
-	SubjectField       string   `json:"subject_field"`
+	InputFields        []string `json:"input_fields,omitempty"`
+	RequiresStableKey  bool     `json:"requires_stable_key,omitempty"`
+	MinProjectKeyBytes int      `json:"min_project_key_bytes,omitempty"`
+	MaxProjectKeyBytes int      `json:"max_project_key_bytes,omitempty"`
+	ProjectKeyPattern  string   `json:"project_key_pattern,omitempty"`
+	MaxRequestBytes    int      `json:"max_request_bytes,omitempty"`
+	MaxSummaryBytes    int      `json:"max_summary_bytes,omitempty"`
+	MaxEvidenceItems   int      `json:"max_evidence_items,omitempty"`
+	MaxEvidenceBytes   int      `json:"max_evidence_bytes,omitempty"`
+	EvidenceKinds      []string `json:"evidence_kinds,omitempty"`
+	Statuses           []string `json:"statuses,omitempty"`
+	IdentityStatuses   []string `json:"identity_statuses,omitempty"`
+	OutputFields       []string `json:"output_fields,omitempty"`
+	FailureBehavior    string   `json:"failure_behavior,omitempty"`
+	IdentityUse        string   `json:"identity_use,omitempty"`
+	SourceKind         string   `json:"source_kind,omitempty"`
+	ReadContextField   string   `json:"read_context_field,omitempty"`
+	SubjectField       string   `json:"subject_field,omitempty"`
+	Capability         string   `json:"capability,omitempty"`
+	EligibleOutcome    string   `json:"eligible_outcome,omitempty"`
+	ReferenceField     string   `json:"reference_field,omitempty"`
+	ReadLimit          int      `json:"read_limit,omitempty"`
+	PendingReadLimit   int      `json:"pending_read_limit,omitempty"`
+	TerminalStatuses   []string `json:"terminal_statuses,omitempty"`
+	ApplyBehavior      string   `json:"apply_behavior,omitempty"`
+	ConsentBehavior    string   `json:"consent_behavior,omitempty"`
 }
 
 type RuleID string
