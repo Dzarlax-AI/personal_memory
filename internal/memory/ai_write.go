@@ -23,12 +23,18 @@ type aiWriteDecision struct {
 	runtime                *aiRuntime
 	outcome                *AIOutcome
 	before, after          aiGrouping
+	missingContextCodes    []string
 	recommendedRelatedTags []string
 	journal                *aiWriteJournal
 	reason                 string
 	durationMS             int64
 }
 type aiWriteJournal struct {
+	Owner                  string     `json:"owner,omitempty"`
+	InputFingerprint       string     `json:"input_fingerprint,omitempty"`
+	RuntimeInstance        string     `json:"runtime_instance,omitempty"`
+	PendingUntil           string     `json:"pending_until,omitempty"`
+	MissingContextCodes    []string   `json:"missing_context_codes,omitempty"`
 	SubjectDecision        string     `json:"subject_decision,omitempty"`
 	ReasonCode             string     `json:"reason_code,omitempty"`
 	DurationMS             int64      `json:"duration_ms"`
@@ -93,6 +99,10 @@ func (d *aiWriteDecision) classify(ctx context.Context, fact, namespace string, 
 		d.reason = "egress_denied"
 		return
 	}
+	if d.journal != nil && d.journal.SchemaVersion == 3 && d.journal.CatalogHash != hash {
+		d.reason = "catalog_changed"
+		return
+	}
 	d.outcome.CatalogHash = hash
 	in := aijudgment.ClassifyInput{FactText: fact, Namespace: namespace, Catalog: catalog}
 	if d.subject != nil {
@@ -125,8 +135,13 @@ func (d *aiWriteDecision) classify(ctx context.Context, fact, namespace string, 
 		return
 	}
 	if result.Status == "abstained" {
+		if d.journal != nil && (!recommendationSubjectAllowed(result.SubjectDecision) || result.SubjectDecision == "known_project" || !recommendationMissingAllowed(result.MissingContextCodes)) {
+			d.reason = "invalid_response"
+			return
+		}
 		d.outcome.Status = "abstained"
 		d.outcome.SubjectDecision = result.SubjectDecision
+		d.missingContextCodes = append([]string(nil), result.MissingContextCodes...)
 		return
 	}
 	if result.Status != "decided" || result.PrimaryTag == "" {
@@ -226,13 +241,35 @@ func (d *aiWriteDecision) complete() {
 	d.journal.Status = "stored"
 	d.saveJournal()
 }
-func (d *aiWriteDecision) shadow(pointID, fact, namespace string, origin *FactOrigin) {
-	if d == nil || d.runtime.cfg.Write.Mode != "shadow" {
+func (d *aiWriteDecision) shadow(pointID, fact, namespace string, origin *FactOrigin, payload map[string]interface{}) {
+	if d == nil || d.runtime.cfg.Write.Mode != "shadow" || d.outcome.Status != "shadow" {
 		return
 	}
+	ref, err := newAIRef()
+	fingerprint, fingerprintErr := recommendationFingerprint(payload)
+	if err != nil || fingerprintErr != nil {
+		d.outcome.Status = "unavailable"
+		return
+	}
+	_, hash, _ := contextcatalog.LoadActive(d.runtime.cfg.CatalogDir)
+	p := d.runtime.cfg.Profiles[d.runtime.cfg.Write.Profile]
+	d.journal = &aiWriteJournal{SchemaVersion: 3, OperationRef: ref, PointID: pointID,
+		Owner: d.runtime.owner, InputFingerprint: fingerprint, RuntimeInstance: d.runtime.instanceID,
+		PendingUntil: time.Now().UTC().Add(time.Duration(aiShadowQueueSize+1)*max(d.runtime.cfg.Write.ShadowTimeout(), aiOperationTimeout) + time.Second).Format(time.RFC3339Nano),
+		CatalogHash:  hash, Profile: d.runtime.cfg.Write.Profile, Model: p.Model,
+		Mode: "shadow", Status: "pending", CreatedAt: nowISO(), Before: d.before, After: d.before,
+		Retention: "manual", RubricVersion: writeRubricVersion(d.subject)}
+	if !d.saveJournal() {
+		d.journal = nil
+		d.outcome.Status = "unavailable"
+		return
+	}
+	d.outcome.OperationRef = ref
 	// The bounded queue captures only immutable request values, never the caller
 	// context. Its lifetime and cancellation belong to the server.
 	job := *d
+	journal := *d.journal
+	job.journal = &journal
 	job.outcome = &AIOutcome{Mode: "shadow", Status: "unavailable"}
 	if origin != nil {
 		copy := *origin
@@ -243,31 +280,34 @@ func (d *aiWriteDecision) shadow(pointID, fact, namespace string, origin *FactOr
 		started := time.Now()
 		job.classify(ctx, fact, namespace, origin)
 		job.durationMS = time.Since(started).Milliseconds()
-		job.recordShadow(pointID)
-	}, d.runtime.cfg.Write.ShadowTimeout(), func() { job.reason = "canceled"; job.recordShadow(pointID) })
+		job.recordShadow()
+	}, d.runtime.cfg.Write.ShadowTimeout(), func() { job.reason = "canceled"; job.recordShadow() })
 	if !queued {
 		job.reason = "queue_full"
 		if d.runtime.ctx.Err() != nil {
 			job.reason = "canceled"
 		}
-		job.recordShadow(pointID)
+		job.recordShadow()
 	}
 }
 
-func (d *aiWriteDecision) recordShadow(pointID string) {
+func (d *aiWriteDecision) recordShadow() {
 	if d.outcome.Status != "decided" && d.outcome.Status != "abstained" {
 		d.outcome.Status = "failed"
 		if d.reason == "" {
 			d.reason = "provider_unavailable"
 		}
 	}
-	ref, err := newAIRef()
-	if err != nil {
-		slog.Warn("optional AI shadow journal unavailable")
+	if d.journal == nil {
 		return
 	}
-	p := d.runtime.cfg.Profiles[d.runtime.cfg.Write.Profile]
-	d.journal = &aiWriteJournal{SchemaVersion: 2, OperationRef: ref, PointID: pointID, CatalogHash: d.outcome.CatalogHash, Profile: d.runtime.cfg.Write.Profile, Model: p.Model, Mode: "shadow", Status: d.outcome.Status, CreatedAt: nowISO(), Before: d.before, After: d.after, RecommendedRelatedTags: append([]string(nil), d.recommendedRelatedTags...), Retention: "manual", RubricVersion: writeRubricVersion(d.subject), SubjectDecision: d.outcome.SubjectDecision, ReasonCode: d.reason, DurationMS: d.durationMS}
+	d.journal.Status = d.outcome.Status
+	d.journal.After = d.after
+	d.journal.RecommendedRelatedTags = append([]string(nil), d.recommendedRelatedTags...)
+	d.journal.MissingContextCodes = append([]string(nil), d.missingContextCodes...)
+	d.journal.SubjectDecision = d.outcome.SubjectDecision
+	d.journal.ReasonCode = d.reason
+	d.journal.DurationMS = d.durationMS
 	if !d.saveJournal() {
 		slog.Warn("optional AI shadow journal unavailable")
 	}

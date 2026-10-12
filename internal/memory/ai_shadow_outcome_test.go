@@ -36,7 +36,9 @@ func shadowJournal(t *testing.T, dir string) aiWriteJournal {
 			if err = json.Unmarshal(raw, &j); err != nil {
 				t.Fatal(err)
 			}
-			return j
+			if j.Status != "pending" {
+				return j
+			}
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -100,9 +102,12 @@ func TestShadowConfiguredDeadlineAndFailureJournal(t *testing.T) {
 				t.Fatal("storage/shadow contract changed")
 			}
 			j := shadowJournal(t, cfg.StateDir)
+			if j.OperationRef != result.AI.OperationRef {
+				t.Fatal("terminal reference changed")
+			}
 			want := map[string]string{"timeout": "timeout", "unsafe-error": "provider_transport", "invalid-response": "invalid_response", "egress": "egress_denied", "budget": "budget_unavailable"}[variant]
 			if variant == "success-after-one-second" {
-				if j.Status != "decided" || j.After.Primary != "alpha" || !reflect.DeepEqual(j.After.Tags, []string{"beta", "alpha"}) || j.DurationMS < 1000 || j.SchemaVersion != 2 || !reflect.DeepEqual(j.RecommendedRelatedTags, []string{"beta"}) {
+				if j.Status != "decided" || j.After.Primary != "alpha" || !reflect.DeepEqual(j.After.Tags, []string{"beta", "alpha"}) || j.DurationMS < 1000 || j.SchemaVersion != 3 || !reflect.DeepEqual(j.RecommendedRelatedTags, []string{"beta"}) {
 					t.Fatalf("configured timeout ineffective: %+v", j)
 				}
 			} else if j.Status != "failed" || j.ReasonCode != want {
@@ -138,7 +143,7 @@ func TestShadowSecondaryRecommendationDoesNotEnterProposedGrouping(t *testing.T)
 		t.Fatalf("shadow result changed storage contract: %+v", result.AI)
 	}
 	j := shadowJournal(t, cfg.StateDir)
-	if j.Status != "decided" || j.SchemaVersion != 2 || !reflect.DeepEqual(j.After.Tags, []string{"alpha"}) || !reflect.DeepEqual(j.RecommendedRelatedTags, []string{"beta"}) {
+	if j.Status != "decided" || j.SchemaVersion != 3 || !reflect.DeepEqual(j.After.Tags, []string{"alpha"}) || !reflect.DeepEqual(j.RecommendedRelatedTags, []string{"beta"}) {
 		t.Fatalf("shadow journal mixed recommendation into grouping: %+v", j)
 	}
 	if got := b.stored.Payload["tags"].([]interface{}); len(got) != 0 {
@@ -160,7 +165,7 @@ func TestShadowQueueFullAndCancellationJournals(t *testing.T) {
 				cancel()
 			}
 			d := &aiWriteDecision{runtime: a, outcome: &AIOutcome{Mode: "shadow", Status: "shadow"}, before: aiGrouping{Tags: []string{}}, after: aiGrouping{Tags: []string{}}}
-			d.shadow("synthetic-point", "PRIVATE_ASSERTION", "projects", nil)
+			d.shadow("synthetic-point", "PRIVATE_ASSERTION", "projects", nil, map[string]interface{}{"text": "PRIVATE_ASSERTION", "user": "synthetic", "namespace": "projects"})
 			j := shadowJournal(t, cfg.StateDir)
 			want := "queue_full"
 			if canceled {
