@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -417,5 +418,42 @@ func TestMaintenanceResponseSnapshotAllowlist(t *testing.T) {
 	profile.ResponseModels = []string{"local-snapshot"}
 	if _, _, err := decodeProviderResponse(profile, wire); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBuildRequestRequiresAffirmativeCardScopedSharedWithEvidence(t *testing.T) {
+	for _, catalogOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("catalog_only=%t", catalogOnly), func(t *testing.T) {
+			input := inputWithCatalogEvidence("Health and Health Sync jointly maintain the shared synchronization protocol.")
+			input.CatalogOnly = catalogOnly
+			if catalogOnly {
+				input.Facts = []Fact{}
+			}
+			profile := aipolicy.Profile{Protocol: "openai-responses", Model: "operator-selected-model", Endpoint: "http://localhost/v1/responses", Local: true}
+			body, err := BuildRequest(profile, input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var envelope map[string]any
+			if err := json.Unmarshal(body, &envelope); err != nil {
+				t.Fatal(err)
+			}
+			instructions := envelope["instructions"].(string)
+			for _, required := range []string{
+				"explicitly identifies the other project and affirmatively describes",
+				"state the target, the shared thing or responsibility, and its supplied evidence alias in boundaries",
+				"separate ownership boundaries, not evidence of sharing",
+				"one-way integration or dependency belongs in uses only when directly evidenced",
+				"Never infer a reciprocal relationship from another card",
+				"Leave shared_with empty when no explicit affirmative sharing evidence exists",
+				"Interpret uses as consumer -> provider",
+				"providing an API for HomeDash does not establish ESP32 Bridge uses HomeDash",
+				"a named cross-project contract explicitly described as shared is an artifact",
+			} {
+				if !strings.Contains(instructions, required) {
+					t.Errorf("missing relationship rule: %s", required)
+				}
+			}
+		})
 	}
 }
