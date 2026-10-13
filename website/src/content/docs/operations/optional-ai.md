@@ -148,7 +148,7 @@ These examples are operator commands, not authorization to run them on productio
 
 ## Disable and recover
 
-Set write/read `mode: off` or maintenance `enabled: false` and restart the selected memory service in an approved deployment window. Do not delete catalog snapshots, proposal artifacts or journals. Disabling inference preserves already stored grouping; correcting it requires a reviewed manifest. To restore a former catalog, publish a reviewed equivalent generation with the current parent hash. This changes catalog context, not the tags of existing facts. Before rolling back to a binary that rejects the new configuration fields, remove `maintenance.scope` and `maintenance.max_projects_per_run` from the configuration first; keep the saved state and proposals private for later review.
+Set write/read `mode: off` or maintenance `enabled: false` and restart the selected memory service in an approved deployment window. Do not delete catalog snapshots, proposal artifacts, journals, or `maintenance-catalog/projections.json`; the private checksum-bound projection cache preserves original client context independently of archiveable proposals. Disabling inference preserves already stored grouping; correcting it requires a reviewed manifest. To restore a former catalog, publish a reviewed equivalent generation with the current parent hash. This changes catalog context, not the tags of existing facts. Before rolling back to a binary that rejects the new configuration fields, remove `maintenance.scope` and `maintenance.max_projects_per_run` from the configuration first; keep the saved state, projection cache, and proposals private for later review.
 
 ## Evaluation and release boundaries
 

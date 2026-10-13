@@ -23,6 +23,7 @@ type fakeProvider struct {
 	result func(Input) Proposal
 	seen   chan Input
 	after  func(Input)
+	err    error
 }
 
 func (p *fakeProvider) Propose(_ context.Context, in Input) (Proposal, aijudgment.Usage, error) {
@@ -32,6 +33,9 @@ func (p *fakeProvider) Propose(_ context.Context, in Input) (Proposal, aijudgmen
 	}
 	if p.after != nil {
 		p.after(in)
+	}
+	if p.err != nil {
+		return Proposal{}, aijudgment.Usage{InputTokens: 10, Known: true}, p.err
 	}
 	proposal := p.result(in)
 	return proposal, aijudgment.Usage{InputTokens: 10, OutputTokens: 3, Known: true}, nil

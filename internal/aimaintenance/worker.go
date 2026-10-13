@@ -210,7 +210,7 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 			w.catalog.recordOutcome("failed", finiteCatalogReason(err))
 			return err
 		}
-		return nil
+		return w.catalog.resetFailureAfterSuccess()
 	}
 	state, err := w.loadState()
 	if err != nil {

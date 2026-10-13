@@ -54,6 +54,7 @@ type catalogWorker struct {
 	budget         *aipolicy.Budget
 	proposalWorker *Worker
 	statePath      string
+	projectionPath string
 }
 
 func newCatalogWorker(cfg aipolicy.Config, provider Provider, budget *aipolicy.Budget, proposalDir string) (*catalogWorker, error) {
@@ -65,7 +66,7 @@ func newCatalogWorker(cfg aipolicy.Config, provider Provider, budget *aipolicy.B
 		return nil, errors.New("cannot prepare private catalog maintenance state")
 	}
 	proposalWorker := &Worker{cfg: cfg, provider: provider, budget: budget, dir: proposalDir}
-	return &catalogWorker{cfg: cfg, provider: provider, budget: budget, proposalWorker: proposalWorker, statePath: filepath.Join(stateDir, "state.json")}, nil
+	return &catalogWorker{cfg: cfg, provider: provider, budget: budget, proposalWorker: proposalWorker, statePath: filepath.Join(stateDir, "state.json"), projectionPath: filepath.Join(stateDir, "projections.json")}, nil
 }
 
 func (w *catalogWorker) RunOnce(ctx context.Context) error {
@@ -103,7 +104,10 @@ func (w *catalogWorker) RunOnce(ctx context.Context) error {
 		}
 		return cards[i].Namespace < cards[j].Namespace
 	})
-	cards = w.restorePublishedOriginals(cards)
+	cards, blocked, err := w.restorePublishedOriginals(cat, cards)
+	if err != nil {
+		return err
+	}
 	if len(cards) == 0 {
 		state.LastOutcome, state.LastReason = "no_eligible_cards", "no_eligible_cards"
 		state.LastQueued, state.LastCompleted, state.LastSkipped = 0, 0, 0
@@ -130,12 +134,19 @@ func (w *catalogWorker) RunOnce(ctx context.Context) error {
 	ordered := append(append([]contextcatalog.Entry{}, cards[start:]...), cards[:start]...)
 	selected := make([]contextcatalog.Entry, 0, w.cfg.Maintenance.MaxProjectsPerRun)
 	skipped := 0
+	projectionUnavailable := false
 	newFingerprints := cloneFingerprints(state.Fingerprints)
 	for _, card := range ordered {
 		if len(selected) >= w.cfg.Maintenance.MaxProjectsPerRun {
 			break
 		}
 		key := cardKey(card)
+		if blocked[key] {
+			skipped++
+			projectionUnavailable = true
+			state.Cursor = key
+			continue
+		}
 		finger := catalogCardFingerprintWithContext(card, cards, w.cfg)
 		if state.Fingerprints[key] == finger {
 			continue
@@ -176,6 +187,9 @@ func (w *catalogWorker) RunOnce(ctx context.Context) error {
 		state.Fingerprints = newFingerprints
 		if skipped > 0 {
 			state.LastOutcome, state.LastReason = "skipped", "evidence_unavailable"
+			if projectionUnavailable {
+				state.LastReason = "source_projection_unavailable"
+			}
 		} else {
 			state.LastOutcome, state.LastReason = "no_changes", "no_changes"
 		}
@@ -231,6 +245,13 @@ func (w *catalogWorker) RunOnce(ctx context.Context) error {
 		}
 		state.LatestProposal = name
 	}
+	// Preserve completed inference before mutable projection storage. A reused
+	// receipt must also persist its original sources before publication.
+	if catalogPublicationChanges(cat, artifact.CatalogPublished) {
+		if err := w.persistOriginalProjections(cat, input, artifact.CatalogPublished); err != nil {
+			return errors.New("cannot persist private catalog source projections")
+		}
+	}
 	published := alreadyPublished
 	if !alreadyPublished && w.cfg.Maintenance.CatalogPublish == "evidence_bounded" && proposal.Catalog != nil {
 		published, err = w.publishSelected(ctx, cat, base, input, proposal, artifact)
@@ -277,11 +298,20 @@ func catalogHasUnresolved(catalog *contextcatalog.Snapshot) bool {
 }
 
 func (w *catalogWorker) publishSelected(ctx context.Context, original contextcatalog.Snapshot, base string, input Input, proposal Proposal, private privateProposal) (bool, error) {
-	if ctx == nil || ctx.Err() != nil || proposal.Catalog == nil || len(proposal.MissingEvidence) != 0 {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if proposal.Catalog == nil || len(proposal.MissingEvidence) != 0 {
 		return false, nil
 	}
 	current, hash, err := contextcatalog.LoadActive(w.cfg.CatalogDir)
-	if err != nil || hash != base {
+	if err != nil {
+		return false, err
+	}
+	if hash != base {
 		return false, nil
 	}
 	if !sameCatalogDependencies(private.CatalogDependencies, input.CatalogEvidence, input.Catalog.Entries) || !sameCatalogEvidence(makeCatalogEvidence(input.Catalog), input.CatalogEvidence) {
@@ -333,7 +363,10 @@ func (w *catalogWorker) publishSelected(ctx context.Context, original contextcat
 		active.DescriptionSource = "model_derived"
 		changed = true
 	}
-	if !changed || ctx.Err() != nil {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if !changed {
 		return false, nil
 	}
 	merged.ParentHash = base
@@ -667,44 +700,53 @@ func catalogPublicationMatches(current contextcatalog.Snapshot, expected []priva
 	return true
 }
 
-func (w *catalogWorker) restorePublishedOriginals(cards []contextcatalog.Entry) []contextcatalog.Entry {
-	entries, err := os.ReadDir(filepath.Join(w.proposalWorker.dir, "proposals"))
-	if err != nil || len(entries) > maxProposalFiles {
-		return cards
-	}
-	out := append([]contextcatalog.Entry{}, cards...)
-	for _, file := range entries {
-		if file.IsDir() || !strings.HasSuffix(file.Name(), ".json") {
-			continue
-		}
-		raw, err := aipolicy.ReadPrivate(filepath.Join(w.proposalWorker.dir, "proposals", file.Name()), MaxResponseBytes*4)
-		if err != nil || !proposalFilenameMatches(file.Name(), raw) {
-			continue
-		}
-		var p privateProposal
-		if json.Unmarshal(raw, &p) != nil || p.SchemaVersion != 1 || p.CatalogOriginal == nil || p.CatalogOriginalAll == nil || len(p.CatalogPublished) == 0 || len(p.CatalogPublished) > 32 || len(p.CatalogOriginalAll.Entries) > contextcatalog.MaxEntries || p.ProviderProtocol == "" || p.Model == "" {
-			continue
-		}
-		for _, published := range p.CatalogPublished {
-			for i := range out {
-				if out[i].Namespace != published.Namespace || out[i].Tag != published.Tag {
-					continue
-				}
-				hash, e := catalogEntryHash(out[i])
-				if e != nil || hash != published.EntryHash {
-					break
-				}
-				for _, original := range p.CatalogOriginalAll.Entries {
-					if original.Namespace == published.Namespace && original.Tag == published.Tag {
-						out[i] = original
-						break
-					}
-				}
-				break
+func catalogPublicationChanges(current contextcatalog.Snapshot, expected []privateCatalogPublished) bool {
+	for _, item := range expected {
+		for _, live := range current.Entries {
+			if live.Namespace != item.Namespace || live.Tag != item.Tag {
+				continue
+			}
+			hash, err := catalogEntryHash(live)
+			if err == nil && hash != item.EntryHash {
+				return true
 			}
 		}
 	}
-	return out
+	return false
+}
+
+func (w *catalogWorker) restorePublishedOriginals(current contextcatalog.Snapshot, cards []contextcatalog.Entry) ([]contextcatalog.Entry, map[string]bool, error) {
+	cache, err := w.loadProjectionCache()
+	if err != nil {
+		return nil, nil, err
+	}
+	// Import still-live receipts once into the durable cache before operators can
+	// archive proposal artifacts. The cache itself is independent of that archive.
+	cache, changed, err := w.importReceiptProjections(current, cache)
+	if err != nil {
+		return nil, nil, err
+	}
+	if changed {
+		if err := w.saveProjectionCache(cache); err != nil {
+			return nil, nil, errors.New("cannot migrate private catalog source projections")
+		}
+	}
+	out := append([]contextcatalog.Entry{}, cards...)
+	blocked := map[string]bool{}
+	for i := range out {
+		record, ok := cache.find(cardKey(out[i]))
+		if ok && cacheRecordMatchesLive(record, out[i]) {
+			out[i] = record.Original
+			continue
+		}
+		if out[i].DescriptionSource == "model_derived" {
+			blocked[cardKey(out[i])] = true
+			out[i].Summary = out[i].DeclaredSummary
+			out[i].Aliases, out[i].OwnedComponents, out[i].Boundaries = nil, nil, nil
+			out[i].Uses, out[i].SharedWith, out[i].PositiveExamples, out[i].NegativeExamples = nil, nil, nil, nil
+		}
+	}
+	return out, blocked, nil
 }
 func (w *catalogWorker) load() (catalogWorkerState, error) {
 	state := catalogWorkerState{SchemaVersion: 1, Fingerprints: map[string]string{}}
@@ -747,7 +789,9 @@ func (w *catalogWorker) recordOutcome(outcome, reason string) {
 		s.FailureStreak = 0
 		s.NextAllowedAt = ""
 	} else {
-		s.FailureStreak++
+		if s.FailureStreak < 10000 {
+			s.FailureStreak++
+		}
 		d := time.Duration(w.cfg.Maintenance.IntervalSeconds) * time.Second
 		for i := 1; i < s.FailureStreak && d < time.Hour; i++ {
 			d *= 2
@@ -759,6 +803,20 @@ func (w *catalogWorker) recordOutcome(outcome, reason string) {
 	}
 	_ = w.save(s)
 }
+
+func (w *catalogWorker) resetFailureAfterSuccess() error {
+	s, err := w.load()
+	if err != nil {
+		return err
+	}
+	if s.LastOutcome == "backoff" || (s.FailureStreak == 0 && s.NextAllowedAt == "") {
+		return nil
+	}
+	s.FailureStreak = 0
+	s.NextAllowedAt = ""
+	return w.save(s)
+}
+
 func finiteCatalogReason(err error) string {
 	switch {
 	case errors.Is(err, context.Canceled):
@@ -767,10 +825,14 @@ func finiteCatalogReason(err error) string {
 		return "timeout"
 	case strings.Contains(err.Error(), "budget"):
 		return "budget_exhausted"
-	case strings.Contains(err.Error(), "catalog"):
-		return "catalog_unavailable"
 	case strings.Contains(err.Error(), "state"):
 		return "state_unavailable"
+	case strings.Contains(err.Error(), "proposal capacity") || strings.Contains(err.Error(), "proposal retention limit"):
+		return "proposal_capacity"
+	case strings.Contains(err.Error(), "projection"):
+		return "state_unavailable"
+	case strings.Contains(err.Error(), "catalog"):
+		return "catalog_unavailable"
 	default:
 		return "provider_or_validation_failure"
 	}
@@ -832,7 +894,7 @@ func validCatalogStatusState(s catalogWorkerState) bool {
 		return false
 	}
 	allowedOutcomes := map[string]bool{"": true, "not_started": true, "dispatching": true, "proposed": true, "published": true, "conflict_or_unpublished": true, "no_changes": true, "skipped": true, "empty_catalog": true, "no_eligible_cards": true, "backoff": true, "failed": true}
-	allowedReasons := map[string]bool{"": true, "no_changes": true, "evidence_unavailable": true, "no_eligible_cards": true, "backoff_active": true, "base_or_dependency_changed": true, "insufficient_evidence": true, "unresolved_proposal": true, "canceled": true, "timeout": true, "budget_exhausted": true, "catalog_unavailable": true, "state_unavailable": true, "provider_or_validation_failure": true, "proposal_capacity": true}
+	allowedReasons := map[string]bool{"": true, "no_changes": true, "evidence_unavailable": true, "source_projection_unavailable": true, "no_eligible_cards": true, "backoff_active": true, "base_or_dependency_changed": true, "insufficient_evidence": true, "unresolved_proposal": true, "canceled": true, "timeout": true, "budget_exhausted": true, "catalog_unavailable": true, "state_unavailable": true, "provider_or_validation_failure": true, "proposal_capacity": true}
 	if !allowedOutcomes[s.LastOutcome] || !allowedReasons[s.LastReason] {
 		return false
 	}

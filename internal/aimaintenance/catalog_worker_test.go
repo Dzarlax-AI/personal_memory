@@ -3,6 +3,7 @@ package aimaintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +28,14 @@ func catalogFixture(n int) contextcatalog.Snapshot {
 		entries = append(entries, contextcatalog.Entry{Namespace: "projects", Tag: tag, Name: "Project " + tag, Summary: "Declared " + tag, Aliases: []string{}, OwnedComponents: []string{}, Boundaries: []string{}, Uses: []string{}, SharedWith: []string{}, PositiveExamples: []string{}, NegativeExamples: []string{}, EvidenceRefs: []string{}, ReviewStatus: "declared", ProjectID: strings.Repeat(fmt.Sprintf("%x", i%16), 64), ProjectKey: "repo:" + tag, Owner: "fixture-owner", DescriptionSource: "client_declared", DeclaredSummary: "Declared " + tag, ClientEvidence: []contextcatalog.Evidence{{Kind: "client_readme", Text: "Original client evidence for " + tag}}})
 	}
 	return contextcatalog.Snapshot{SchemaVersion: 1, Version: "registry", CreatedAt: "2026-10-08T10:00:00Z", Entries: entries}
+}
+
+func cloneTestProfiles(in map[string]aipolicy.Profile) map[string]aipolicy.Profile {
+	out := make(map[string]aipolicy.Profile, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func TestCatalogOnlyThirtyTwoCardsWithMaximumSourceCountNeverTruncateOrStarve(t *testing.T) {
@@ -297,7 +306,7 @@ func TestCatalogOnlyPublicationPreservesUnselectedAndDoesNotLoopOnOwnDescription
 	if active.Entries[1].Summary != original.Entries[1].Summary || active.Entries[1].DescriptionSource != original.Entries[1].DescriptionSource {
 		t.Fatal("unselected card changed during selected publication")
 	}
-	w2, p2, cfg2, _ := setupCatalogOnly(t, 1, 1, "local")
+	w2, p2, _, _ := setupCatalogOnly(t, 1, 1, "local")
 	w2.cfg.Maintenance.CatalogPublish, w2.catalog.cfg.Maintenance.CatalogPublish = "evidence_bounded", "evidence_bounded"
 	p2.result = catalogOnlyDescriptionProposal
 	if err := w2.RunOnce(context.Background()); err != nil {
@@ -323,7 +332,6 @@ func TestCatalogOnlyPublicationPreservesUnselectedAndDoesNotLoopOnOwnDescription
 	if status2.LastOutcome != "no_changes" || status2.LastDispatchAt != status1.LastDispatchAt {
 		t.Fatalf("no-change tick falsified dispatch status: before=%#v after=%#v", status1, status2)
 	}
-	_ = cfg2
 }
 
 func TestCatalogOnlyPublishedOriginalProjectionPreventsLoopAndTracksClientChanges(t *testing.T) {
@@ -354,26 +362,45 @@ func TestCatalogOnlyPublishedOriginalProjectionPreventsLoopAndTracksClientChange
 	if err := w.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	firstInput := <-p.seen
+	if firstInput.Catalog.Entries[0].Summary != "Declared project-00" || firstInput.Catalog.Entries[0].Aliases[0] != "original-alias-project-00" || firstInput.Catalog.Entries[0].Boundaries[0] != "original-boundary-project-00" {
+		t.Fatal("first inference did not receive client-authored description context")
+	}
 	if err := w.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if p.calls.Load() != 1 {
 		t.Fatalf("model-authored context caused an inference loop: %d", p.calls.Load())
 	}
+	if err := os.RemoveAll(filepath.Join(w.catalog.proposalWorker.dir, "proposals")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(w.catalog.proposalWorker.dir, "proposals"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	modelLabel = "second"
-	profile := structProfileModel(w.cfg.Profiles["local"], "operator/changed-model")
-	w.cfg.Profiles["local"], w.catalog.cfg.Profiles["local"], w.catalog.proposalWorker.cfg.Profiles["local"] = profile, profile, profile
+	profiles := cloneTestProfiles(w.cfg.Profiles)
+	profiles["local"] = structProfileModel(profiles["local"], "operator/changed-model")
+	w.cfg.Profiles, w.catalog.cfg.Profiles, w.catalog.proposalWorker.cfg.Profiles = profiles, profiles, profiles
 	if err := w.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if p.calls.Load() != 2 {
 		t.Fatalf("profile change after publication did not trigger inference: %d", p.calls.Load())
 	}
+	secondInput := <-p.seen
+	for _, card := range secondInput.Catalog.Entries {
+		if card.Summary != "Declared "+card.Tag || len(card.Aliases) != 1 || card.Aliases[0] != "original-alias-"+card.Tag || len(card.Boundaries) != 1 || card.Boundaries[0] != "original-boundary-"+card.Tag {
+			t.Fatalf("archived proposal caused generated context feedback: %#v", card)
+		}
+	}
 	active, activeBase, err := contextcatalog.LoadActive(cfg.CatalogDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	active.Entries[0].DescriptionSource = "client_declared"
+	active.Entries[0].Summary = "Client revised project-00"
+	active.Entries[0].Aliases = []string{"client revised alias"}
 	active.Entries[0].Boundaries = []string{"new client boundary"}
 	active.ParentHash = activeBase
 	if _, err := contextcatalog.Publish(cfg.CatalogDir, active, activeBase); err != nil {
@@ -384,6 +411,170 @@ func TestCatalogOnlyPublishedOriginalProjectionPreventsLoopAndTracksClientChange
 	}
 	if p.calls.Load() != 3 {
 		t.Fatalf("client boundary change did not invalidate inference: %d", p.calls.Load())
+	}
+}
+
+func TestCatalogOnlyFailureSuccessFailureResetsBackoff(t *testing.T) {
+	w, p, _, _ := setupCatalogOnly(t, 1, 1, "local")
+	p.err = errors.New("synthetic provider failure")
+	if err := w.RunOnce(context.Background()); err == nil {
+		t.Fatal("expected initial provider failure")
+	}
+	state, err := w.catalog.load()
+	if err != nil || state.FailureStreak != 1 || state.NextAllowedAt == "" {
+		t.Fatalf("initial failure did not set backoff: state=%#v err=%v", state, err)
+	}
+	state.NextAllowedAt = time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)
+	if err := w.catalog.save(state); err != nil {
+		t.Fatal(err)
+	}
+	p.err = nil
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state, err = w.catalog.load()
+	if err != nil || state.FailureStreak != 0 || state.NextAllowedAt != "" {
+		t.Fatalf("successful tick did not reset backoff: state=%#v err=%v", state, err)
+	}
+	state.Fingerprints = map[string]string{}
+	if err := w.catalog.save(state); err != nil {
+		t.Fatal(err)
+	}
+	profiles := cloneTestProfiles(w.cfg.Profiles)
+	profiles["local"] = structProfileModel(profiles["local"], "operator/recovery-model")
+	w.cfg.Profiles, w.catalog.cfg.Profiles, w.catalog.proposalWorker.cfg.Profiles = profiles, profiles, profiles
+	p.err = errors.New("synthetic provider failure")
+	if err := w.RunOnce(context.Background()); err == nil {
+		t.Fatal("expected failure after recovery")
+	}
+	state, err = w.catalog.load()
+	if err != nil || state.FailureStreak != 1 {
+		t.Fatalf("post-recovery failure did not restart streak: state=%#v err=%v", state, err)
+	}
+}
+
+func TestFiniteCatalogReasonUsesSpecificFailureCodes(t *testing.T) {
+	cases := map[string]string{
+		"cannot read catalog maintenance state":                                                    "state_unavailable",
+		"proposal retention limit reached; archive reviewed proposals before resuming maintenance": "proposal_capacity",
+		"private catalog source projections are invalid":                                           "state_unavailable",
+		"active catalog unavailable":                                                               "catalog_unavailable",
+		"proposal validation failed":                                                               "provider_or_validation_failure",
+	}
+	for message, expected := range cases {
+		if actual := finiteCatalogReason(errors.New(message)); actual != expected {
+			t.Errorf("finiteCatalogReason(%q) = %q, want %q", message, actual, expected)
+		}
+	}
+}
+
+func TestCatalogProjectionCacheRejectsCorruptionAndGeneratedOriginals(t *testing.T) {
+	w, _, _, _ := setupCatalogOnly(t, 1, 1, "local")
+	active, _, err := contextcatalog.LoadActive(w.cfg.CatalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := active.Entries[0]
+	hash, err := catalogEntryHash(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := catalogProjectionCache{SchemaVersion: 1, Entries: []catalogProjectionRecord{{Namespace: original.Namespace, Tag: original.Tag, Original: original, LiveHashes: []string{hash}}}}
+	if err := w.catalog.saveProjectionCache(cache); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(w.catalog.projectionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire catalogProjectionCache
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	wire.Entries[0].Original.Boundaries = []string{"tampered"}
+	corrupt, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(w.catalog.projectionPath, corrupt, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.catalog.loadProjectionCache(); err == nil {
+		t.Fatal("projection cache accepted checksum corruption")
+	}
+	wire.Entries[0].Original = original
+	wire.Entries[0].Original.DescriptionSource = "model_derived"
+	if err := w.catalog.saveProjectionCache(wire); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.catalog.loadProjectionCache(); err == nil {
+		t.Fatal("projection cache accepted model-derived fields as original context")
+	}
+}
+
+func TestCatalogOnlyCanceledPublicationKeepsReceiptPending(t *testing.T) {
+	w, p, cfg, _ := setupCatalogOnly(t, 1, 1, "local")
+	w.cfg.Maintenance.CatalogPublish, w.catalog.cfg.Maintenance.CatalogPublish, cfg.Maintenance.CatalogPublish = "evidence_bounded", "evidence_bounded", "evidence_bounded"
+	p.result = catalogOnlyDescriptionProposal
+	ctx, cancel := context.WithCancel(context.Background())
+	p.after = func(Input) { p.after = nil; cancel() }
+	if err := w.RunOnce(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation to leave publication pending, got %v", err)
+	}
+	state, err := w.catalog.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.NextAllowedAt = time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)
+	if err := w.catalog.save(state); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewWorker(cfg, nil, p, w.budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	active, _, err := contextcatalog.LoadActive(cfg.CatalogDir)
+	if err != nil || active.Entries[0].DescriptionSource != "model_derived" || p.calls.Load() != 1 {
+		t.Fatalf("saved proposal was not safely published after cancellation: active=%#v calls=%d err=%v", active, p.calls.Load(), err)
+	}
+}
+
+func TestCatalogOnlyUnavailableCatalogKeepsReceiptPending(t *testing.T) {
+	w, p, cfg, root := setupCatalogOnly(t, 1, 1, "local")
+	w.cfg.Maintenance.CatalogPublish, w.catalog.cfg.Maintenance.CatalogPublish, cfg.Maintenance.CatalogPublish = "evidence_bounded", "evidence_bounded", "evidence_bounded"
+	p.result = catalogOnlyDescriptionProposal
+	moved := filepath.Join(root, "catalog-temporary")
+	p.after = func(Input) {
+		p.after = nil
+		_ = os.Rename(cfg.CatalogDir, moved)
+	}
+	if err := w.RunOnce(context.Background()); err == nil {
+		t.Fatal("expected active catalog read failure")
+	}
+	if err := os.Rename(moved, cfg.CatalogDir); err != nil {
+		t.Fatal(err)
+	}
+	state, err := w.catalog.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.NextAllowedAt = time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)
+	if err := w.catalog.save(state); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewWorker(cfg, nil, p, w.budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	active, _, err := contextcatalog.LoadActive(cfg.CatalogDir)
+	if err != nil || active.Entries[0].DescriptionSource != "model_derived" || p.calls.Load() != 1 {
+		t.Fatalf("saved proposal was not reused after catalog recovery: active=%#v calls=%d err=%v", active, p.calls.Load(), err)
 	}
 }
 
@@ -840,7 +1031,7 @@ func TestCatalogOnlyUsesCompleteFairBatchesAndRestartDeduplicates(t *testing.T) 
 }
 
 func TestCatalogOnlyFingerprintTracksOriginalSourcesAndProfileButNotOwnPublication(t *testing.T) {
-	w, p, cfg, root := setupCatalogOnly(t, 1, 4, "local")
+	w, p, cfg, _ := setupCatalogOnly(t, 1, 4, "local")
 	if err := w.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -871,23 +1062,15 @@ func TestCatalogOnlyFingerprintTracksOriginalSourcesAndProfileButNotOwnPublicati
 	if catalogCardFingerprintWithContext(entry, []contextcatalog.Entry{entry, catalogFixture(2).Entries[1]}, contextCfg) == catalogCardFingerprintWithContext(entry, []contextcatalog.Entry{entry, other}, contextCfg) {
 		t.Fatal("other-card source change did not invalidate receipt identity")
 	}
-	cfg.Profiles["local"] = cfg.Profiles["local"]
-	cfg.Profiles["local"] = structProfileModel(cfg.Profiles["local"], "operator/other-model")
-	if catalogCardFingerprint(entry, w.cfg) == catalogCardFingerprint(entry, cfg) {
+	profileCfg := cfg
+	profileCfg.Profiles = make(map[string]aipolicy.Profile, len(cfg.Profiles))
+	for name, profile := range cfg.Profiles {
+		profileCfg.Profiles[name] = profile
+	}
+	profileCfg.Profiles["local"] = structProfileModel(profileCfg.Profiles["local"], "operator/other-model")
+	if catalogCardFingerprint(entry, w.cfg) == catalogCardFingerprint(entry, profileCfg) {
 		t.Fatal("profile model changes did not invalidate card")
 	}
-	// Reconstruct a worker over the same state and prove its own catalog version is irrelevant.
-	active, _, err := contextcatalog.LoadActive(w.cfg.CatalogDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	active.Entries[0] = derived
-	active.ParentHash = ""
-	active.Version = "published"
-	active.CreatedAt = "2026-10-08T11:00:00Z"
-	// The changed catalog is only used to compare the stable source fingerprint; no live mutation is needed.
-	_ = active
-	_ = root
 }
 
 func structProfileModel(p aipolicy.Profile, model string) aipolicy.Profile { p.Model = model; return p }
@@ -933,3 +1116,51 @@ func TestCatalogStatusIsSafeAndDisabledDoesNotReadState(t *testing.T) {
 }
 
 func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
+
+func TestCatalogOnlyProjectionWriteFailurePreservesInferenceReceipt(t *testing.T) {
+	w, p, cfg, _ := setupCatalogOnly(t, 1, 1, "local")
+	w.cfg.Maintenance.CatalogPublish = "evidence_bounded"
+	w.catalog.cfg.Maintenance.CatalogPublish = "evidence_bounded"
+	p.result = catalogOnlyDescriptionProposal
+	p.after = func(Input) {
+		p.after = nil
+		if err := os.Mkdir(w.catalog.projectionPath, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.RunOnce(context.Background()); err == nil {
+		t.Fatal("expected projection persistence failure")
+	}
+	artifacts, err := os.ReadDir(filepath.Join(w.dir, "proposals"))
+	if err != nil || len(artifacts) != 1 {
+		t.Fatalf("completed inference receipt was not retained: %v", err)
+	}
+	if err := os.RemoveAll(w.catalog.projectionPath); err != nil {
+		t.Fatal(err)
+	}
+	state, err := w.catalog.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.NextAllowedAt = time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)
+	if err := w.catalog.save(state); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewWorker(w.cfg, nil, p, w.budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if p.calls.Load() != 1 {
+		t.Fatalf("completed inference repeated after projection persistence failure: %d", p.calls.Load())
+	}
+	active, _, err := contextcatalog.LoadActive(cfg.CatalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.Entries[0].DescriptionSource != "model_derived" {
+		t.Fatal("reused receipt did not publish after projection recovery")
+	}
+}
