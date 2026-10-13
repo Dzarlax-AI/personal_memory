@@ -235,7 +235,7 @@ func (w *catalogWorker) RunOnce(ctx context.Context) error {
 		// inference receipt, then require the original source to validate on
 		// recovery before it can be accepted.
 		if w.cfg.Maintenance.ProjectPolicy == "registered" {
-			available, current := w.catalogSourcesState(base, cards)
+			available, current := w.catalogSourcesState(cards)
 			if available && !current {
 				return errCatalogSourcesChanged
 			}
@@ -252,7 +252,7 @@ func (w *catalogWorker) RunOnce(ctx context.Context) error {
 		}
 		state.LatestProposal = name
 	}
-	if artifact.MaintenancePolicy != w.cfg.Maintenance.ProjectPolicy || artifact.RelationshipInstructions != maintenanceRelationshipInstructionsIdentity() || (w.cfg.Maintenance.ProjectPolicy == "registered" && !w.catalogSourcesCurrent(base, cards)) {
+	if artifact.MaintenancePolicy != w.cfg.Maintenance.ProjectPolicy || artifact.RelationshipInstructions != maintenanceRelationshipInstructionsIdentity() || (w.cfg.Maintenance.ProjectPolicy == "registered" && !w.catalogSourcesCurrent(cards)) {
 		return errCatalogSourcesChanged
 	}
 	// Preserve completed inference before mutable projection storage. A reused
@@ -600,18 +600,17 @@ func catalogContextIdentity(cards []contextcatalog.Entry, cfg aipolicy.Config) s
 	return hex.EncodeToString(sum[:])
 }
 
-func (w *catalogWorker) catalogSourcesCurrent(base string, original []contextcatalog.Entry) bool {
-	available, current := w.catalogSourcesState(base, original)
+func (w *catalogWorker) catalogSourcesCurrent(original []contextcatalog.Entry) bool {
+	available, current := w.catalogSourcesState(original)
 	return available && current
 }
 
-func (w *catalogWorker) catalogSourcesState(base string, original []contextcatalog.Entry) (available, currentSources bool) {
-	snapshot, currentHash, err := contextcatalog.LoadActive(w.cfg.CatalogDir)
+func (w *catalogWorker) catalogSourcesState(original []contextcatalog.Entry) (available, currentSources bool) {
+	// Review acceptance depends on admitted original sources, not unrelated
+	// changes to the global catalog generation. Publication keeps its own CAS.
+	snapshot, _, err := contextcatalog.LoadActive(w.cfg.CatalogDir)
 	if err != nil {
 		return false, false
-	}
-	if currentHash != base {
-		return true, false
 	}
 	admitted := admittedCatalogEntries(snapshot, w.cfg)
 	sort.Slice(admitted, func(i, j int) bool {

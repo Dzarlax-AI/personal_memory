@@ -1588,3 +1588,68 @@ func TestCatalogOnlyProjectionWriteFailurePreservesInferenceReceipt(t *testing.T
 		t.Fatal("reused receipt did not publish after projection recovery")
 	}
 }
+
+func TestRegisteredReviewAcceptsUnchangedSourcesAfterUnrelatedCatalogEdit(t *testing.T) {
+	for _, kind := range []string{"denied", "manual", "non-project"} {
+		t.Run(kind, func(t *testing.T) {
+			w, provider, cfg := newRegisteredCatalogWorker(t, 1)
+			ensureRegisteredFixture(t, cfg.CatalogDir, "owner-a", "repo:project-a", "project-a")
+			if kind == "denied" {
+				ensureRegisteredFixture(t, cfg.CatalogDir, "owner-z", "repo:project-z", "project-z")
+				w.cfg.Egress.DeniedProjectTags = []string{"project-z"}
+				w.catalog.cfg.Egress.DeniedProjectTags = []string{"project-z"}
+			} else {
+				snapshot, base, err := contextcatalog.LoadActive(cfg.CatalogDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				entry := contextcatalog.Entry{Namespace: "projects", Tag: "project-z", Name: "Unrelated", Summary: "Original unrelated summary.", ReviewStatus: "declared", DescriptionSource: "manual"}
+				if kind == "non-project" {
+					entry.Namespace = "tech"
+				}
+				snapshot.Entries = append(snapshot.Entries, entry)
+				snapshot.ParentHash = base
+				if _, err := contextcatalog.Publish(cfg.CatalogDir, snapshot, base); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, before, err := contextcatalog.LoadActive(cfg.CatalogDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			provider.after = func(Input) {
+				snapshot, base, err := contextcatalog.LoadActive(cfg.CatalogDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for i := range snapshot.Entries {
+					if snapshot.Entries[i].Tag == "project-z" {
+						snapshot.Entries[i].Summary = "Updated unrelated summary."
+					}
+				}
+				snapshot.ParentHash = base
+				if _, err := contextcatalog.Publish(cfg.CatalogDir, snapshot, base); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := w.RunOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			in := receiveCatalogInput(t, provider.seen)
+			if len(in.Catalog.Entries) != 1 || in.Catalog.Entries[0].Tag != "project-a" {
+				t.Fatal("unrelated entry reached provider")
+			}
+			_, after, err := contextcatalog.LoadActive(cfg.CatalogDir)
+			if err != nil || before == after {
+				t.Fatal("test did not change catalog generation")
+			}
+			status, err := ReadCatalogStatus(cfg)
+			if err != nil || status.LastOutcome != "proposed" || status.Completed != 1 {
+				t.Fatalf("unchanged admitted sources not completed: %#v %v", status, err)
+			}
+			if proposalCount(t, filepath.Join(cfg.StateDir, "maintenance", "proposals")) != 1 {
+				t.Fatal("review receipt missing")
+			}
+		})
+	}
+}
