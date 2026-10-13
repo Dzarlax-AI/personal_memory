@@ -79,7 +79,10 @@ type Provider interface {
 type ProviderFailure struct{ Kind string }
 
 func (e *ProviderFailure) Error() string { return "maintenance provider failure" }
-func providerFailure(kind string) error  { return &ProviderFailure{Kind: kind} }
+func (e *ProviderFailure) Is(target error) bool {
+	return (e.Kind == "cancel" && target == context.Canceled) || (e.Kind == "timeout" && target == context.DeadlineExceeded)
+}
+func providerFailure(kind string) error { return &ProviderFailure{Kind: kind} }
 
 type provider struct {
 	profile   aipolicy.Profile

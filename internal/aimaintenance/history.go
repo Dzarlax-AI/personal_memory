@@ -119,12 +119,13 @@ func recorderFrom(ctx context.Context) *runRecorder {
 }
 
 type historyStore struct {
-	dir                string
-	session            string
-	seq                atomic.Uint64
-	persist            func(runID, relative string, value any) error
-	now                func() time.Time
-	beforeRecoveryLock func(runID string)
+	dir                 string
+	session             string
+	seq                 atomic.Uint64
+	persist             func(runID, relative string, value any) error
+	now                 func() time.Time
+	beforeRecoveryLock  func(runID string)
+	afterCompletionRead func(runID string)
 }
 
 func newHistoryStore(stateDir string) (*historyStore, error) {
@@ -420,6 +421,14 @@ func ReadRunHistory(cfg aipolicy.Config, limit int, cursor, runID string) (Histo
 }
 
 func readHistoryRun(root, id string) (HistoryRun, error) {
+	return readHistoryRunWithHook(root, id, nil)
+}
+
+func (s *historyStore) readRun(id string) (HistoryRun, error) {
+	return readHistoryRunWithHook(s.dir, id, s.afterCompletionRead)
+}
+
+func readHistoryRunWithHook(root, id string, afterCompletionRead func(runID string)) (HistoryRun, error) {
 	out := HistoryRun{RunID: id, Events: []runEvent{}, Drafts: []DraftReference{}}
 	if !runIDRE.MatchString(id) {
 		return out, errors.New("invalid run id")
@@ -437,6 +446,13 @@ func readHistoryRun(root, id string) (HistoryRun, error) {
 		return out, errors.New("corrupt started record")
 	}
 	out.Started = &start
+	// Terminal publication follows all event publication. Read its existence
+	// first so a concurrent final event cannot race an older event listing and
+	// make a complete immutable run look corrupt.
+	completionRaw, completionErr := readRegularBounded(filepath.Join(dir, "completion.json"), maxHistoryFile)
+	if afterCompletionRead != nil {
+		afterCompletionRead(id)
+	}
 	ents, err := boundedDirNames(filepath.Join(dir, "events"), maxHistoryEvents+1)
 	if err != nil && !os.IsNotExist(err) {
 		out.HistoryStatus = "corrupt_events"
@@ -465,15 +481,14 @@ func readHistoryRun(root, id string) (HistoryRun, error) {
 		out.Events = append(out.Events, ev)
 	}
 	sort.Slice(out.Events, func(i, j int) bool { return out.Events[i].Sequence < out.Events[j].Sequence })
-	completionRaw, err := readRegularBounded(filepath.Join(dir, "completion.json"), maxHistoryFile)
-	if err == nil {
+	if completionErr == nil {
 		var c runCompleted
 		if strictJSON(completionRaw, &c) != nil || c.SchemaVersion != historySchema || c.RunID != id || c.SessionID != start.SessionID || c.CompletedAt == "" || c.ProviderAttempts < 0 || (c.EventCountKnown && c.EventCount != len(out.Events)) || c.FactsConsidered < 0 || c.ProjectsQueued < 0 || c.ProjectsCompleted < 0 || c.ProjectsSkipped < 0 || c.InputTokens < 0 || c.OutputTokens < 0 || (c.DurationMillis != nil && *c.DurationMillis < 0) || !validHistoryOutcome(c.Outcome, c.ReasonCode) {
 			out.HistoryStatus = "corrupt_completion"
 		} else {
 			out.Completion = &c
 		}
-	} else if !os.IsNotExist(err) {
+	} else if !os.IsNotExist(completionErr) {
 		out.HistoryStatus = "corrupt_completion"
 	} else if out.HistoryStatus == "" {
 		out.HistoryStatus = "unfinished"
@@ -529,7 +544,7 @@ func (s *historyStore) Read(limit int, cursor, runID string) (HistoryPage, error
 		return HistoryPage{}, errors.New("maintenance run history unavailable")
 	}
 	if runID != "" {
-		run, err := readHistoryRun(s.dir, runID)
+		run, err := s.readRun(runID)
 		if err != nil {
 			if run.HistoryStatus == "" {
 				run.HistoryStatus = "missing_run"
@@ -579,7 +594,7 @@ func (s *historyStore) Read(limit int, cursor, runID string) (HistoryPage, error
 		ids = ids[:limit]
 	}
 	for _, id := range ids {
-		r, er := readHistoryRun(s.dir, id)
+		r, er := s.readRun(id)
 		if er != nil { // Keep the row visible so corruption is not silently omitted.
 			if r.HistoryStatus == "" {
 				r.HistoryStatus = "corrupt"

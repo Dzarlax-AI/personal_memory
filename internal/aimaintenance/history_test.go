@@ -271,6 +271,34 @@ func TestHistoryRecoveryRereadsCompletionAfterAcquiringLivenessLock(t *testing.T
 	}
 }
 
+func TestHistoryReaderSnapshotMayRemainPendingIfRunFinishesDuringRead(t *testing.T) {
+	cfg := historyTestConfig(t)
+	store, err := newHistoryStore(cfg.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := store.newRun(cfg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.afterCompletionRead = func(runID string) {
+		if runID == r.started.RunID {
+			if err := r.finish("succeeded", ""); err != nil {
+				t.Errorf("finish during read: %v", err)
+			}
+		}
+	}
+	page, err := store.Read(1, "", r.started.RunID)
+	if err != nil || len(page.Runs) != 1 || page.Runs[0].HistoryStatus != "unfinished" || page.Runs[0].Completion != nil {
+		t.Fatalf("reader did not retain its valid pending snapshot: %+v, %v", page, err)
+	}
+	store.afterCompletionRead = nil
+	page, err = store.Read(1, "", r.started.RunID)
+	if err != nil || page.Runs[0].HistoryStatus != "" || page.Runs[0].Completion == nil || page.Runs[0].Completion.Outcome != "succeeded" {
+		t.Fatalf("finished run was not clean on the next read: %+v, %v", page, err)
+	}
+}
+
 func TestHistoryRecoverySkipsLiveRunBetweenStartPublicationAndFinish(t *testing.T) {
 	cfg := historyTestConfig(t)
 	store, err := newHistoryStore(cfg.StateDir)

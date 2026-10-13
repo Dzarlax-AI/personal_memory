@@ -401,6 +401,31 @@ func TestProviderHTTPFailuresUseFiniteTypedCategories(t *testing.T) {
 	}
 }
 
+func TestProviderCancellationAndTimeoutPreserveContextIdentity(t *testing.T) {
+	profile := aipolicy.Profile{Protocol: "openai-compatible-chat", Model: "local", Endpoint: "http://localhost/v1/chat/completions", Local: true, TimeoutMS: 1000}
+	for _, tc := range []struct {
+		name         string
+		cause        error
+		wantSentinel error
+		wantReason   string
+	}{{"cancel", context.Canceled, context.Canceled, "canceled"}, {"timeout", context.DeadlineExceeded, context.DeadlineExceeded, "timeout"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, tc.cause })
+			p, err := NewProvider(profile, "", transport)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, err = p.Propose(context.Background(), testInput())
+			if !errors.Is(err, tc.wantSentinel) {
+				t.Fatalf("provider error lost context identity: %v", err)
+			}
+			if got := finiteCatalogReason(err); got != tc.wantReason {
+				t.Fatalf("finiteCatalogReason = %q, want %q", got, tc.wantReason)
+			}
+		})
+	}
+}
+
 func TestProposalValidationRequiresExactAliasesAndTags(t *testing.T) {
 	in := testInput()
 	hash := in.baseCatalogHash
