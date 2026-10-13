@@ -123,14 +123,29 @@ func TestEvidenceInferenceProposalArtifactPreventsRepeatAfterStateWriteFailure(t
 	if key == "" || key == w.evidenceInferenceKey(nil) {
 		t.Fatal("evidence-only key missing")
 	}
+	binding, err := w.bindingHash("catalog-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(dir, "proposals"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.saveProposal(privateProposal{SchemaVersion: 1, EvidenceInferenceKey: key}); err != nil {
+	if _, err := w.saveProposal(privateProposal{SchemaVersion: 1, EvidenceInferenceKey: key, BindingHash: binding}); err != nil {
 		t.Fatal(err)
 	}
-	if !w.hasEvidenceProposal(key) {
+	if w.hasEvidenceProposal(key, binding) {
+		t.Fatal("legacy artifact without policy and instruction binding suppressed inference")
+	}
+	valid := privateProposal{SchemaVersion: 1, EvidenceInferenceKey: key, BindingHash: binding, MaintenancePolicy: cfg.Maintenance.ProjectPolicy, RelationshipInstructions: maintenanceRelationshipInstructionsIdentity()}
+	if _, err := w.saveProposal(valid); err != nil {
+		t.Fatal(err)
+	}
+	if !w.hasEvidenceProposal(key, binding) {
 		t.Fatal("saved proposal was not discovered for retry suppression")
+	}
+	w.cfg.Maintenance.ProjectPolicy = "registered"
+	if w.evidenceInferenceKey(input.CatalogEvidence) == key {
+		t.Fatal("evidence inference key ignored maintenance project policy")
 	}
 }
 

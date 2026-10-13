@@ -49,6 +49,7 @@ func (r Registration) Active() bool { return r.Mode == "client_declared" }
 
 type Maintenance struct {
 	Enabled           bool   `json:"enabled"`
+	ProjectPolicy     string `json:"project_policy,omitempty"`
 	Profile           string `json:"profile"`
 	Scope             string `json:"scope,omitempty"`
 	IntervalSeconds   int    `json:"interval_seconds"`
@@ -143,6 +144,9 @@ func (c *Config) Defaults() {
 	if c.Maintenance.MaxFactsPerRun == 0 {
 		c.Maintenance.MaxFactsPerRun = 50
 	}
+	if c.Maintenance.ProjectPolicy == "" {
+		c.Maintenance.ProjectPolicy = "explicit"
+	}
 	if c.Maintenance.Scope == "" {
 		c.Maintenance.Scope = "facts_and_catalog"
 	}
@@ -169,6 +173,9 @@ func (c *Config) Defaults() {
 	}
 }
 func (c Config) Validate() error {
+	if c.Maintenance.ProjectPolicy != "" && c.Maintenance.ProjectPolicy != "explicit" && c.Maintenance.ProjectPolicy != "registered" {
+		return errors.New("invalid maintenance project policy")
+	}
 	if c.Egress.ProjectPolicy != "" && c.Egress.ProjectPolicy != "explicit" && c.Egress.ProjectPolicy != "registered" {
 		return errors.New("invalid egress project policy")
 	}
@@ -227,6 +234,9 @@ func (c Config) Validate() error {
 		}
 		if (c.Maintenance.CatalogPublish != "review" && c.Maintenance.CatalogPublish != "evidence_bounded") || c.Maintenance.GroupingApply != "manual" {
 			return errors.New("automatic catalog publication and grouping application unsupported")
+		}
+		if c.Maintenance.ProjectPolicy == "registered" && (c.Maintenance.Scope != "catalog_only" || c.Maintenance.CatalogPublish != "review") {
+			return errors.New("registered maintenance requires catalog_only scope and review publication")
 		}
 	}
 	if c.Active() && (c.CatalogDir == "" || c.StateDir == "" || c.CatalogDir == c.StateDir) {

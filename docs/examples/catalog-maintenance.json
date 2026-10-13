@@ -5,6 +5,7 @@
   "registration": { "mode": "client_declared" },
   "maintenance": {
     "enabled": false,
+    "project_policy": "registered",
     "scope": "catalog_only",
     "profile": "maintenance",
     "interval_seconds": 21600,
@@ -28,7 +29,7 @@
   "egress": {
     "project_policy": "explicit",
     "allowed_namespaces": ["projects"],
-    "allowed_project_tags": ["exampletag"],
+    "allowed_project_tags": [],
     "unassigned_namespaces": []
   },
   "limits": {

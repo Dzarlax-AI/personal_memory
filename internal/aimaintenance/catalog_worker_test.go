@@ -578,6 +578,46 @@ func TestCatalogOnlyUnavailableCatalogKeepsReceiptPending(t *testing.T) {
 	}
 }
 
+func TestRegisteredReviewCatalogUnavailableRetainsReceiptWithoutCompletion(t *testing.T) {
+	w, provider, cfg := newRegisteredCatalogWorker(t, 1)
+	created := ensureRegisteredFixture(t, cfg.CatalogDir, "owner-a", "repo:project-a", "project-a")
+	if !contextcatalog.RegisteredIdentity(created) {
+		t.Fatal("fresh registered fixture did not pass admission")
+	}
+	moved := cfg.CatalogDir + ".temporary"
+	provider.after = func(Input) {
+		provider.after = nil
+		if err := os.Rename(cfg.CatalogDir, moved); err != nil {
+			t.Errorf("hide active catalog: %v", err)
+		}
+	}
+	if err := w.RunOnce(context.Background()); err == nil {
+		t.Fatal("catalog disappearance after inference was accepted as completed")
+	}
+	_ = receiveCatalogInput(t, provider.seen)
+	if provider.calls.Load() != 1 || proposalCount(t, filepath.Join(cfg.StateDir, "maintenance", "proposals")) != 1 {
+		t.Fatal("completed inference receipt was not retained during temporary catalog unavailability")
+	}
+	state, err := w.catalog.load()
+	if err != nil || state.LastCompleted != 0 || state.LastOutcome != "failed" {
+		t.Fatalf("unavailable catalog was acknowledged as completed: state=%#v err=%v", state, err)
+	}
+	if err := os.Rename(moved, cfg.CatalogDir); err != nil {
+		t.Fatal(err)
+	}
+	state.NextAllowedAt = time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)
+	if err := w.catalog.save(state); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state, err = w.catalog.load()
+	if err != nil || state.LastCompleted != 1 || state.LastOutcome != "proposed" || provider.calls.Load() != 1 {
+		t.Fatalf("same worker failed to reuse receipt after source recovery: state=%#v calls=%d err=%v", state, provider.calls.Load(), err)
+	}
+}
+
 func TestCatalogOnlyPostPublicationStateFailureReusesInferenceWithoutRebase(t *testing.T) {
 	w, p, cfg, _ := setupCatalogOnly(t, 1, 1, "local")
 	w.cfg.Maintenance.CatalogPublish, w.catalog.cfg.Maintenance.CatalogPublish = "evidence_bounded", "evidence_bounded"
@@ -977,6 +1017,390 @@ func setupCatalogOnly(t *testing.T, n, max int, profileName string) (*Worker, *f
 	return w, provider, cfg, root
 }
 
+func TestRegisteredCatalogAdmissionFollowsActiveRegistrationWithoutRestart(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogDir := filepath.Join(root, "catalog")
+	stateDir := filepath.Join(root, "state")
+	cfg := workerConfig(t, catalogDir, stateDir)
+	cfg.Maintenance.Scope = "catalog_only"
+	cfg.Maintenance.ProjectPolicy = "registered"
+	cfg.Maintenance.CatalogPublish = "review"
+	cfg.Maintenance.MaxProjectsPerRun = 1
+	cfg.Egress = aipolicy.Egress{AllowedNamespaces: []string{"projects"}, AllowedProjectTags: []string{"manual-static", "invalid-static", "project-c", "draft-static", "unresolved-static"}, DeniedProjectTags: []string{"project-c"}}
+	budget, err := aipolicy.NewBudget(filepath.Join(stateDir, "budget"), cfg.Limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &fakeProvider{seen: make(chan Input, 4), result: func(in Input) Proposal {
+		return Proposal{SchemaVersion: 1, BaseCatalogHash: in.baseCatalogHash, Grouping: []GroupingProposal{}, MissingEvidence: []string{}}
+	}}
+	w, err := NewWorker(cfg, nil, provider, budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration := func(key, tag, summary string) contextcatalog.RegistrationInput {
+		return contextcatalog.RegistrationInput{ProjectKey: key, Namespace: "projects", Name: tag, Tag: tag, Summary: summary, Evidence: []contextcatalog.Evidence{{Kind: "client_readme", Text: "Original source for " + tag}}}
+	}
+	inputA := registration("repo:project-a", "project-a", "Original summary A.")
+	inputA.Evidence = nil // The original declared summary alone is a valid source.
+	createdA, err := contextcatalog.EnsureProject(catalogDir, "owner-a", inputA)
+	if err != nil || createdA.Status != "created" {
+		t.Fatalf("register A: %#v %v", createdA, err)
+	}
+	beforeA, _, err := contextcatalog.LoadActive(catalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registeredA := beforeA.Entries[0]
+	if !contextcatalog.RegisteredIdentity(registeredA) {
+		t.Fatal("EnsureProject result did not satisfy registered identity validation")
+	}
+	derivedWithOriginal := registeredA
+	derivedWithOriginal.DescriptionSource = "model_derived"
+	derivedWithOriginal.DeclaredSummary = registeredA.Summary
+	derivedWithOriginal.Summary = "Generated summary"
+	if !contextcatalog.RegisteredIdentity(derivedWithOriginal) {
+		t.Fatal("model-derived card with retained original client declaration was rejected")
+	}
+	derivedWithoutOriginal := derivedWithOriginal
+	derivedWithoutOriginal.DeclaredSummary = ""
+	if contextcatalog.RegisteredIdentity(derivedWithoutOriginal) {
+		t.Fatal("model-derived card without retained original declaration was admitted")
+	}
+	for name, mutate := range map[string]func(*contextcatalog.Entry){
+		"owner":       func(entry *contextcatalog.Entry) { entry.Owner = "different-owner" },
+		"project key": func(entry *contextcatalog.Entry) { entry.ProjectKey = "repo:other-project" },
+		"digest":      func(entry *contextcatalog.Entry) { entry.ProjectID = strings.Repeat("0", 64) },
+		"namespace":   func(entry *contextcatalog.Entry) { entry.Namespace = "personal" },
+	} {
+		candidate := registeredA
+		mutate(&candidate)
+		if contextcatalog.RegisteredIdentity(candidate) {
+			t.Errorf("registered identity accepted malformed %s binding", name)
+		}
+	}
+	deniedNamespace := w.cfg
+	deniedNamespace.Egress.AllowedNamespaces = nil
+	if maintenanceAdmits(registeredA, deniedNamespace, registeredTagsForCards(beforeA.Entries, deniedNamespace)) {
+		t.Fatal("registered identity bypassed namespace denial")
+	}
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	first := receiveCatalogInput(t, provider.seen)
+	if len(first.Catalog.Entries) != 1 || first.Catalog.Entries[0].Tag != "project-a" || len(first.Facts) != 0 {
+		t.Fatalf("fresh registered A was not processed catalog-only: %#v", first)
+	}
+	if !catalogHasEvidence(first, "Original summary A.") {
+		t.Fatal("summary-only registration was not retained as original declaration evidence")
+	}
+	wire, err := BuildRequest(cfg.Profiles["local"], first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{"owner-a", createdA.ProjectID, "repo:project-a"} {
+		if strings.Contains(string(wire), private) {
+			t.Fatalf("private registration identity reached provider: %q", private)
+		}
+	}
+	activeAfterA, hashAfterA, err := contextcatalog.LoadActive(catalogDir)
+	if err != nil || len(activeAfterA.Entries) != len(beforeA.Entries) {
+		t.Fatalf("catalog-only review changed catalog: %v", err)
+	}
+	initialHash, err := contextcatalog.Hash(beforeA)
+	if err != nil || hashAfterA != initialHash {
+		t.Fatal("catalog-only review published a catalog change")
+	}
+
+	createdB, err := contextcatalog.EnsureProject(catalogDir, "owner-a", registration("repo:project-b", "project-b", "Original summary B."))
+	if err != nil || createdB.Status != "created" {
+		t.Fatalf("register B: %#v %v", createdB, err)
+	}
+	update := registration("repo:project-b", "project-b", "Proposed but not active summary B.")
+	proposed, err := contextcatalog.EnsureProject(catalogDir, "owner-a", update)
+	if err != nil || proposed.Status != "proposed_update" {
+		t.Fatalf("changed declaration should remain proposal-only: %#v %v", proposed, err)
+	}
+	createdC, err := contextcatalog.EnsureProject(catalogDir, "owner-a", registration("repo:project-c", "project-c", "Revoked summary C."))
+	if err != nil || createdC.Status != "created" {
+		t.Fatalf("register C: %#v %v", createdC, err)
+	}
+
+	active, _, err := contextcatalog.LoadActive(catalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manual := contextcatalog.Entry{Namespace: "projects", Tag: "manual-static", Name: "Manual card", Summary: "Manual summary.", ReviewStatus: "declared", DescriptionSource: "manual"}
+	draft := contextcatalog.Entry{Namespace: "projects", Tag: "draft-static", Name: "Draft card", Summary: "Draft summary.", ReviewStatus: "draft"}
+	unresolved := contextcatalog.Entry{Namespace: "projects", Tag: "unresolved-static", Name: "Unresolved card", Summary: "Unresolved summary.", ReviewStatus: "unresolved"}
+	invalid := contextcatalog.Entry{Namespace: "projects", Tag: "invalid-static", Name: "Invalid registered identity", Summary: "Invalid summary.", ReviewStatus: "declared", ProjectID: strings.Repeat("a", 64), ProjectKey: "repo:invalid", Owner: "owner-a", DescriptionSource: "client_declared", DeclaredSummary: "Invalid summary.", ClientEvidence: []contextcatalog.Evidence{{Kind: "client_readme", Text: "Not a valid digest binding."}}}
+	admissionProbe := active
+	admissionProbe.Entries = append(append([]contextcatalog.Entry(nil), active.Entries...), manual, draft, unresolved, invalid)
+	w.cfg.Egress.DeniedProjectTags = []string{"project-c"}
+	w.catalog.cfg.Egress.DeniedProjectTags = []string{"project-c"}
+	eligible := admittedCatalogEntries(admissionProbe, w.cfg)
+	got := make([]string, 0, len(eligible))
+	for _, entry := range eligible {
+		got = append(got, entry.Tag)
+	}
+	if strings.Join(got, ",") != "project-a,project-b" {
+		t.Fatalf("registered admission ignored identity/review/deny boundaries: %v", got)
+	}
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	second := receiveCatalogInput(t, provider.seen)
+	if len(second.Catalog.Entries) != 1 || second.Catalog.Entries[0].Tag != "project-b" {
+		t.Fatalf("same worker did not discover newly registered B: %#v", second.Catalog.Entries)
+	}
+	if !catalogHasEvidence(second, "Original summary B.") || catalogHasEvidence(second, "Proposed but not active summary B.") {
+		t.Fatal("proposed update replaced the active original declaration")
+	}
+	if len(second.Facts) != 0 || len(second.CatalogEvidence) == 0 {
+		t.Fatal("registered catalog-only request read facts or omitted original evidence")
+	}
+	activeAfterB, hashAfterB, err := contextcatalog.LoadActive(catalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hashAfterB == "" || !containsTag(activeAfterB.Entries, "project-a") || !containsTag(activeAfterB.Entries, "project-b") {
+		t.Fatal("review-only processing unexpectedly changed registration state")
+	}
+
+	createdD, err := contextcatalog.EnsureProject(catalogDir, "owner-a", registration("repo:project-d", "project-d", "Original summary D."))
+	if err != nil || createdD.Status != "created" {
+		t.Fatalf("register D: %#v %v", createdD, err)
+	}
+	beforeStale := proposalCount(t, filepath.Join(stateDir, "maintenance", "proposals"))
+	provider.after = func(Input) {
+		provider.after = nil
+		current, currentHash, loadErr := contextcatalog.LoadActive(catalogDir)
+		if loadErr != nil {
+			t.Errorf("load catalog during callback: %v", loadErr)
+			return
+		}
+		for i := range current.Entries {
+			if current.Entries[i].Tag == "project-d" {
+				current.Entries[i].Owner = "revoked-owner"
+			}
+		}
+		current.ParentHash = currentHash
+		if _, publishErr := contextcatalog.Publish(catalogDir, current, currentHash); publishErr != nil {
+			t.Errorf("revoke D during callback: %v", publishErr)
+		}
+	}
+	if err := w.RunOnce(context.Background()); err == nil {
+		t.Fatal("source revocation during inference was accepted")
+	}
+	_ = receiveCatalogInput(t, provider.seen)
+	if afterStale := proposalCount(t, filepath.Join(stateDir, "maintenance", "proposals")); afterStale != beforeStale {
+		t.Fatalf("stale inference receipt persisted after revocation: %d -> %d", beforeStale, afterStale)
+	}
+}
+
+func catalogHasEvidence(input Input, text string) bool {
+	for _, evidence := range input.CatalogEvidence {
+		if evidence.Text == text {
+			return true
+		}
+	}
+	return false
+}
+
+func receiveCatalogInput(t *testing.T, inputs <-chan Input) Input {
+	t.Helper()
+	select {
+	case input := <-inputs:
+		return input
+	case <-time.After(2 * time.Second):
+		t.Fatal("catalog maintenance provider was not called")
+		return Input{}
+	}
+}
+
+func containsTag(entries []contextcatalog.Entry, tag string) bool {
+	for _, entry := range entries {
+		if entry.Tag == tag {
+			return true
+		}
+	}
+	return false
+}
+
+func proposalCount(t *testing.T, dir string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), "proposal-") && strings.HasSuffix(entry.Name(), ".json") {
+			count++
+		}
+	}
+	return count
+}
+
+func newRegisteredCatalogWorker(t *testing.T, max int) (*Worker, *fakeProvider, aipolicy.Config) {
+	t.Helper()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := workerConfig(t, filepath.Join(root, "catalog"), filepath.Join(root, "state"))
+	cfg.Maintenance.Scope = "catalog_only"
+	cfg.Maintenance.ProjectPolicy = "registered"
+	cfg.Maintenance.CatalogPublish = "review"
+	cfg.Maintenance.MaxProjectsPerRun = max
+	cfg.Egress = aipolicy.Egress{AllowedNamespaces: []string{"projects"}, AllowedProjectTags: []string{"project-a", "project-b", "project-z"}}
+	budget, err := aipolicy.NewBudget(filepath.Join(cfg.StateDir, "budget"), cfg.Limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &fakeProvider{seen: make(chan Input, 4), result: func(in Input) Proposal {
+		return Proposal{SchemaVersion: 1, BaseCatalogHash: in.baseCatalogHash, Grouping: []GroupingProposal{}, MissingEvidence: []string{}}
+	}}
+	w, err := NewWorker(cfg, nil, provider, budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return w, provider, cfg
+}
+
+func ensureRegisteredFixture(t *testing.T, catalogDir, owner, key, tag string) contextcatalog.Entry {
+	t.Helper()
+	result, err := contextcatalog.EnsureProject(catalogDir, owner, contextcatalog.RegistrationInput{
+		ProjectKey: key, Namespace: "projects", Name: tag, Tag: tag, Summary: "Original summary for " + tag,
+		Evidence: []contextcatalog.Evidence{{Kind: "client_readme", Text: "Original evidence for " + tag}},
+	})
+	if err != nil || result.Status != "created" {
+		t.Fatalf("register %s: %#v %v", tag, result, err)
+	}
+	snapshot, _, err := contextcatalog.LoadActive(catalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range snapshot.Entries {
+		if entry.Tag == tag {
+			return entry
+		}
+	}
+	t.Fatalf("registered entry %s missing", tag)
+	return contextcatalog.Entry{}
+}
+
+func TestRegisteredSourceRevalidationSortsAndIgnoresUnselectedBlockedProjection(t *testing.T) {
+	w, provider, cfg := newRegisteredCatalogWorker(t, 1)
+	ensureRegisteredFixture(t, cfg.CatalogDir, "owner-b", "repo:project-b", "project-b")
+	ensureRegisteredFixture(t, cfg.CatalogDir, "owner-a", "repo:project-a", "project-a")
+	ensureRegisteredFixture(t, cfg.CatalogDir, "owner-z", "repo:project-z", "project-z")
+	current, base, err := contextcatalog.LoadActive(cfg.CatalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range current.Entries {
+		if current.Entries[i].Tag == "project-z" {
+			current.Entries[i].DeclaredSummary = current.Entries[i].Summary
+			current.Entries[i].DescriptionSource = "model_derived"
+			current.Entries[i].Summary = "Generated description without a retained projection receipt"
+		}
+	}
+	current.ParentHash = base
+	if _, err := contextcatalog.Publish(cfg.CatalogDir, current, base); err != nil {
+		t.Fatal(err)
+	}
+	if !contextcatalog.RegisteredIdentity(current.Entries[2]) {
+		t.Fatal("unselected model-derived fixture lacks a genuine retained original")
+	}
+	restored, blocked, err := w.catalog.restorePublishedOriginals(current, admittedCatalogEntries(current, cfg))
+	if err != nil || !blocked["projects/project-z"] || !containsTag(restored, "project-z") {
+		t.Fatalf("unselected model-derived card did not exercise blocked projection fallback: blocked=%v restored=%v err=%v", blocked, containsTag(restored, "project-z"), err)
+	}
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	input := receiveCatalogInput(t, provider.seen)
+	if len(input.Catalog.Entries) != 1 || input.Catalog.Entries[0].Tag != "project-a" {
+		t.Fatalf("unexpected first stable batch: %#v", input.Catalog.Entries)
+	}
+}
+
+func TestRegisteredProjectionRejectsCachedManualOriginal(t *testing.T) {
+	w, _, cfg := newRegisteredCatalogWorker(t, 1)
+	original := ensureRegisteredFixture(t, cfg.CatalogDir, "owner-a", "repo:project-a", "project-a")
+	current, _, err := contextcatalog.LoadActive(cfg.CatalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := current.Entries[0]
+	live.DescriptionSource = "model_derived"
+	live.DeclaredSummary = original.Summary
+	live.Summary = "Generated live description"
+	hash, err := catalogEntryHash(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manual := original
+	manual.DescriptionSource = "manual"
+	if err := w.catalog.saveProjectionCache(catalogProjectionCache{SchemaVersion: 1, Entries: []catalogProjectionRecord{{Namespace: live.Namespace, Tag: live.Tag, Original: manual, LiveHashes: []string{hash}}}}); err != nil {
+		t.Fatal(err)
+	}
+	restored, blocked, err := w.catalog.restorePublishedOriginals(current, []contextcatalog.Entry{live})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restored) != 0 || !blocked[cardKey(live)] {
+		t.Fatalf("registered projection inherited a manual original: restored=%#v blocked=%v", restored, blocked)
+	}
+}
+
+func TestRegisteredModeImportsLegacyOriginalReceiptWithoutProjectionCache(t *testing.T) {
+	w, _, cfg := newRegisteredCatalogWorker(t, 1)
+	original := ensureRegisteredFixture(t, cfg.CatalogDir, "owner-a", "repo:project-a", "project-a")
+	originalSnapshot, base, err := contextcatalog.LoadActive(cfg.CatalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := originalSnapshot
+	current.Entries = append([]contextcatalog.Entry(nil), originalSnapshot.Entries...)
+	current.Entries[0].DescriptionSource = "model_derived"
+	current.Entries[0].DeclaredSummary = original.Summary
+	current.Entries[0].Summary = "Published generated description"
+	current.ParentHash = base
+	if _, err := contextcatalog.Publish(cfg.CatalogDir, current, base); err != nil {
+		t.Fatal(err)
+	}
+	live, _, err := contextcatalog.LoadActive(cfg.CatalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveHash, err := catalogEntryHash(live.Entries[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contextcatalog.Validate(originalSnapshot) != nil || !contextcatalog.RegisteredIdentity(original) || !sameCatalogSourceIdentity(original, live.Entries[0]) || !contextcatalog.RegisteredIdentity(live.Entries[0]) {
+		t.Fatalf("legacy receipt fixture has invalid source binding: original_valid=%v live_valid=%v source_matches=%v", contextcatalog.RegisteredIdentity(original), contextcatalog.RegisteredIdentity(live.Entries[0]), sameCatalogSourceIdentity(original, live.Entries[0]))
+	}
+	legacyReceipt := privateProposal{SchemaVersion: 1, CatalogOriginalAll: &originalSnapshot, CatalogPublished: []privateCatalogPublished{{Namespace: original.Namespace, Tag: original.Tag, EntryHash: liveHash}}}
+	if _, err := w.catalog.proposalWorker.saveProposal(legacyReceipt); err != nil {
+		t.Fatal(err)
+	}
+	cache, changed, err := w.catalog.importReceiptProjections(live, catalogProjectionCache{SchemaVersion: 1, Entries: []catalogProjectionRecord{}})
+	if err != nil || !changed || len(cache.Entries) != 1 {
+		t.Fatalf("legacy original receipt was not imported: changed=%v cache=%#v err=%v", changed, cache, err)
+	}
+	if cache.Entries[0].Original.DescriptionSource != "client_declared" || !contextcatalog.RegisteredIdentity(cache.Entries[0].Original) {
+		t.Fatal("legacy receipt recovery lost the validated client original")
+	}
+}
+
 func TestCatalogOnlyUsesCompleteFairBatchesAndRestartDeduplicates(t *testing.T) {
 	w, p, cfg, _ := setupCatalogOnly(t, 32, 4, "local")
 	if err := w.RunOnce(context.Background()); err != nil {
@@ -1162,5 +1586,70 @@ func TestCatalogOnlyProjectionWriteFailurePreservesInferenceReceipt(t *testing.T
 	}
 	if active.Entries[0].DescriptionSource != "model_derived" {
 		t.Fatal("reused receipt did not publish after projection recovery")
+	}
+}
+
+func TestRegisteredReviewAcceptsUnchangedSourcesAfterUnrelatedCatalogEdit(t *testing.T) {
+	for _, kind := range []string{"denied", "manual", "non-project"} {
+		t.Run(kind, func(t *testing.T) {
+			w, provider, cfg := newRegisteredCatalogWorker(t, 1)
+			ensureRegisteredFixture(t, cfg.CatalogDir, "owner-a", "repo:project-a", "project-a")
+			if kind == "denied" {
+				ensureRegisteredFixture(t, cfg.CatalogDir, "owner-z", "repo:project-z", "project-z")
+				w.cfg.Egress.DeniedProjectTags = []string{"project-z"}
+				w.catalog.cfg.Egress.DeniedProjectTags = []string{"project-z"}
+			} else {
+				snapshot, base, err := contextcatalog.LoadActive(cfg.CatalogDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				entry := contextcatalog.Entry{Namespace: "projects", Tag: "project-z", Name: "Unrelated", Summary: "Original unrelated summary.", ReviewStatus: "declared", DescriptionSource: "manual"}
+				if kind == "non-project" {
+					entry.Namespace = "tech"
+				}
+				snapshot.Entries = append(snapshot.Entries, entry)
+				snapshot.ParentHash = base
+				if _, err := contextcatalog.Publish(cfg.CatalogDir, snapshot, base); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, before, err := contextcatalog.LoadActive(cfg.CatalogDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			provider.after = func(Input) {
+				snapshot, base, err := contextcatalog.LoadActive(cfg.CatalogDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for i := range snapshot.Entries {
+					if snapshot.Entries[i].Tag == "project-z" {
+						snapshot.Entries[i].Summary = "Updated unrelated summary."
+					}
+				}
+				snapshot.ParentHash = base
+				if _, err := contextcatalog.Publish(cfg.CatalogDir, snapshot, base); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := w.RunOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			in := receiveCatalogInput(t, provider.seen)
+			if len(in.Catalog.Entries) != 1 || in.Catalog.Entries[0].Tag != "project-a" {
+				t.Fatal("unrelated entry reached provider")
+			}
+			_, after, err := contextcatalog.LoadActive(cfg.CatalogDir)
+			if err != nil || before == after {
+				t.Fatal("test did not change catalog generation")
+			}
+			status, err := ReadCatalogStatus(cfg)
+			if err != nil || status.LastOutcome != "proposed" || status.Completed != 1 {
+				t.Fatalf("unchanged admitted sources not completed: %#v %v", status, err)
+			}
+			if proposalCount(t, filepath.Join(cfg.StateDir, "maintenance", "proposals")) != 1 {
+				t.Fatal("review receipt missing")
+			}
+		})
 	}
 }
