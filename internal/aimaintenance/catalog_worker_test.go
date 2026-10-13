@@ -769,7 +769,7 @@ func TestCatalogOnlyReceiptFilenameChecksumIsEnforced(t *testing.T) {
 	if err := os.WriteFile(path, corrupt, 0600); err != nil {
 		t.Fatal(err)
 	}
-	_, _, _, found := w.catalog.findReceipt(w.catalog.receiptKey(in), in, in.Catalog, in.baseCatalogHash)
+	_, _, _, _, found := w.catalog.findReceipt(w.catalog.receiptKey(in), in, in.Catalog, in.baseCatalogHash)
 	if found {
 		t.Fatal("modified receipt accepted under its old checksum filename")
 	}

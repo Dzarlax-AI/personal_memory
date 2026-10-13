@@ -37,15 +37,17 @@ type catalogWorkerState struct {
 
 // CatalogStatus is deliberately content-free and safe for an operator status command.
 type CatalogStatus struct {
-	Enabled        bool   `json:"enabled"`
-	Scope          string `json:"scope"`
-	Model          string `json:"model,omitempty"`
-	LastDispatchAt string `json:"last_dispatch_at,omitempty"`
-	LastOutcome    string `json:"last_outcome,omitempty"`
-	ReasonCode     string `json:"reason_code,omitempty"`
-	Queued         int    `json:"queued"`
-	Completed      int    `json:"completed"`
-	Skipped        int    `json:"skipped"`
+	Enabled             bool   `json:"enabled"`
+	Scope               string `json:"scope"`
+	Model               string `json:"model,omitempty"`
+	LastDispatchAt      string `json:"last_dispatch_at,omitempty"`
+	LastOutcome         string `json:"last_outcome,omitempty"`
+	ReasonCode          string `json:"reason_code,omitempty"`
+	Queued              int    `json:"queued"`
+	Completed           int    `json:"completed"`
+	Skipped             int    `json:"skipped"`
+	LatestRunID         string `json:"latest_run_id,omitempty"`
+	HistoryAvailability string `json:"history_availability"`
 }
 
 type catalogWorker struct {
@@ -84,6 +86,9 @@ func (w *catalogWorker) RunOnce(ctx context.Context) error {
 	}
 	if state.NextAllowedAt != "" {
 		if at, e := time.Parse(time.RFC3339Nano, state.NextAllowedAt); e == nil && time.Now().Before(at) {
+			if r := recorderFrom(ctx); r != nil {
+				r.hint("skipped", "backoff")
+			}
 			state.LastOutcome = "backoff"
 			state.LastReason = "backoff_active"
 			state.LastQueued, state.LastCompleted = 0, 0
@@ -106,6 +111,9 @@ func (w *catalogWorker) RunOnce(ctx context.Context) error {
 		return err
 	}
 	if len(cards) == 0 {
+		if r := recorderFrom(ctx); r != nil {
+			r.hint("skipped", "no_eligible")
+		}
 		state.LastOutcome, state.LastReason = "no_eligible_cards", "no_eligible_cards"
 		state.LastQueued, state.LastCompleted, state.LastSkipped = 0, 0, 0
 		return w.save(state)
@@ -180,14 +188,28 @@ func (w *catalogWorker) RunOnce(ctx context.Context) error {
 		selected = append(selected, card)
 	}
 	state.LastQueued, state.LastCompleted, state.LastSkipped = len(selected), 0, skipped
+	if r := recorderFrom(ctx); r != nil {
+		r.projectsQueued.Store(int32(len(selected)))
+		r.projectsSkipped.Store(int32(skipped))
+		r.countsKnown.Store(true)
+		if err := r.event(runEvent{Type: "selection_summary", Count: len(selected), CountSkipped: skipped, CountFacts: 0}); err != nil {
+			return err
+		}
+	}
 	if len(selected) == 0 {
 		state.Fingerprints = newFingerprints
 		if skipped > 0 {
+			if r := recorderFrom(ctx); r != nil {
+				r.hint("skipped", "evidence_skip")
+			}
 			state.LastOutcome, state.LastReason = "skipped", "evidence_unavailable"
 			if projectionUnavailable {
 				state.LastReason = "source_projection_unavailable"
 			}
 		} else {
+			if r := recorderFrom(ctx); r != nil {
+				r.hint("skipped", "no_changes")
+			}
 			state.LastOutcome, state.LastReason = "no_changes", "no_changes"
 		}
 		return w.save(state)
@@ -197,10 +219,16 @@ func (w *catalogWorker) RunOnce(ctx context.Context) error {
 	var proposal Proposal
 	var artifact privateProposal
 	alreadyPublished := false
-	if existing, name, complete, found := w.findReceipt(receipt, input, cat, base); found {
+	if existing, name, receiptRaw, complete, found := w.findReceipt(receipt, input, cat, base); found {
 		artifact, proposal = existing, existing.Proposal
 		state.LatestProposal = name
 		alreadyPublished = complete
+		if err := recordDraftIntent(ctx, name, receiptRaw); err != nil {
+			return err
+		}
+		if err := recordDraftRef(ctx, name, receiptRaw, true); err != nil {
+			return err
+		}
 	} else {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -222,7 +250,7 @@ func (w *catalogWorker) RunOnce(ctx context.Context) error {
 		}
 		var usage aijudgment.Usage
 		var callErr error
-		proposal, usage, callErr = w.provider.Propose(ctx, input)
+		proposal, usage, callErr = w.proposalWorker.proposeWithHistory(ctx, input, w.provider)
 		reservation.Finish(usage.InputTokens, usage.Known)
 		if callErr != nil {
 			return callErr
@@ -245,12 +273,18 @@ func (w *catalogWorker) RunOnce(ctx context.Context) error {
 			publishedProjection = expectedCatalogPublication(input, proposal, cat)
 		}
 		artifact = privateProposal{SchemaVersion: 1, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), ProviderProtocol: w.cfg.Profiles[w.cfg.Maintenance.Profile].Protocol, Model: w.cfg.Profiles[w.cfg.Maintenance.Profile].Model, MaintenancePolicy: w.cfg.Maintenance.ProjectPolicy, RelationshipInstructions: maintenanceRelationshipInstructionsIdentity(), BaseCatalogHash: base, Proposal: proposal, CatalogDependencies: catalogDependenciesFor(input), CatalogReceiptKey: receipt, CatalogOriginal: snapshotOf(input.Catalog), CatalogOriginalAll: snapshotOf(contextcatalog.Snapshot{SchemaVersion: cat.SchemaVersion, Version: cat.Version, ParentHash: cat.ParentHash, CreatedAt: cat.CreatedAt, Entries: cards}), CatalogPublished: publishedProjection}
-		name, err := w.proposalWorker.saveProposal(artifact)
+		name, err := w.proposalWorker.saveProposalTracked(ctx, artifact)
 		if err != nil {
 			// If the proposal file landed but a later operation failed, findReceipt is the recovery path.
 			return err
 		}
 		state.LatestProposal = name
+	}
+	if r := recorderFrom(ctx); r != nil {
+		if err := r.event(runEvent{Type: "projects_completed", Count: len(selected)}); err != nil {
+			return err
+		}
+		r.projectsCompleted.Store(int32(len(selected)))
 	}
 	if artifact.MaintenancePolicy != w.cfg.Maintenance.ProjectPolicy || artifact.RelationshipInstructions != maintenanceRelationshipInstructionsIdentity() || (w.cfg.Maintenance.ProjectPolicy == "registered" && !w.catalogSourcesCurrent(cards)) {
 		return errCatalogSourcesChanged
@@ -663,10 +697,10 @@ func cloneFingerprints(in map[string]string) map[string]string {
 	return out
 }
 
-func (w *catalogWorker) findReceipt(key string, input Input, current contextcatalog.Snapshot, base string) (privateProposal, string, bool, bool) {
+func (w *catalogWorker) findReceipt(key string, input Input, current contextcatalog.Snapshot, base string) (privateProposal, string, []byte, bool, bool) {
 	entries, err := os.ReadDir(filepath.Join(w.proposalWorker.dir, "proposals"))
 	if err != nil || len(entries) > maxProposalFiles {
-		return privateProposal{}, "", false, false
+		return privateProposal{}, "", nil, false, false
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
@@ -688,13 +722,13 @@ func (w *catalogWorker) findReceipt(key string, input Input, current contextcata
 			continue
 		}
 		if p.BaseCatalogHash == base {
-			return p, e.Name(), false, true
+			return p, e.Name(), raw, false, true
 		}
 		if catalogPublicationMatches(current, p.CatalogPublished) {
-			return p, e.Name(), true, true
+			return p, e.Name(), raw, true, true
 		}
 	}
-	return privateProposal{}, "", false, false
+	return privateProposal{}, "", nil, false, false
 }
 
 func inputCatalogContext(input Input) []contextcatalog.Entry { return input.contextEntries }
@@ -892,6 +926,22 @@ func ReadCatalogStatus(cfg aipolicy.Config) (CatalogStatus, error) {
 		return CatalogStatus{}, errors.New("catalog maintenance status unavailable")
 	}
 	status := CatalogStatus{Enabled: cfg.Maintenance.Enabled, Scope: cfg.Maintenance.Scope}
+	status.HistoryAvailability = "missing"
+	if cfg.StateDir == "" {
+		status.HistoryAvailability = "unavailable"
+	} else if page, err := (&historyStore{dir: filepath.Join(cfg.StateDir, "maintenance-runs")}).Read(1, "", ""); err == nil {
+		status.HistoryAvailability = page.Availability
+		if len(page.Runs) > 0 {
+			status.LatestRunID = page.Runs[0].RunID
+			if strings.HasPrefix(page.Runs[0].HistoryStatus, "corrupt") || strings.HasPrefix(page.Runs[0].HistoryStatus, "missing") {
+				status.HistoryAvailability = "corrupt"
+			} else if page.Runs[0].HistoryStatus == "unfinished" {
+				status.HistoryAvailability = "incomplete"
+			}
+		}
+	} else {
+		status.HistoryAvailability = "unavailable"
+	}
 	if cfg.Maintenance.Profile != "" {
 		status.Model = cfg.Profiles[cfg.Maintenance.Profile].Model
 	}
