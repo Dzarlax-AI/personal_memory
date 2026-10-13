@@ -18,7 +18,7 @@ func TestOffDoesNotReadProfile(t *testing.T) {
 func TestMaintenanceScopeDefaultsAndCatalogLimits(t *testing.T) {
 	c := Off()
 	c.Defaults()
-	if c.Maintenance.Scope != "facts_and_catalog" || c.Maintenance.MaxProjectsPerRun != 4 || c.Maintenance.Enabled {
+	if c.Maintenance.Scope != "facts_and_catalog" || c.Maintenance.ProjectPolicy != "explicit" || c.Maintenance.MaxProjectsPerRun != 4 || c.Maintenance.Enabled {
 		t.Fatalf("unexpected compatibility defaults: %#v", c.Maintenance)
 	}
 	c.CatalogDir, c.StateDir = "catalog", "state"
@@ -31,6 +31,35 @@ func TestMaintenanceScopeDefaultsAndCatalogLimits(t *testing.T) {
 	c.Maintenance.MaxProjectsPerRun = 33
 	if err := c.Validate(); err == nil {
 		t.Fatal("project batch limit above 32 accepted")
+	}
+}
+
+func TestMaintenanceRegisteredProjectPolicyIsReviewOnly(t *testing.T) {
+	c := Off()
+	c.CatalogDir, c.StateDir = "catalog", "state"
+	c.Maintenance = Maintenance{Enabled: true, Profile: "m", ProjectPolicy: "registered", IntervalSeconds: 60, MaxFactsPerRun: 50, Scope: "catalog_only", MaxProjectsPerRun: 4, CatalogPublish: "review", GroupingApply: "manual"}
+	c.Profiles = map[string]Profile{"m": {Protocol: "openai-compatible-chat", Model: "operator/custom", Endpoint: "http://localhost:11434/v1", Local: true}}
+	c.Egress = Egress{AllowedNamespaces: []string{"projects"}}
+	c.Limits = Limits{DailyCalls: 10, DailyInputTokens: 2_000_000, ReservationTokens: 131_072}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("registered review-only config rejected: %v", err)
+	}
+	c.Maintenance.ProjectPolicy = "automatic"
+	if err := c.Validate(); err == nil {
+		t.Fatal("unknown maintenance project policy accepted")
+	}
+	for _, combination := range []struct{ scope, publish string }{{"facts_and_catalog", "review"}, {"catalog_only", "evidence_bounded"}} {
+		c.Maintenance.ProjectPolicy = "registered"
+		c.Maintenance.Scope, c.Maintenance.CatalogPublish = combination.scope, combination.publish
+		if err := c.Validate(); err == nil {
+			t.Fatalf("unsafe registered maintenance combination accepted: %#v", combination)
+		}
+	}
+	// An omitted policy stays compatible with the previous explicit behavior.
+	c.Maintenance.ProjectPolicy = ""
+	c.Maintenance.Scope, c.Maintenance.CatalogPublish = "facts_and_catalog", "evidence_bounded"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("omitted policy lost legacy compatibility: %v", err)
 	}
 }
 func TestEightCombinations(t *testing.T) {
@@ -307,6 +336,28 @@ func TestScopedPreparationRefusesUnassignedWrites(t *testing.T) {
 	}
 	if c.Write.Admission != "client_opt_in" || c.Egress.Allows("projects", nil) || len(c.Egress.AllowedProjectTags) != 0 {
 		t.Fatal("preparation configuration permits unapproved unassigned writes")
+	}
+}
+
+func TestCatalogMaintenanceExampleLoadsDisabledAndReviewOnly(t *testing.T) {
+	raw, err := os.ReadFile("../../docs/examples/catalog-maintenance.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "catalog-maintenance.json")
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Maintenance.Enabled || c.Maintenance.ProjectPolicy != "registered" || c.Maintenance.Scope != "catalog_only" || c.Maintenance.CatalogPublish != "review" || len(c.Egress.AllowedProjectTags) != 0 {
+		t.Fatalf("catalog maintenance example is not disabled registered review mode: %#v", c.Maintenance)
 	}
 }
 

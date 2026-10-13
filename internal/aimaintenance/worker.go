@@ -53,21 +53,23 @@ type workerState struct {
 	LastRunAt            string                `json:"last_run_at,omitempty"`
 }
 type privateProposal struct {
-	SchemaVersion        int                        `json:"schema_version"`
-	CreatedAt            string                     `json:"created_at"`
-	ProviderProtocol     string                     `json:"provider_protocol"`
-	Model                string                     `json:"model"`
-	BaseCatalogHash      string                     `json:"base_catalog_hash"`
-	BindingHash          string                     `json:"binding_hash"`
-	Proposal             Proposal                   `json:"proposal"`
-	Dependencies         []privateDependency        `json:"dependencies"`
-	CatalogDependencies  []privateCatalogDependency `json:"catalog_dependencies,omitempty"`
-	Manifest             factgrouping.Manifest      `json:"grouping_manifest"`
-	EvidenceInferenceKey string                     `json:"evidence_inference_key,omitempty"`
-	CatalogReceiptKey    string                     `json:"catalog_receipt_key,omitempty"`
-	CatalogOriginal      *contextcatalog.Snapshot   `json:"catalog_original,omitempty"`
-	CatalogOriginalAll   *contextcatalog.Snapshot   `json:"catalog_original_context,omitempty"`
-	CatalogPublished     []privateCatalogPublished  `json:"catalog_published,omitempty"`
+	SchemaVersion            int                        `json:"schema_version"`
+	CreatedAt                string                     `json:"created_at"`
+	ProviderProtocol         string                     `json:"provider_protocol"`
+	Model                    string                     `json:"model"`
+	MaintenancePolicy        string                     `json:"maintenance_project_policy,omitempty"`
+	RelationshipInstructions string                     `json:"relationship_instructions,omitempty"`
+	BaseCatalogHash          string                     `json:"base_catalog_hash"`
+	BindingHash              string                     `json:"binding_hash"`
+	Proposal                 Proposal                   `json:"proposal"`
+	Dependencies             []privateDependency        `json:"dependencies"`
+	CatalogDependencies      []privateCatalogDependency `json:"catalog_dependencies,omitempty"`
+	Manifest                 factgrouping.Manifest      `json:"grouping_manifest"`
+	EvidenceInferenceKey     string                     `json:"evidence_inference_key,omitempty"`
+	CatalogReceiptKey        string                     `json:"catalog_receipt_key,omitempty"`
+	CatalogOriginal          *contextcatalog.Snapshot   `json:"catalog_original,omitempty"`
+	CatalogOriginalAll       *contextcatalog.Snapshot   `json:"catalog_original_context,omitempty"`
+	CatalogPublished         []privateCatalogPublished  `json:"catalog_published,omitempty"`
 }
 
 type privateCatalogPublished struct {
@@ -318,7 +320,7 @@ func (w *Worker) runOnce(ctx context.Context) error {
 	selected.Facts = input.Facts[:processCount]
 	evidenceKey := w.evidenceInferenceKey(selected.CatalogEvidence)
 	evidenceOnly := len(selected.Facts) == 0 && len(selected.CatalogEvidence) > 0 && evidenceKey != state.EvidenceInferenceKey
-	if evidenceOnly && w.hasEvidenceProposal(evidenceKey) {
+	if evidenceOnly && w.hasEvidenceProposal(evidenceKey, bindingHash) {
 		state.EvidenceInferenceKey = evidenceKey
 		evidenceOnly = false
 	}
@@ -334,6 +336,9 @@ func (w *Worker) runOnce(ctx context.Context) error {
 		reservation.Finish(usage.InputTokens, usage.Known)
 		if callErr != nil {
 			return callErr
+		}
+		if !w.catalogSourcesCurrent(catHash, selected) {
+			return errors.New("maintenance catalog sources changed during processing")
 		}
 		if err := validateProposal(selected, proposal); err != nil {
 			return err
@@ -439,8 +444,9 @@ func (w *Worker) recordOutcome(outcome string) {
 
 func (w *Worker) makeInput(points []qdrant.ScrollPoint, catalog contextcatalog.Snapshot, catalogHash string, state workerState, processed map[string]bool) (Input, map[string]qdrant.ScrollPoint, map[string]factRecord, []string) {
 	filteredCatalog := contextcatalog.Snapshot{SchemaVersion: catalog.SchemaVersion, Version: catalog.Version, ParentHash: catalog.ParentHash, CreatedAt: catalog.CreatedAt, Entries: []contextcatalog.Entry{}}
+	registeredTags := registeredTagsForCards(catalog.Entries, w.cfg)
 	for _, e := range catalog.Entries {
-		if contextcatalog.Eligible(e) && e.Namespace == "projects" && w.cfg.Egress.Allows(e.Namespace, []string{e.Tag}) {
+		if maintenanceAdmits(e, w.cfg, registeredTags) {
 			filteredCatalog.Entries = append(filteredCatalog.Entries, e)
 		}
 	}
@@ -555,12 +561,14 @@ func (w *Worker) evidenceInferenceKey(evidence []CatalogEvidence) string {
 	}
 	profile := w.cfg.Profiles[w.cfg.Maintenance.Profile]
 	identity := struct {
-		Profile   aipolicy.Profile  `json:"profile"`
-		Publish   string            `json:"catalog_publish"`
-		Egress    aipolicy.Egress   `json:"egress"`
-		Evidence  []CatalogEvidence `json:"evidence"`
-		SourceIDs []string          `json:"source_ids"`
-	}{profile, w.cfg.Maintenance.CatalogPublish, w.cfg.Egress, evidence, catalogEvidenceSourceIDs(evidence)}
+		Profile                  aipolicy.Profile  `json:"profile"`
+		Publish                  string            `json:"catalog_publish"`
+		Egress                   aipolicy.Egress   `json:"egress"`
+		MaintenancePolicy        string            `json:"maintenance_project_policy"`
+		RelationshipInstructions string            `json:"relationship_instructions"`
+		Evidence                 []CatalogEvidence `json:"evidence"`
+		SourceIDs                []string          `json:"source_ids"`
+	}{profile, w.cfg.Maintenance.CatalogPublish, w.cfg.Egress, w.cfg.Maintenance.ProjectPolicy, maintenanceRelationshipInstructionsIdentity(), evidence, catalogEvidenceSourceIDs(evidence)}
 	raw, _ := json.Marshal(identity)
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
@@ -749,7 +757,7 @@ func (w *Worker) makePrivateProposal(base string, p Proposal, in Input, points m
 	if err != nil {
 		return privateProposal{}, err
 	}
-	return privateProposal{SchemaVersion: 1, CreatedAt: now, ProviderProtocol: w.cfg.Profiles[w.cfg.Maintenance.Profile].Protocol, Model: w.cfg.Profiles[w.cfg.Maintenance.Profile].Model, BaseCatalogHash: base, BindingHash: bindingHash, Proposal: p, Dependencies: dependencies, CatalogDependencies: catalogDeps, Manifest: manifest}, nil
+	return privateProposal{SchemaVersion: 1, CreatedAt: now, ProviderProtocol: w.cfg.Profiles[w.cfg.Maintenance.Profile].Protocol, Model: w.cfg.Profiles[w.cfg.Maintenance.Profile].Model, MaintenancePolicy: w.cfg.Maintenance.ProjectPolicy, RelationshipInstructions: maintenanceRelationshipInstructionsIdentity(), BaseCatalogHash: base, BindingHash: bindingHash, Proposal: p, Dependencies: dependencies, CatalogDependencies: catalogDeps, Manifest: manifest}, nil
 }
 
 // tryPublishDescription applies a model description only when every source and
@@ -770,10 +778,10 @@ func (w *Worker) tryPublishDescription(ctx context.Context, source contextcatalo
 		return false, nil
 	}
 	allowed := contextcatalog.Snapshot{SchemaVersion: current.SchemaVersion, Version: current.Version, ParentHash: current.ParentHash, CreatedAt: current.CreatedAt, Entries: []contextcatalog.Entry{}}
-	for _, entry := range current.Entries {
-		if contextcatalog.Eligible(entry) && entry.Namespace == "projects" && w.cfg.Egress.Allows(entry.Namespace, []string{entry.Tag}) {
-			allowed.Entries = append(allowed.Entries, entry)
-		}
+	allowed.Entries = admittedCatalogEntries(current, w.cfg)
+	currentBinding, bindingErr := w.bindingHash(currentHash)
+	if bindingErr != nil || private.BindingHash != currentBinding {
+		return false, nil
 	}
 	if !sameCatalogEvidence(makeCatalogEvidence(allowed), in.CatalogEvidence) || !sameSourceEntries(allowed.Entries, in.Catalog.Entries) {
 		return false, nil
@@ -1042,17 +1050,29 @@ func nextCatalogVersion(current, base string, p Proposal) string {
 func (w *Worker) bindingHash(catalogHash string) (string, error) {
 	profile := w.cfg.Profiles[w.cfg.Maintenance.Profile]
 	identity := struct {
-		CatalogHash    string           `json:"catalog_hash"`
-		Profile        aipolicy.Profile `json:"profile"`
-		Egress         aipolicy.Egress  `json:"egress"`
-		CatalogPublish string           `json:"catalog_publish"`
-	}{catalogHash, profile, w.cfg.Egress, w.cfg.Maintenance.CatalogPublish}
+		CatalogHash              string           `json:"catalog_hash"`
+		Profile                  aipolicy.Profile `json:"profile"`
+		Egress                   aipolicy.Egress  `json:"egress"`
+		CatalogPublish           string           `json:"catalog_publish"`
+		MaintenancePolicy        string           `json:"maintenance_project_policy"`
+		RelationshipInstructions string           `json:"relationship_instructions"`
+	}{catalogHash, profile, w.cfg.Egress, w.cfg.Maintenance.CatalogPublish, w.cfg.Maintenance.ProjectPolicy, maintenanceRelationshipInstructionsIdentity()}
 	raw, err := json.Marshal(identity)
 	if err != nil {
 		return "", errors.New("cannot bind maintenance progress")
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func (w *Worker) catalogSourcesCurrent(catalogHash string, input Input) bool {
+	current, currentHash, err := contextcatalog.LoadActive(w.cfg.CatalogDir)
+	if err != nil || currentHash != catalogHash {
+		return false
+	}
+	allowed := admittedCatalogEntries(current, w.cfg)
+	return sameCatalogEvidence(makeCatalogEvidence(contextcatalog.Snapshot{SchemaVersion: current.SchemaVersion, Version: current.Version, ParentHash: current.ParentHash, CreatedAt: current.CreatedAt, Entries: allowed}), input.CatalogEvidence) &&
+		sameSourceEntries(allowed, input.Catalog.Entries)
 }
 
 func contains(a []string, s string) bool {
@@ -1096,7 +1116,7 @@ func (w *Worker) saveProposal(p privateProposal) (string, error) {
 	return name, nil
 }
 
-func (w *Worker) hasEvidenceProposal(key string) bool {
+func (w *Worker) hasEvidenceProposal(key, bindingHash string) bool {
 	if key == "" {
 		return false
 	}
@@ -1113,7 +1133,7 @@ func (w *Worker) hasEvidenceProposal(key string) bool {
 			continue
 		}
 		var proposal privateProposal
-		if json.Unmarshal(raw, &proposal) == nil && proposal.EvidenceInferenceKey == key {
+		if json.Unmarshal(raw, &proposal) == nil && proposal.SchemaVersion == 1 && proposal.EvidenceInferenceKey == key && proposal.BindingHash == bindingHash && proposal.MaintenancePolicy == w.cfg.Maintenance.ProjectPolicy && proposal.RelationshipInstructions == maintenanceRelationshipInstructionsIdentity() {
 			return true
 		}
 	}

@@ -57,6 +57,8 @@ type catalogWorker struct {
 	projectionPath string
 }
 
+var errCatalogSourcesChanged = errors.New("maintenance catalog sources changed during processing")
+
 func newCatalogWorker(cfg aipolicy.Config, provider Provider, budget *aipolicy.Budget, proposalDir string) (*catalogWorker, error) {
 	if !cfg.Maintenance.Enabled || cfg.Maintenance.Scope != "catalog_only" || provider == nil || budget == nil {
 		return nil, errors.New("catalog-only maintenance dependencies are unavailable")
@@ -92,12 +94,7 @@ func (w *catalogWorker) RunOnce(ctx context.Context) error {
 	if err != nil {
 		return errors.New("active context catalog unavailable")
 	}
-	cards := make([]contextcatalog.Entry, 0, len(cat.Entries))
-	for _, e := range cat.Entries {
-		if e.Namespace == "projects" && contextcatalog.Eligible(e) && w.cfg.Egress.Allows(e.Namespace, []string{e.Tag}) {
-			cards = append(cards, e)
-		}
-	}
+	cards := admittedCatalogEntries(cat, w.cfg)
 	sort.Slice(cards, func(i, j int) bool {
 		if cards[i].Namespace == cards[j].Namespace {
 			return cards[i].Tag < cards[j].Tag
@@ -233,17 +230,30 @@ func (w *catalogWorker) RunOnce(ctx context.Context) error {
 		if err := validateProposal(input, proposal); err != nil {
 			return err
 		}
+		// In registered mode, reject a known source change before persisting a
+		// result. An unavailable catalog is different: retain the completed
+		// inference receipt, then require the original source to validate on
+		// recovery before it can be accepted.
+		if w.cfg.Maintenance.ProjectPolicy == "registered" {
+			available, current := w.catalogSourcesState(base, cards)
+			if available && !current {
+				return errCatalogSourcesChanged
+			}
+		}
 		publishedProjection := []privateCatalogPublished(nil)
 		if w.cfg.Maintenance.CatalogPublish == "evidence_bounded" {
 			publishedProjection = expectedCatalogPublication(input, proposal, cat)
 		}
-		artifact = privateProposal{SchemaVersion: 1, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), ProviderProtocol: w.cfg.Profiles[w.cfg.Maintenance.Profile].Protocol, Model: w.cfg.Profiles[w.cfg.Maintenance.Profile].Model, BaseCatalogHash: base, Proposal: proposal, CatalogDependencies: catalogDependenciesFor(input), CatalogReceiptKey: receipt, CatalogOriginal: snapshotOf(input.Catalog), CatalogOriginalAll: snapshotOf(contextcatalog.Snapshot{SchemaVersion: cat.SchemaVersion, Version: cat.Version, ParentHash: cat.ParentHash, CreatedAt: cat.CreatedAt, Entries: cards}), CatalogPublished: publishedProjection}
+		artifact = privateProposal{SchemaVersion: 1, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), ProviderProtocol: w.cfg.Profiles[w.cfg.Maintenance.Profile].Protocol, Model: w.cfg.Profiles[w.cfg.Maintenance.Profile].Model, MaintenancePolicy: w.cfg.Maintenance.ProjectPolicy, RelationshipInstructions: maintenanceRelationshipInstructionsIdentity(), BaseCatalogHash: base, Proposal: proposal, CatalogDependencies: catalogDependenciesFor(input), CatalogReceiptKey: receipt, CatalogOriginal: snapshotOf(input.Catalog), CatalogOriginalAll: snapshotOf(contextcatalog.Snapshot{SchemaVersion: cat.SchemaVersion, Version: cat.Version, ParentHash: cat.ParentHash, CreatedAt: cat.CreatedAt, Entries: cards}), CatalogPublished: publishedProjection}
 		name, err := w.proposalWorker.saveProposal(artifact)
 		if err != nil {
 			// If the proposal file landed but a later operation failed, findReceipt is the recovery path.
 			return err
 		}
 		state.LatestProposal = name
+	}
+	if artifact.MaintenancePolicy != w.cfg.Maintenance.ProjectPolicy || artifact.RelationshipInstructions != maintenanceRelationshipInstructionsIdentity() || (w.cfg.Maintenance.ProjectPolicy == "registered" && !w.catalogSourcesCurrent(base, cards)) {
+		return errCatalogSourcesChanged
 	}
 	// Preserve completed inference before mutable projection storage. A reused
 	// receipt must also persist its original sources before publication.
@@ -529,7 +539,7 @@ func catalogCardFingerprintWithContext(e contextcatalog.Entry, cards []contextca
 	}
 	context := make([]any, 0, len(cards))
 	for _, other := range cards {
-		if other.Namespace != "projects" || !contextcatalog.Eligible(other) || !cfg.Egress.Allows(other.Namespace, []string{other.Tag}) {
+		if !maintenanceAdmits(other, cfg, registeredTagsForCards(cards, cfg)) {
 			continue
 		}
 		declaredOther := other.DeclaredSummary
@@ -541,12 +551,14 @@ func catalogCardFingerprintWithContext(e contextcatalog.Entry, cards []contextca
 	identity := struct {
 		Profile                                                                           aipolicy.Profile `json:"profile"`
 		Publish                                                                           string           `json:"publish"`
+		MaintenancePolicy                                                                 string           `json:"maintenance_project_policy"`
+		RelationshipInstructions                                                          string           `json:"relationship_instructions"`
 		Egress                                                                            aipolicy.Egress  `json:"egress"`
 		Namespace, Tag, Name, ProjectID, ProjectKey, Owner, ReviewStatus, DeclaredSummary string
 		Evidence                                                                          []contextcatalog.Evidence
 		OriginalDescription                                                               originalDescription
 		OriginalContext                                                                   any `json:"original_context"`
-	}{cfg.Profiles[cfg.Maintenance.Profile], cfg.Maintenance.CatalogPublish, cfg.Egress, e.Namespace, e.Tag, e.Name, e.ProjectID, e.ProjectKey, e.Owner, e.ReviewStatus, declared, e.ClientEvidence, originalDescriptionFor(e), context}
+	}{cfg.Profiles[cfg.Maintenance.Profile], cfg.Maintenance.CatalogPublish, cfg.Maintenance.ProjectPolicy, maintenanceRelationshipInstructionsIdentity(), cfg.Egress, e.Namespace, e.Tag, e.Name, e.ProjectID, e.ProjectKey, e.Owner, e.ReviewStatus, declared, e.ClientEvidence, originalDescriptionFor(e), context}
 	raw, _ := json.Marshal(identity)
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
@@ -572,8 +584,9 @@ func originalCatalogEntry(e contextcatalog.Entry, declared string) originalCatal
 }
 func catalogContextIdentity(cards []contextcatalog.Entry, cfg aipolicy.Config) string {
 	original := make([]originalCatalogCard, 0, len(cards))
+	registeredTags := registeredTagsForCards(cards, cfg)
 	for _, card := range cards {
-		if card.Namespace != "projects" || !contextcatalog.Eligible(card) || !cfg.Egress.Allows(card.Namespace, []string{card.Tag}) {
+		if !maintenanceAdmits(card, cfg, registeredTags) {
 			continue
 		}
 		declared := card.DeclaredSummary
@@ -586,19 +599,48 @@ func catalogContextIdentity(cards []contextcatalog.Entry, cfg aipolicy.Config) s
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }
+
+func (w *catalogWorker) catalogSourcesCurrent(base string, original []contextcatalog.Entry) bool {
+	available, current := w.catalogSourcesState(base, original)
+	return available && current
+}
+
+func (w *catalogWorker) catalogSourcesState(base string, original []contextcatalog.Entry) (available, currentSources bool) {
+	snapshot, currentHash, err := contextcatalog.LoadActive(w.cfg.CatalogDir)
+	if err != nil {
+		return false, false
+	}
+	if currentHash != base {
+		return true, false
+	}
+	admitted := admittedCatalogEntries(snapshot, w.cfg)
+	sort.Slice(admitted, func(i, j int) bool {
+		if admitted[i].Namespace == admitted[j].Namespace {
+			return admitted[i].Tag < admitted[j].Tag
+		}
+		return admitted[i].Namespace < admitted[j].Namespace
+	})
+	restored, _, err := w.restorePublishedOriginals(snapshot, admitted)
+	if err != nil {
+		return false, false
+	}
+	return true, sameEntrySlices(restored, original)
+}
 func (w *catalogWorker) receiptKey(in Input) string {
 	fingerprints := make([]string, 0, len(in.Catalog.Entries))
 	for _, e := range in.Catalog.Entries {
 		fingerprints = append(fingerprints, catalogCardFingerprint(e, w.cfg))
 	}
 	raw, _ := json.Marshal(struct {
-		Profile      aipolicy.Profile
-		Publish      string
-		Egress       aipolicy.Egress
-		Fingerprints []string
-		Evidence     []CatalogEvidence
-		Context      string
-	}{w.cfg.Profiles[w.cfg.Maintenance.Profile], w.cfg.Maintenance.CatalogPublish, w.cfg.Egress, fingerprints, in.CatalogEvidence, in.contextIdentity})
+		Profile                  aipolicy.Profile
+		Publish                  string
+		MaintenancePolicy        string
+		RelationshipInstructions string
+		Egress                   aipolicy.Egress
+		Fingerprints             []string
+		Evidence                 []CatalogEvidence
+		Context                  string
+	}{w.cfg.Profiles[w.cfg.Maintenance.Profile], w.cfg.Maintenance.CatalogPublish, w.cfg.Maintenance.ProjectPolicy, maintenanceRelationshipInstructionsIdentity(), w.cfg.Egress, fingerprints, in.CatalogEvidence, in.contextIdentity})
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }
@@ -731,20 +773,25 @@ func (w *catalogWorker) restorePublishedOriginals(current contextcatalog.Snapsho
 			return nil, nil, errors.New("cannot migrate private catalog source projections")
 		}
 	}
-	out := append([]contextcatalog.Entry{}, cards...)
+	out := make([]contextcatalog.Entry, 0, len(cards))
 	blocked := map[string]bool{}
-	for i := range out {
-		record, ok := cache.find(cardKey(out[i]))
-		if ok && cacheRecordMatchesLive(record, out[i]) {
-			out[i] = record.Original
+	registeredTags := registeredTagsForCards(cards, w.cfg)
+	for _, live := range cards {
+		entry := live
+		record, ok := cache.find(cardKey(entry))
+		if ok && cacheRecordMatchesLive(record, entry) {
+			entry = record.Original
+		} else if entry.DescriptionSource == "model_derived" {
+			blocked[cardKey(entry)] = true
+			entry.Summary = entry.DeclaredSummary
+			entry.Aliases, entry.OwnedComponents, entry.Boundaries = nil, nil, nil
+			entry.Uses, entry.SharedWith, entry.PositiveExamples, entry.NegativeExamples = nil, nil, nil, nil
+		}
+		if w.cfg.Maintenance.ProjectPolicy == "registered" && !maintenanceAdmits(entry, w.cfg, registeredTags) {
+			blocked[cardKey(entry)] = true
 			continue
 		}
-		if out[i].DescriptionSource == "model_derived" {
-			blocked[cardKey(out[i])] = true
-			out[i].Summary = out[i].DeclaredSummary
-			out[i].Aliases, out[i].OwnedComponents, out[i].Boundaries = nil, nil, nil
-			out[i].Uses, out[i].SharedWith, out[i].PositiveExamples, out[i].NegativeExamples = nil, nil, nil, nil
-		}
+		out = append(out, entry)
 	}
 	return out, blocked, nil
 }
@@ -831,6 +878,8 @@ func finiteCatalogReason(err error) string {
 		return "proposal_capacity"
 	case strings.Contains(err.Error(), "projection"):
 		return "state_unavailable"
+	case errors.Is(err, errCatalogSourcesChanged):
+		return "base_or_dependency_changed"
 	case strings.Contains(err.Error(), "catalog"):
 		return "catalog_unavailable"
 	default:

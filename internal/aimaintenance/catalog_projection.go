@@ -172,10 +172,8 @@ func evidenceSlicesEqual(a, b []contextcatalog.Evidence) bool {
 
 func (w *catalogWorker) importReceiptProjections(current contextcatalog.Snapshot, cache catalogProjectionCache) (catalogProjectionCache, bool, error) {
 	active := make(map[string]contextcatalog.Entry, len(current.Entries))
-	for _, entry := range current.Entries {
-		if entry.Namespace == "projects" && contextcatalog.Eligible(entry) && w.cfg.Egress.Allows(entry.Namespace, []string{entry.Tag}) {
-			active[cardKey(entry)] = entry
-		}
+	for _, entry := range admittedCatalogEntries(current, w.cfg) {
+		active[cardKey(entry)] = entry
 	}
 	oldCount := len(cache.Entries)
 	filtered := cache.Entries[:0]
@@ -239,7 +237,7 @@ func (w *catalogWorker) importReceiptProjections(current contextcatalog.Snapshot
 					break
 				}
 			}
-			if original == nil || !sameCatalogSourceIdentity(*original, live) {
+			if original == nil || !sameCatalogSourceIdentity(*original, live) || (w.cfg.Maintenance.ProjectPolicy == "registered" && !contextcatalog.RegisteredIdentity(*original)) {
 				continue
 			}
 			if idx, ok := byKey[key]; ok {
@@ -272,10 +270,8 @@ func (w *catalogWorker) persistOriginalProjections(current contextcatalog.Snapsh
 		return err
 	}
 	active := make(map[string]contextcatalog.Entry, len(current.Entries))
-	for _, entry := range current.Entries {
-		if entry.Namespace == "projects" && contextcatalog.Eligible(entry) && w.cfg.Egress.Allows(entry.Namespace, []string{entry.Tag}) {
-			active[cardKey(entry)] = entry
-		}
+	for _, entry := range admittedCatalogEntries(current, w.cfg) {
+		active[cardKey(entry)] = entry
 	}
 	kept := cache.Entries[:0]
 	for _, record := range cache.Entries {

@@ -176,6 +176,31 @@ func Eligible(e Entry) bool {
 	return e.ReviewStatus == "approved" || e.ReviewStatus == "declared"
 }
 
+// RegisteredIdentity verifies that an entry carries the original identity and
+// provenance produced by the client-declared registration path. It does not
+// imply human approval; callers must also check Eligible and current policy.
+func RegisteredIdentity(e Entry) bool {
+	if e.Namespace != "projects" || (e.DescriptionSource != "client_declared" && e.DescriptionSource != "model_derived") ||
+		!sha256Pattern.MatchString(e.ProjectID) || e.ProjectID != scopedProjectID(e.Owner, e.Namespace, e.ProjectKey) {
+		return false
+	}
+	originalSummary := e.DeclaredSummary
+	if originalSummary == "" {
+		if e.DescriptionSource != "client_declared" {
+			return false
+		}
+		originalSummary = e.Summary
+	}
+	return validateRegistration(e.Owner, RegistrationInput{
+		ProjectKey: e.ProjectKey,
+		Namespace:  e.Namespace,
+		Name:       e.Name,
+		Tag:        e.Tag,
+		Summary:    originalSummary,
+		Evidence:   e.ClientEvidence,
+	}) == nil
+}
+
 func validateOptionalIdentity(prefix string, e Entry) error {
 	noIdentity := e.ProjectID == "" && e.ProjectKey == "" && e.Owner == "" && len(e.ClientEvidence) == 0 && e.DeclaredSummary == ""
 	if noIdentity {
