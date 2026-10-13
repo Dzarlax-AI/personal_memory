@@ -105,6 +105,9 @@ func validateProposal(in Input, p Proposal) error {
 	if p.SchemaVersion != 1 || p.BaseCatalogHash != baseHash || len(p.Grouping) > 100 || len(p.MissingEvidence) > 100 {
 		return errors.New("maintenance proposal identity or size is invalid")
 	}
+	if in.CatalogOnly && len(p.Grouping) != 0 {
+		return errors.New("catalog-only proposal cannot contain grouping changes")
+	}
 	knownAliases := map[string]bool{}
 	for _, f := range in.Facts {
 		knownAliases[f.Alias] = true
@@ -165,6 +168,9 @@ func validateProposal(in Input, p Proposal) error {
 		if p.Catalog.ParentHash != baseHash {
 			return errors.New("maintenance catalog proposal has wrong parent hash")
 		}
+		if in.CatalogOnly && p.Catalog.CreatedAt != in.Catalog.CreatedAt {
+			return errors.New("catalog-only proposal changed catalog creation timestamp")
+		}
 		if len(p.Catalog.Entries) > contextcatalog.MaxEntries {
 			return errors.New("maintenance catalog proposal exceeds entry limit")
 		}
@@ -182,6 +188,23 @@ func validateProposal(in Input, p Proposal) error {
 					}
 				} else if !knownAliases[ref] {
 					return errors.New("maintenance catalog evidence must reference supplied fact aliases")
+				}
+			}
+		}
+		if in.CatalogOnly {
+			if len(p.Catalog.Entries) != len(in.Catalog.Entries) {
+				return errors.New("catalog-only proposal must preserve selected card identities")
+			}
+			for _, original := range in.Catalog.Entries {
+				found := false
+				for _, candidate := range p.Catalog.Entries {
+					if candidate.Namespace == original.Namespace && candidate.Tag == original.Tag {
+						found = candidate.Name == original.Name && (candidate.ReviewStatus == "draft" || candidate.ReviewStatus == "unresolved")
+						break
+					}
+				}
+				if !found {
+					return errors.New("catalog-only proposal changed selected card identity")
 				}
 			}
 		}

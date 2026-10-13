@@ -14,6 +14,25 @@ func TestOffDoesNotReadProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestMaintenanceScopeDefaultsAndCatalogLimits(t *testing.T) {
+	c := Off()
+	c.Defaults()
+	if c.Maintenance.Scope != "facts_and_catalog" || c.Maintenance.MaxProjectsPerRun != 4 || c.Maintenance.Enabled {
+		t.Fatalf("unexpected compatibility defaults: %#v", c.Maintenance)
+	}
+	c.CatalogDir, c.StateDir = "catalog", "state"
+	c.Maintenance = Maintenance{Enabled: true, Profile: "m", IntervalSeconds: 60, MaxFactsPerRun: 50, Scope: "catalog_only", MaxProjectsPerRun: 32, CatalogPublish: "review", GroupingApply: "manual"}
+	c.Profiles = map[string]Profile{"m": {Protocol: "openai-compatible-chat", Model: "operator/custom", Endpoint: "http://localhost:11434/v1", Local: true}}
+	c.Limits = Limits{DailyCalls: 10, DailyInputTokens: 2_000_000, ReservationTokens: 131_072}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	c.Maintenance.MaxProjectsPerRun = 33
+	if err := c.Validate(); err == nil {
+		t.Fatal("project batch limit above 32 accepted")
+	}
+}
 func TestEightCombinations(t *testing.T) {
 	for mask := 0; mask < 8; mask++ {
 		c := Off()
