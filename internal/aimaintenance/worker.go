@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Dzarlax-AI/personal-memory/internal/aijudgment"
 	"github.com/Dzarlax-AI/personal-memory/internal/aipolicy"
 	"github.com/Dzarlax-AI/personal-memory/internal/contextcatalog"
 	"github.com/Dzarlax-AI/personal-memory/internal/factgrouping"
@@ -113,6 +115,7 @@ type Worker struct {
 	cancel   context.CancelFunc
 	done     chan struct{}
 	catalog  *catalogWorker
+	history  *historyStore
 }
 
 var errSweepInProgress = errors.New("maintenance sweep already running")
@@ -132,7 +135,11 @@ func NewWorker(cfg aipolicy.Config, store *qdrant.Client, provider Provider, bud
 	if err := aipolicy.SecureDir(dir); err != nil {
 		return nil, errors.New("cannot prepare private maintenance state")
 	}
-	w := &Worker{cfg: cfg, store: store, provider: provider, budget: budget, dir: dir, interval: time.Duration(cfg.Maintenance.IntervalSeconds) * time.Second, done: make(chan struct{})}
+	history, err := newHistoryStore(cfg.StateDir)
+	if err != nil {
+		return nil, err
+	}
+	w := &Worker{cfg: cfg, store: store, provider: provider, budget: budget, dir: dir, interval: time.Duration(cfg.Maintenance.IntervalSeconds) * time.Second, done: make(chan struct{}), history: history}
 	if cfg.Maintenance.Scope == "catalog_only" {
 		cw, err := newCatalogWorker(cfg, provider, budget, dir)
 		if err != nil {
@@ -203,9 +210,67 @@ func (w *Worker) Wait(ctx context.Context) error {
 // any generated proposal and the updated private state are atomically saved.
 func (w *Worker) RunOnce(ctx context.Context) error {
 	if !w.runMu.TryLock() {
+		if err := w.recordOverlap(); err != nil {
+			return err
+		}
 		return errSweepInProgress
 	}
 	defer w.runMu.Unlock()
+	lock, acquired, lockErr := acquireHistoryLock(w.history.dir)
+	if lockErr != nil {
+		slog.Warn("maintenance run history lock unavailable; provider dispatch skipped")
+		return lockErr
+	}
+	if !acquired {
+		if err := w.recordOverlap(); err != nil {
+			return err
+		}
+		return errSweepInProgress
+	}
+	defer releaseHistoryLock(lock)
+	recorder, err := w.history.newRun(w.cfg, w.currentCatalogHash())
+	if err != nil {
+		slog.Warn("maintenance run history write failed; provider dispatch skipped")
+		return err
+	}
+	if err := w.history.recoverUnfinished(recorder.started.RunID); err != nil {
+		_ = recorder.finish("failed", "state")
+		slog.Warn("maintenance run history recovery failed; provider dispatch skipped")
+		return errors.New("maintenance run history recovery failed")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = context.WithValue(ctx, recorderKey{}, recorder)
+	err = w.runOnceTracked(ctx, recorder)
+	if recorder.failed.Load() {
+		slog.Warn("maintenance run history write failed; invocation outcome may be incomplete")
+	}
+	outcome, reason := finiteOutcome(err, recorder)
+	if err == nil && recorder.hintOutcome != "" {
+		outcome, reason = recorder.hintOutcome, recorder.hintReason
+	}
+	if finishErr := recorder.finish(outcome, reason); finishErr != nil {
+		slog.Warn("maintenance run history write failed; invocation outcome may be incomplete")
+		return finishErr
+	}
+	return err
+}
+
+func (w *Worker) recordOverlap() error {
+	r, err := w.history.newRun(w.cfg, w.currentCatalogHash())
+	if err != nil {
+		slog.Warn("maintenance run history write failed; provider dispatch skipped")
+		return err
+	}
+	if err := r.finish("skipped", "overlap"); err != nil {
+		slog.Warn("maintenance run history write failed; invocation outcome may be incomplete")
+		return err
+	}
+	return nil
+}
+
+func (w *Worker) runOnceTracked(ctx context.Context, recorder *runRecorder) error {
 	if w.cfg.Maintenance.Scope == "catalog_only" {
 		err := w.catalog.RunOnce(ctx)
 		if err != nil {
@@ -220,6 +285,7 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 	}
 	if state.NextAllowedAt != "" {
 		if at, e := time.Parse(time.RFC3339Nano, state.NextAllowedAt); e == nil && time.Now().Before(at) {
+			recorder.hint("skipped", "backoff")
 			return nil
 		}
 	}
@@ -233,6 +299,41 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 	}
 	w.recordOutcome("succeeded")
 	return nil
+}
+
+func (w *Worker) currentCatalogHash() string {
+	_, hash, err := contextcatalog.LoadActive(w.cfg.CatalogDir)
+	if err != nil {
+		return ""
+	}
+	return hash
+}
+
+func (w *Worker) proposeWithHistory(ctx context.Context, input Input, provider Provider) (Proposal, aijudgment.Usage, error) {
+	r := recorderFrom(ctx)
+	if r != nil {
+		r.inputFacts.Store(int32(len(input.Facts)))
+		if err := r.event(runEvent{Type: "provider_attempt_started"}); err != nil {
+			return Proposal{}, aijudgment.Usage{Known: true}, errors.New("maintenance history unavailable before provider dispatch")
+		}
+		r.attempts.Add(1)
+	}
+	proposal, usage, err := provider.Propose(ctx, input)
+	if r != nil {
+		if usage.Known {
+			r.usageKnown.Store(true)
+			r.inputTok.Add(usage.InputTokens)
+			r.outputTok.Add(usage.OutputTokens)
+		}
+		reason := ""
+		if err != nil {
+			reason = finiteRunReason(err)
+		}
+		if eventErr := r.event(runEvent{Type: "provider_attempt_finished", ReasonCode: reason, InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, UsageKnown: usage.Known}); eventErr != nil {
+			return Proposal{}, usage, errors.New("maintenance history unavailable after provider dispatch")
+		}
+	}
+	return proposal, usage, err
 }
 
 func (w *Worker) runOnce(ctx context.Context) error {
@@ -318,6 +419,13 @@ func (w *Worker) runOnce(ctx context.Context) error {
 	}
 	selected := input
 	selected.Facts = input.Facts[:processCount]
+	if r := recorderFrom(ctx); r != nil {
+		r.inputFacts.Store(int32(len(selected.Facts)))
+		r.countsKnown.Store(true)
+		if err := r.event(runEvent{Type: "selection_summary", CountFacts: len(selected.Facts)}); err != nil {
+			return err
+		}
+	}
 	evidenceKey := w.evidenceInferenceKey(selected.CatalogEvidence)
 	evidenceOnly := len(selected.Facts) == 0 && len(selected.CatalogEvidence) > 0 && evidenceKey != state.EvidenceInferenceKey
 	if evidenceOnly && w.hasEvidenceProposal(evidenceKey, bindingHash) {
@@ -332,7 +440,7 @@ func (w *Worker) runOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		proposal, usage, callErr := w.provider.Propose(ctx, selected)
+		proposal, usage, callErr := w.proposeWithHistory(ctx, selected, w.provider)
 		reservation.Finish(usage.InputTokens, usage.Known)
 		if callErr != nil {
 			return callErr
@@ -357,9 +465,14 @@ func (w *Worker) runOnce(ctx context.Context) error {
 		if evidenceOnly {
 			private.EvidenceInferenceKey = evidenceKey
 		}
-		name, err := w.saveProposal(private)
+		name, err := w.saveProposalTracked(ctx, private)
 		if err != nil {
 			return err
+		}
+		if r := recorderFrom(ctx); r != nil {
+			if err := r.event(runEvent{Type: "projects_completed"}); err != nil {
+				return err
+			}
 		}
 		state.LatestProposal = name
 		if len(selected.CatalogEvidence) > 0 {
@@ -1085,6 +1198,10 @@ func contains(a []string, s string) bool {
 }
 
 func (w *Worker) saveProposal(p privateProposal) (string, error) {
+	return w.saveProposalTracked(context.Background(), p)
+}
+
+func (w *Worker) saveProposalTracked(ctx context.Context, p privateProposal) (string, error) {
 	raw, err := json.Marshal(p)
 	if err != nil {
 		return "", err
@@ -1095,6 +1212,9 @@ func (w *Worker) saveProposal(p privateProposal) (string, error) {
 	sum := sha256.Sum256(raw)
 	name := "proposal-" + hex.EncodeToString(sum[:]) + ".json"
 	path := filepath.Join(w.dir, "proposals", name)
+	if err := recordDraftIntent(ctx, name, raw); err != nil {
+		return "", err
+	}
 	if err := aipolicy.SecureDir(filepath.Dir(path)); err != nil {
 		return "", errors.New("cannot prepare private proposal directory")
 	}
@@ -1102,6 +1222,9 @@ func (w *Worker) saveProposal(p privateProposal) (string, error) {
 		existing, e := aipolicy.ReadPrivate(path, MaxResponseBytes*4)
 		if e != nil || !bytes.Equal(existing, raw) {
 			return "", errors.New("proposal artifact identity conflict")
+		}
+		if err := recordDraftRef(ctx, name, raw, true); err != nil {
+			return "", err
 		}
 		return name, nil
 	} else if !os.IsNotExist(err) {
@@ -1112,6 +1235,9 @@ func (w *Worker) saveProposal(p privateProposal) (string, error) {
 	}
 	if err := aipolicy.AtomicWrite(filepath.Dir(path), name, raw); err != nil {
 		return "", errors.New("cannot save private proposal artifact")
+	}
+	if err := recordDraftRef(ctx, name, raw, false); err != nil {
+		return "", err
 	}
 	return name, nil
 }

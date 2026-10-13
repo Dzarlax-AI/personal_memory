@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -373,6 +374,55 @@ func TestProviderRejectsRedirectOversizeAndInvalidOutput(t *testing.T) {
 	}
 	if _, _, err := responsesProvider.Propose(context.Background(), testInput()); err == nil {
 		t.Fatal("incomplete Responses output accepted")
+	}
+}
+
+func TestProviderHTTPFailuresUseFiniteTypedCategories(t *testing.T) {
+	profile := aipolicy.Profile{Protocol: "openai-compatible-chat", Model: "local", Endpoint: "http://localhost/v1/chat/completions", Local: true, TimeoutMS: 1000}
+	for _, tc := range []struct {
+		status int
+		kind   string
+	}{{401, "auth"}, {403, "auth"}, {429, "rate_limit"}, {503, "http"}} {
+		tr := roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader("private provider payload")), Header: make(http.Header)}, nil
+		})
+		p, err := NewProvider(profile, "", tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = p.Propose(context.Background(), testInput())
+		var failure *ProviderFailure
+		if !errors.As(err, &failure) || failure.Kind != tc.kind {
+			t.Fatalf("status %d failure = %#v (%v)", tc.status, failure, err)
+		}
+		if strings.Contains(err.Error(), "private provider payload") || strings.Contains(err.Error(), "503") {
+			t.Fatalf("provider failure leaked response detail: %v", err)
+		}
+	}
+}
+
+func TestProviderCancellationAndTimeoutPreserveContextIdentity(t *testing.T) {
+	profile := aipolicy.Profile{Protocol: "openai-compatible-chat", Model: "local", Endpoint: "http://localhost/v1/chat/completions", Local: true, TimeoutMS: 1000}
+	for _, tc := range []struct {
+		name         string
+		cause        error
+		wantSentinel error
+		wantReason   string
+	}{{"cancel", context.Canceled, context.Canceled, "canceled"}, {"timeout", context.DeadlineExceeded, context.DeadlineExceeded, "timeout"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, tc.cause })
+			p, err := NewProvider(profile, "", transport)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, err = p.Propose(context.Background(), testInput())
+			if !errors.Is(err, tc.wantSentinel) {
+				t.Fatalf("provider error lost context identity: %v", err)
+			}
+			if got := finiteCatalogReason(err); got != tc.wantReason {
+				t.Fatalf("finiteCatalogReason = %q, want %q", got, tc.wantReason)
+			}
+		})
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -73,6 +74,15 @@ type GroupingProposal struct {
 type Provider interface {
 	Propose(context.Context, Input) (Proposal, aijudgment.Usage, error)
 }
+
+// ProviderFailure carries only a finite, non-sensitive operational category.
+type ProviderFailure struct{ Kind string }
+
+func (e *ProviderFailure) Error() string { return "maintenance provider failure" }
+func (e *ProviderFailure) Is(target error) bool {
+	return (e.Kind == "cancel" && target == context.Canceled) || (e.Kind == "timeout" && target == context.DeadlineExceeded)
+}
+func providerFailure(kind string) error { return &ProviderFailure{Kind: kind} }
 
 type provider struct {
 	profile   aipolicy.Profile
@@ -249,11 +259,11 @@ func (p *provider) Propose(ctx context.Context, in Input) (Proposal, aijudgment.
 	defer cancel()
 	body, err := BuildRequest(p.profile, in)
 	if err != nil {
-		return Proposal{}, aijudgment.Usage{}, err
+		return Proposal{}, aijudgment.Usage{}, providerFailure("invalid_request")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.profile.Endpoint, bytes.NewReader(body))
 	if err != nil {
-		return Proposal{}, aijudgment.Usage{}, errors.New("cannot create maintenance request")
+		return Proposal{}, aijudgment.Usage{}, providerFailure("invalid_request")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if p.key != "" {
@@ -263,29 +273,53 @@ func (p *provider) Propose(ctx context.Context, in Input) (Proposal, aijudgment.
 	resp, err := client.Do(req)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			return Proposal{}, aijudgment.Usage{}, context.Canceled
+			return Proposal{}, aijudgment.Usage{}, providerFailure("cancel")
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return Proposal{}, aijudgment.Usage{}, context.DeadlineExceeded
+			return Proposal{}, aijudgment.Usage{}, providerFailure("timeout")
 		}
-		return Proposal{}, aijudgment.Usage{}, errors.New("maintenance provider transport failed")
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return Proposal{}, aijudgment.Usage{}, providerFailure("timeout")
+		}
+		return Proposal{}, aijudgment.Usage{}, providerFailure("transport")
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBytes+1))
 	if err != nil {
-		return Proposal{}, aijudgment.Usage{}, errors.New("cannot read maintenance response")
+		if errors.Is(err, context.Canceled) {
+			return Proposal{}, aijudgment.Usage{}, providerFailure("cancel")
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return Proposal{}, aijudgment.Usage{}, providerFailure("timeout")
+		}
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return Proposal{}, aijudgment.Usage{}, providerFailure("timeout")
+		}
+		return Proposal{}, aijudgment.Usage{}, providerFailure("transport")
 	}
 	if len(raw) > MaxResponseBytes {
-		return Proposal{}, aijudgment.Usage{}, errors.New("maintenance response exceeds 64 KiB")
+		return Proposal{}, aijudgment.Usage{}, providerFailure("invalid_response")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Proposal{}, aijudgment.Usage{}, fmt.Errorf("maintenance provider returned HTTP %d", resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return Proposal{}, aijudgment.Usage{}, providerFailure("auth")
+		case http.StatusTooManyRequests:
+			return Proposal{}, aijudgment.Usage{}, providerFailure("rate_limit")
+		default:
+			return Proposal{}, aijudgment.Usage{}, providerFailure("http")
+		}
 	}
 	proposal, usage, err := decodeProviderResponse(p.profile, raw)
 	if err != nil {
-		return Proposal{}, usage, err
+		return Proposal{}, usage, providerFailure("invalid_response")
 	}
-	return proposal, usage, validateProposal(in, proposal)
+	if err := validateProposal(in, proposal); err != nil {
+		return Proposal{}, usage, providerFailure("invalid_response")
+	}
+	return proposal, usage, nil
 }
 
 type noRedirect struct{ base http.RoundTripper }
