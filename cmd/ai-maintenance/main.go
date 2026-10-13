@@ -5,17 +5,28 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/Dzarlax-AI/personal-memory/internal/factgrouping"
-	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/Dzarlax-AI/personal-memory/internal/aimaintenance"
+	"github.com/Dzarlax-AI/personal-memory/internal/aipolicy"
+	"github.com/Dzarlax-AI/personal-memory/internal/factgrouping"
+	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: ai-maintenance apply|rollback --manifest FILE --journal FILE --qdrant-url URL --confirm-server-stopped")
+		fmt.Fprintln(os.Stderr, "usage: ai-maintenance status --config FILE | apply|rollback --manifest FILE --journal FILE --qdrant-url URL --confirm-server-stopped")
 		os.Exit(1)
+	}
+	if os.Args[1] == "status" {
+		if err := runStatus(os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
 	}
 	fs := flag.NewFlagSet("ai-maintenance", flag.ExitOnError)
 	manifest := fs.String("manifest", "", "private approved manifest")
@@ -40,4 +51,28 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func runStatus(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("ai-maintenance status", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	configPath := fs.String("config", "", "optional AI configuration file")
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("invalid status arguments")
+	}
+	if *configPath == "" || fs.NArg() != 0 {
+		return fmt.Errorf("status requires --config FILE")
+	}
+	cfg, err := aipolicy.Load(*configPath)
+	if err != nil {
+		return fmt.Errorf("cannot load optional AI configuration")
+	}
+	status, err := aimaintenance.ReadCatalogStatus(cfg)
+	if err != nil {
+		return err
+	}
+	if err := json.NewEncoder(out).Encode(status); err != nil {
+		return fmt.Errorf("cannot write maintenance status")
+	}
+	return nil
 }

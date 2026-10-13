@@ -22,6 +22,7 @@ type fakeProvider struct {
 	calls  atomic.Int32
 	result func(Input) Proposal
 	seen   chan Input
+	after  func(Input)
 }
 
 func (p *fakeProvider) Propose(_ context.Context, in Input) (Proposal, aijudgment.Usage, error) {
@@ -29,7 +30,11 @@ func (p *fakeProvider) Propose(_ context.Context, in Input) (Proposal, aijudgmen
 	if p.seen != nil {
 		p.seen <- in
 	}
-	return p.result(in), aijudgment.Usage{InputTokens: 10, OutputTokens: 3, Known: true}, nil
+	if p.after != nil {
+		p.after(in)
+	}
+	proposal := p.result(in)
+	return proposal, aijudgment.Usage{InputTokens: 10, OutputTokens: 3, Known: true}, nil
 }
 
 func workerConfig(t *testing.T, catalogDir, stateDir string) aipolicy.Config {

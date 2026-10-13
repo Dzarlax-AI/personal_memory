@@ -64,6 +64,16 @@ type privateProposal struct {
 	CatalogDependencies  []privateCatalogDependency `json:"catalog_dependencies,omitempty"`
 	Manifest             factgrouping.Manifest      `json:"grouping_manifest"`
 	EvidenceInferenceKey string                     `json:"evidence_inference_key,omitempty"`
+	CatalogReceiptKey    string                     `json:"catalog_receipt_key,omitempty"`
+	CatalogOriginal      *contextcatalog.Snapshot   `json:"catalog_original,omitempty"`
+	CatalogOriginalAll   *contextcatalog.Snapshot   `json:"catalog_original_context,omitempty"`
+	CatalogPublished     []privateCatalogPublished  `json:"catalog_published,omitempty"`
+}
+
+type privateCatalogPublished struct {
+	Namespace string `json:"namespace"`
+	Tag       string `json:"tag"`
+	EntryHash string `json:"entry_hash"`
 }
 
 type privateCatalogDependency struct {
@@ -100,6 +110,7 @@ type Worker struct {
 	started  bool
 	cancel   context.CancelFunc
 	done     chan struct{}
+	catalog  *catalogWorker
 }
 
 var errSweepInProgress = errors.New("maintenance sweep already running")
@@ -112,14 +123,22 @@ func NewWorker(cfg aipolicy.Config, store *qdrant.Client, provider Provider, bud
 	if !cfg.Maintenance.Enabled {
 		return nil, errors.New("maintenance worker is disabled")
 	}
-	if store == nil || provider == nil || budget == nil {
-		return nil, errors.New("maintenance store, provider, and budget are required")
+	if provider == nil || budget == nil || (store == nil && cfg.Maintenance.Scope != "catalog_only") {
+		return nil, errors.New("maintenance provider, budget, and applicable store are required")
 	}
 	dir := filepath.Join(cfg.StateDir, "maintenance")
 	if err := aipolicy.SecureDir(dir); err != nil {
 		return nil, errors.New("cannot prepare private maintenance state")
 	}
-	return &Worker{cfg: cfg, store: store, provider: provider, budget: budget, dir: dir, interval: time.Duration(cfg.Maintenance.IntervalSeconds) * time.Second, done: make(chan struct{})}, nil
+	w := &Worker{cfg: cfg, store: store, provider: provider, budget: budget, dir: dir, interval: time.Duration(cfg.Maintenance.IntervalSeconds) * time.Second, done: make(chan struct{})}
+	if cfg.Maintenance.Scope == "catalog_only" {
+		cw, err := newCatalogWorker(cfg, provider, budget, dir)
+		if err != nil {
+			return nil, err
+		}
+		w.catalog = cw
+	}
+	return w, nil
 }
 
 // Start schedules the first bounded sweep after one full interval. It never
@@ -185,6 +204,14 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		return errSweepInProgress
 	}
 	defer w.runMu.Unlock()
+	if w.cfg.Maintenance.Scope == "catalog_only" {
+		err := w.catalog.RunOnce(ctx)
+		if err != nil {
+			w.catalog.recordOutcome("failed", finiteCatalogReason(err))
+			return err
+		}
+		return nil
+	}
 	state, err := w.loadState()
 	if err != nil {
 		return err

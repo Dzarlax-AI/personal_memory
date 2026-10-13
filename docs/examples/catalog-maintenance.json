@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "catalog_dir": "/var/lib/personal-memory/context-catalog",
+  "state_dir": "/var/lib/personal-memory/ai-state",
+  "registration": { "mode": "client_declared" },
+  "maintenance": {
+    "enabled": false,
+    "scope": "catalog_only",
+    "profile": "maintenance",
+    "interval_seconds": 21600,
+    "max_projects_per_run": 4,
+    "max_facts_per_run": 50,
+    "catalog_publish": "review",
+    "grouping_apply": "manual"
+  },
+  "write": { "mode": "off", "provider": "none" },
+  "read": { "mode": "off", "provider": "none" },
+  "profiles": {
+    "maintenance": {
+      "protocol": "openai-responses",
+      "model": "operator-selected-model",
+      "endpoint": "https://provider.example.invalid/v1/responses",
+      "key_file": "/run/secrets/maintenance-api-key",
+      "local": false,
+      "timeout_ms": 60000
+    }
+  },
+  "egress": {
+    "project_policy": "explicit",
+    "allowed_namespaces": ["projects"],
+    "allowed_project_tags": ["exampletag"],
+    "unassigned_namespaces": []
+  },
+  "limits": {
+    "daily_calls": 1000,
+    "daily_input_tokens": 2000000,
+    "reservation_tokens": 131072
+  }
+}

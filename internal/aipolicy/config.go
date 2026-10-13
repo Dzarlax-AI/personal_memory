@@ -48,12 +48,14 @@ type Registration struct {
 func (r Registration) Active() bool { return r.Mode == "client_declared" }
 
 type Maintenance struct {
-	Enabled         bool   `json:"enabled"`
-	Profile         string `json:"profile"`
-	IntervalSeconds int    `json:"interval_seconds"`
-	MaxFactsPerRun  int    `json:"max_facts_per_run"`
-	CatalogPublish  string `json:"catalog_publish"`
-	GroupingApply   string `json:"grouping_apply"`
+	Enabled           bool   `json:"enabled"`
+	Profile           string `json:"profile"`
+	Scope             string `json:"scope,omitempty"`
+	IntervalSeconds   int    `json:"interval_seconds"`
+	MaxFactsPerRun    int    `json:"max_facts_per_run"`
+	MaxProjectsPerRun int    `json:"max_projects_per_run"`
+	CatalogPublish    string `json:"catalog_publish"`
+	GroupingApply     string `json:"grouping_apply"`
 }
 type Profile struct {
 	ResponseModels []string `json:"response_models,omitempty"`
@@ -141,6 +143,12 @@ func (c *Config) Defaults() {
 	if c.Maintenance.MaxFactsPerRun == 0 {
 		c.Maintenance.MaxFactsPerRun = 50
 	}
+	if c.Maintenance.Scope == "" {
+		c.Maintenance.Scope = "facts_and_catalog"
+	}
+	if c.Maintenance.MaxProjectsPerRun == 0 {
+		c.Maintenance.MaxProjectsPerRun = 4
+	}
 	if c.Maintenance.CatalogPublish == "" {
 		c.Maintenance.CatalogPublish = "review"
 	}
@@ -201,6 +209,9 @@ func (c Config) Validate() error {
 		}
 	}
 	if c.Maintenance.Enabled {
+		if c.Maintenance.Scope != "catalog_only" && c.Maintenance.Scope != "facts_and_catalog" {
+			return errors.New("invalid maintenance scope")
+		}
 		p, ok := c.Profiles[c.Maintenance.Profile]
 		if !ok || c.Maintenance.Profile == "" {
 			return errors.New("active maintenance profile missing")
@@ -211,7 +222,7 @@ func (c Config) Validate() error {
 		if err := p.Validate(); err != nil {
 			return err
 		}
-		if c.Maintenance.IntervalSeconds < 1 || c.Maintenance.IntervalSeconds > 604800 || c.Maintenance.MaxFactsPerRun < 1 || c.Maintenance.MaxFactsPerRun > 100 {
+		if c.Maintenance.IntervalSeconds < 1 || c.Maintenance.IntervalSeconds > 604800 || c.Maintenance.MaxFactsPerRun < 1 || c.Maintenance.MaxFactsPerRun > 100 || c.Maintenance.MaxProjectsPerRun < 1 || c.Maintenance.MaxProjectsPerRun > 32 {
 			return errors.New("invalid maintenance interval or batch limit")
 		}
 		if (c.Maintenance.CatalogPublish != "review" && c.Maintenance.CatalogPublish != "evidence_bounded") || c.Maintenance.GroupingApply != "manual" {
