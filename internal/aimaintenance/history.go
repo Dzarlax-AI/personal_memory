@@ -544,6 +544,17 @@ func (s *historyStore) Read(limit int, cursor, runID string) (HistoryPage, error
 		return HistoryPage{}, errors.New("maintenance run history unavailable")
 	}
 	if runID != "" {
+		info, err := os.Lstat(filepath.Join(s.dir, runID))
+		if os.IsNotExist(err) {
+			page.Runs = append(page.Runs, HistoryRun{RunID: runID, Events: []runEvent{}, Drafts: []DraftReference{}, HistoryStatus: "missing_run"})
+			return page, nil
+		} else if err != nil {
+			return HistoryPage{}, errors.New("maintenance run history unavailable")
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			page.Runs = append(page.Runs, HistoryRun{RunID: runID, Events: []runEvent{}, Drafts: []DraftReference{}, HistoryStatus: "corrupt_run"})
+			return page, nil
+		}
 		run, err := s.readRun(runID)
 		if err != nil {
 			if run.HistoryStatus == "" {

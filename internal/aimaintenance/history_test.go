@@ -110,6 +110,35 @@ func TestHistoryCreateOncePermissionsPaginationAndDraftValidation(t *testing.T) 
 	}
 }
 
+func TestExactRunLookupDistinguishesMissingRunFromMissingStartedRecord(t *testing.T) {
+	cfg := historyTestConfig(t)
+	store, err := newHistoryStore(cfg.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := store.newRun(cfg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseHistoryLock(r.liveLock)
+	r.liveLock = nil
+	if err := os.Remove(filepath.Join(store.dir, r.started.RunID, "started.json")); err != nil {
+		t.Fatal(err)
+	}
+	unknownID := r.started.RunID[:len(r.started.RunID)-8] + "00000002"
+	missing, err := store.Read(1, "", unknownID)
+	if err != nil || len(missing.Runs) != 1 || missing.Runs[0].HistoryStatus != "missing_run" {
+		t.Fatalf("nonexistent exact run misclassified: %+v, %v", missing, err)
+	}
+	if _, err := os.Stat(filepath.Join(store.dir, unknownID)); !os.IsNotExist(err) {
+		t.Fatalf("read-only exact lookup created a run directory: %v", err)
+	}
+	corrupt, err := store.Read(1, "", r.started.RunID)
+	if err != nil || len(corrupt.Runs) != 1 || corrupt.Runs[0].HistoryStatus != "missing_started" {
+		t.Fatalf("existing directory without start was misclassified: %+v, %v", corrupt, err)
+	}
+}
+
 func TestHistoryRunIDsSortByFractionalTimeAcrossSessions(t *testing.T) {
 	cfg := historyTestConfig(t)
 	one, err := newHistoryStore(cfg.StateDir)
