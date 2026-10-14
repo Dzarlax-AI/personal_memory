@@ -16,6 +16,7 @@ on:
       - "scripts/summarize-ai-shadow.py"
       - "scripts/test_summarize_ai_shadow.py"
       - "scripts/test_ai_review_dates.js"
+      - "scripts/test_ai_review_auth.js"
       - "Makefile"
       - "evaldata/public/**"
       - "conformancedata/public/**"
@@ -39,6 +40,7 @@ on:
       - "scripts/summarize-ai-shadow.py"
       - "scripts/test_summarize_ai_shadow.py"
       - "scripts/test_ai_review_dates.js"
+      - "scripts/test_ai_review_auth.js"
       - "Makefile"
       - "evaldata/public/**"
       - "conformancedata/public/**"
@@ -71,8 +73,10 @@ jobs:
         with:
           go-version: "1.24"
       - run: make dev-deps
-      - name: Validate AI Review local date filters
-        run: node scripts/test_ai_review_dates.js
+      - name: Validate AI Review browser behavior
+        run: |
+          node scripts/test_ai_review_dates.js
+          node scripts/test_ai_review_auth.js
       - name: Validate local release assets
         run: ./scripts/test-local-release.sh
       - name: Wait for Qdrant
