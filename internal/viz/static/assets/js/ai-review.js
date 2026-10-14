@@ -192,6 +192,7 @@ async function loadAIReviewPage(reset = false) {
         catch (error) {
           if (selectionGeneration === aiReviewSelectionGeneration && requestGeneration === aiReviewPageGeneration) {
             reviewEl('ai-review-detail').replaceChildren(reviewNode('p', `Run unavailable. It may be outside retained history or the link may be invalid (${error.message}).`, 'ai-review-error'));
+            if (error.authRequired) reviewEl('ai-review-detail').append(reviewSignInLink());
           }
         }
       }
@@ -204,6 +205,7 @@ async function loadAIReviewPage(reset = false) {
   } catch (error) {
     if (requestGeneration !== aiReviewPageGeneration) return false;
     reviewEl('ai-review-runs').replaceChildren(reviewNode('p', `Unable to load run history: ${error.message}`, 'ai-review-error'));
+    if (error.authRequired) reviewEl('ai-review-runs').append(reviewSignInLink());
     return false;
   }
 }
@@ -342,7 +344,12 @@ async function openAIReviewRun(runID, digest = '', projectID = '', push = true) 
     const data = await aiReviewRequest(`/api/ai-review/runs/${encodeURIComponent(runID)}`);
     if (selectionGeneration !== aiReviewSelectionGeneration) return;
     renderAIReviewDetail(data.run, digest, projectID);
-  } catch (error) { if (selectionGeneration === aiReviewSelectionGeneration) panel.replaceChildren(reviewNode('p', `Unable to load run details: ${error.message}`, 'ai-review-error')); }
+  } catch (error) {
+    if (selectionGeneration === aiReviewSelectionGeneration) {
+      panel.replaceChildren(reviewNode('p', `Unable to load run details: ${error.message}`, 'ai-review-error'));
+      if (error.authRequired) panel.append(reviewSignInLink());
+    }
+  }
 }
 
 function renderAIReviewDetail(run, selectedDigest = '', selectedProjectID = '') {
@@ -384,7 +391,13 @@ async function loadAIReviewDraft(run, digest, projectID = '') {
   const panel = reviewEl('ai-review-detail');
   let draft;
   try { draft = await fetchAIReviewDraft(run.run_id, digest); }
-  catch (error) { if (selectionGeneration === aiReviewSelectionGeneration) panel.append(reviewNode('p', `Draft unavailable or corrupt: ${error.message}`, 'ai-review-error')); return; }
+  catch (error) {
+    if (selectionGeneration === aiReviewSelectionGeneration) {
+      panel.append(reviewNode('p', `${error.authRequired ? 'Unable to load draft' : 'Draft unavailable or corrupt'}: ${error.message}`, 'ai-review-error'));
+      if (error.authRequired) panel.append(reviewSignInLink());
+    }
+    return;
+  }
   if (selectionGeneration !== aiReviewSelectionGeneration) return;
   const section = reviewNode('section', undefined, 'ai-review-section ai-review-draft-detail');
   section.append(reviewNode('h4', `Proposal ${digest.slice(0, 16)}`));
@@ -659,6 +672,7 @@ window.addEventListener('popstate', () => {
       aiReviewSelection = null;
       renderAIReviewRuns();
       reviewEl('ai-review-detail').replaceChildren(reviewNode('p', `Run unavailable. It may be outside retained history or the link may be invalid (${error.message}).`, 'ai-review-error'));
+            if (error.authRequired) reviewEl('ai-review-detail').append(reviewSignInLink());
     });
   }
 });
