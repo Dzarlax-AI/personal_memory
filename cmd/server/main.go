@@ -45,8 +45,7 @@ func main() {
 	}
 	if cfg.AI.CatalogDir != "" {
 		if _, err := contextcatalog.ReconcileOperations(cfg.AI.CatalogDir); err != nil {
-			slog.Error("catalog operation reconciliation failed", "error", err)
-			os.Exit(1)
+			slog.Warn("optional catalog history unavailable; catalog publications remain blocked")
 		}
 	}
 

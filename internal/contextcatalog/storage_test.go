@@ -491,3 +491,46 @@ func mustCurrent(t *testing.T, dir string) Snapshot {
 	}
 	return s
 }
+
+func TestRestoreRejectsUnpublishedOrphanSnapshot(t *testing.T) {
+	dir := filepath.Join(canonicalTempDir(t), "orphans")
+	result, err := EnsureProject(dir, "owner", RegistrationInput{ProjectKey: "project-key-orphan", Namespace: "projects", Name: "Example", Tag: "example", Summary: "Declared source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, active, err := LoadActive(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphan := cloneSnapshot(current)
+	orphan.ParentHash = active
+	orphan.Version = "abandoned"
+	orphan.Entries[0].Summary = "Unpublished description"
+	orphan.Entries[0].DescriptionSource = "model_derived"
+	orphan.Entries[0].DeclaredSummary = current.Entries[0].Summary
+	hash, err := Hash(orphan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := canonicalJSON(orphan)
+	if err := writeExclusive(filepath.Join(dir, snapshotDirName, hash+".json"), raw); err != nil {
+		t.Fatal(err)
+	}
+	req := RestoreRequest{Reason: "test", OperationID: strings.Repeat("a", 64), ProjectID: result.ProjectID, HistoricalHash: hash, HistoricalEntryHash: entryHash(orphan.Entries[0]), ExpectedCurrentHash: active, ExpectedCurrentEntryHash: entryHash(current.Entries[0])}
+	preview, err := PreviewRestore(dir, req)
+	if err != nil || preview.Status != "conflict" {
+		t.Fatalf("orphan preview: %#v %v", preview, err)
+	}
+	restored, err := Restore(dir, req)
+	if err != nil || restored.Status != "conflict" {
+		t.Fatalf("orphan restore: %#v %v", restored, err)
+	}
+	_, after, err := LoadActive(dir)
+	if err != nil || after != active {
+		t.Fatal("orphan changed active catalog")
+	}
+	policy, err := LoadProjectPolicy(dir, result.ProjectID)
+	if err != nil || policy.Hold {
+		t.Fatal("rejected orphan created hold")
+	}
+}

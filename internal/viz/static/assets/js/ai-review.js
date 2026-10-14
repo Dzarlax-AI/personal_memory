@@ -386,7 +386,7 @@ function appendDefinition(root, label, value) {
   root.append(reviewNode('dt', label), reviewNode('dd', reviewText(value)));
 }
 
-async function loadProjectVersions(card, project) {
+async function loadProjectVersions(card, project, cursor = '') {
   const projectID = project.project_id;
   const previous = card.querySelector('.ai-review-catalog-history'); if (previous) previous.remove();
   const section = reviewNode('section', undefined, 'ai-review-section ai-review-catalog-history');
@@ -394,7 +394,9 @@ async function loadProjectVersions(card, project) {
   section.append(reviewNode('p', 'Versions show changes to this project card. Restoring creates a new version and pauses automatic publication for this project.', 'ai-review-muted'));
   const status = reviewNode('p', 'Loading version history…', 'ai-review-muted'); section.append(status); card.append(section);
   try {
-    const data = await aiReviewRequest(`/api/ai-review/projects/${encodeURIComponent(projectID)}/versions?limit=30`);
+    const data = await aiReviewRequest(`/api/ai-review/projects/${encodeURIComponent(projectID)}/versions?limit=30${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+    const prior = cursor && aiReviewVersionCache.get(projectID);
+    if (prior && prior.current_hash === data.current_hash) data.versions = [...(prior.versions || []), ...(data.versions || [])];
     aiReviewVersionCache.set(projectID, data);
     status.remove();
     const policy = data.policy || {};
@@ -437,7 +439,11 @@ async function loadProjectVersions(card, project) {
       }
       section.append(row);
     }
-    if (!versions.length) section.append(reviewNode('p', 'No retained description versions are available.', 'ai-review-muted'));
+    if (!versions.length) section.append(reviewNode('p', data.next_cursor ? 'No description changes on this page. Load older versions to continue.' : 'No retained description versions are available.', 'ai-review-muted'));
+    if (data.next_cursor) {
+      const older = reviewNode('button', 'Load older description versions', 'btn btn--secondary'); older.type = 'button';
+      older.addEventListener('click', () => { older.disabled = true; loadProjectVersions(card, project, data.next_cursor); }); section.append(older);
+    }
     const holdButton = reviewNode('button', policy.hold ? 'Resume automatic publication' : 'Pause automatic publication', 'btn btn--secondary'); holdButton.type = 'button';
     if (!data.current_entry || !policy.current_entry_hash) { holdButton.disabled = true; holdButton.title = 'This project is absent from the current catalog.'; }
     holdButton.addEventListener('click', async () => {

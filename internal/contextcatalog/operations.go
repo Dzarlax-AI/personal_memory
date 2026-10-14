@@ -755,6 +755,13 @@ func PreviewRestore(dir string, r RestoreRequest) (RestorePreview, error) {
 	if e != nil {
 		return RestorePreview{}, e
 	}
+	ancestor, e := snapshotInActiveAncestry(dir, ch, r.HistoricalHash)
+	if e != nil {
+		return RestorePreview{}, e
+	}
+	if !ancestor {
+		return RestorePreview{Status: "conflict", CurrentHash: ch, ConflictReason: "unpublished_target"}, nil
+	}
 	hi, e := LoadSnapshot(dir, r.HistoricalHash)
 	if e != nil {
 		return RestorePreview{}, e
@@ -813,6 +820,13 @@ func Restore(dir string, r RestoreRequest) (RestoreResult, error) {
 	cur, ch, e := LoadActive(dir)
 	if e != nil {
 		return RestoreResult{}, e
+	}
+	ancestor, e := snapshotInActiveAncestry(dir, ch, r.HistoricalHash)
+	if e != nil {
+		return RestoreResult{}, e
+	}
+	if !ancestor {
+		return RestoreResult{Status: "conflict", OperationID: r.OperationID}, nil
 	}
 	hi, e := LoadSnapshot(dir, r.HistoricalHash)
 	if e != nil {
@@ -1006,4 +1020,25 @@ func PublishWithPolicyGuard(dir string, snapshot Snapshot, expectedActiveHash st
 	}
 	metadata.Kind = "maintenance"
 	return publishLockedMetadata(dir, snapshot, expectedActiveHash, metadata)
+}
+
+// snapshotInActiveAncestry excludes abandoned immutable generations that never
+// reached the active pointer. Only actual published descriptions are restorable.
+func snapshotInActiveAncestry(dir, active, target string) (bool, error) {
+	seen := map[string]bool{}
+	for active != "" {
+		if seen[active] {
+			return false, errors.New("catalog ancestry is invalid")
+		}
+		seen[active] = true
+		snapshot, err := LoadSnapshot(dir, active)
+		if err != nil {
+			return false, err
+		}
+		if active == target {
+			return true, nil
+		}
+		active = snapshot.ParentHash
+	}
+	return false, nil
 }
