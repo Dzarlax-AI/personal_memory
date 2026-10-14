@@ -17,6 +17,15 @@ func TestSameReviewSourceIdentityBindsDeclaredEvidence(t *testing.T) {
 	if !SameReviewSourceIdentity(modelDerived, original) {
 		t.Fatal("compatible model-derived summary lost source identity")
 	}
+	fallbackEqual := original
+	if !SameReviewSourceIdentity(fallbackEqual, original) {
+		t.Fatal("equal client-declared summary fallback lost source identity")
+	}
+	fallbackChanged := original
+	fallbackChanged.Summary = "Different client summary"
+	if SameReviewSourceIdentity(fallbackChanged, original) {
+		t.Fatal("different client-declared summary fallback retained source identity")
+	}
 	changedEvidence := modelDerived
 	changedEvidence.ClientEvidence = []Evidence{{Kind: "client_readme", Text: "Changed excerpt"}}
 	if SameReviewSourceIdentity(changedEvidence, original) {

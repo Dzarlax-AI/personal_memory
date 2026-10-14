@@ -229,11 +229,17 @@ func SameStableProjectIdentity(a, b Entry) bool {
 }
 
 func sameDeclaredSource(a, b Entry) bool {
-	if a.DeclaredSummary == b.DeclaredSummary {
-		return true
+	return effectiveDeclaredSource(a) == effectiveDeclaredSource(b)
+}
+
+func effectiveDeclaredSource(e Entry) string {
+	if e.DeclaredSummary != "" {
+		return e.DeclaredSummary
 	}
-	return a.DescriptionSource == "model_derived" && a.DeclaredSummary != "" &&
-		b.DescriptionSource == "client_declared" && b.DeclaredSummary == "" && a.DeclaredSummary == b.Summary
+	if e.DescriptionSource == "client_declared" {
+		return e.Summary
+	}
+	return ""
 }
 
 func sameReviewProvenance(a, b string) bool {

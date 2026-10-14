@@ -133,8 +133,28 @@ func TestReviewAssessmentOrphanRevisionCannotBeOverwritten(t *testing.T) {
 	if err := writeReviewImmutable(dir, "revision-00000001.json", raw); err != nil {
 		t.Fatal(err)
 	}
-	_, conflict, err := SaveReviewAssessment(cfg, run, digest, id, validReviewTestRequest())
+	incoming := validReviewTestRequest()
+	_, conflict, err := SaveReviewAssessment(cfg, run, digest, id, incoming)
 	if err != nil || !conflict {
 		t.Fatalf("orphan must conflict: %v %v", conflict, err)
+	}
+	visible, err := ReadReviewAssessments(cfg, run, digest)
+	if err != nil || len(visible) != 1 || visible[0].Revision != 1 || visible[0].Request.Note != "different orphan" {
+		t.Fatalf("orphan was not adopted visibly: %+v %v", visible, err)
+	}
+	orphanBefore, err := os.ReadFile(filepath.Join(dir, "revision-00000001.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := incoming
+	next.ExpectedRevision = 1
+	next.Note = "explicit follow-up"
+	saved, conflict, err := SaveReviewAssessment(cfg, run, digest, id, next)
+	if err != nil || conflict || saved.Revision != 2 {
+		t.Fatalf("follow-up after adopting orphan: %+v %v %v", saved, conflict, err)
+	}
+	orphanAfter, err := os.ReadFile(filepath.Join(dir, "revision-00000001.json"))
+	if err != nil || string(orphanBefore) != string(orphanAfter) {
+		t.Fatalf("immutable orphan was overwritten: %v", err)
 	}
 }

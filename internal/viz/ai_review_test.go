@@ -120,13 +120,17 @@ func TestAIReviewRunsFilteredScanClearsCursorAfterExhaustion(t *testing.T) {
 	}
 	session := strings.Repeat("1", 32)
 	for i := 1; i <= 101; i++ {
-		startedAt := time.Date(2026, 10, 14, 12, 0, i-1, 0, time.UTC)
-		runID := fmt.Sprintf("%s-%s-%08d", startedAt.Format("20060102T150405000000000Z"), session, i)
+		startedAt := time.Date(2026, 10, 14, 12, 0, i-1, i*1000, time.UTC)
+		runID := fmt.Sprintf("%s-%s-%08d", strings.ReplaceAll(startedAt.Format("20060102T150405.000000000Z"), ".", ""), session, i)
 		runDir := filepath.Join(state, "maintenance-runs", runID)
 		if err := os.MkdirAll(filepath.Join(runDir, "events"), 0700); err != nil {
 			t.Fatal(err)
 		}
-		started := map[string]any{"schema_version": 1, "run_id": runID, "session_id": session, "sequence": i, "started_at": startedAt.Format(time.RFC3339Nano), "scope": "catalog_only", "project_policy": "registered", "publication": "review"}
+		startedText := startedAt.Format(time.RFC3339Nano)
+		if i == 101 {
+			startedText = "corrupt-start-time"
+		}
+		started := map[string]any{"schema_version": 1, "run_id": runID, "session_id": session, "sequence": i, "started_at": startedText, "scope": "catalog_only", "project_policy": "registered", "publication": "review"}
 		b, _ := json.Marshal(started)
 		if err := os.WriteFile(filepath.Join(runDir, "started.json"), b, 0600); err != nil {
 			t.Fatal(err)
@@ -135,7 +139,7 @@ func TestAIReviewRunsFilteredScanClearsCursorAfterExhaustion(t *testing.T) {
 	cfg := aipolicy.Off()
 	cfg.StateDir = state
 	h := NewHandler(nil, 0).WithAIReview(cfg, "")
-	target := "/api/ai-review/runs?limit=100&from=2026-10-14T12:01:40Z&to=2026-10-14T12:01:40Z"
+	target := "/api/ai-review/runs?limit=1&from=2026-10-14T12:01:40Z&to=2026-10-14T12:01:40.999999999Z"
 	resp := httptest.NewRecorder()
 	h.Router().ServeHTTP(resp, httptest.NewRequest("GET", target, nil))
 	if resp.Code != http.StatusOK {
@@ -145,7 +149,7 @@ func TestAIReviewRunsFilteredScanClearsCursorAfterExhaustion(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Runs) != 1 || page.NextCursor != "" || !page.Complete || page.Scanned != 101 {
+	if len(page.Runs) != 1 || page.NextCursor != "" || !page.Complete || page.Scanned > 2 || page.Runs[0].Started == nil || page.Runs[0].Started.StartedAt != "corrupt-start-time" {
 		t.Fatalf("filtered scan reported incomplete/stale cursor: %+v", page)
 	}
 }
@@ -378,13 +382,87 @@ func TestAIReviewProductionShapedDraftAndAssessmentAPI(t *testing.T) {
 	drifted.Version = "3.0.0"
 	drifted.Entries = append([]contextcatalog.Entry(nil), current.Entries...)
 	drifted.Entries[0].Summary = "Later catalog change."
-	if _, err := contextcatalog.Publish(catalogDir, drifted, currentHash); err != nil {
+	driftHash, err := contextcatalog.Publish(catalogDir, drifted, currentHash)
+	if err != nil {
 		t.Fatal(err)
 	}
 	assessmentGet := httptest.NewRecorder()
 	router.ServeHTTP(assessmentGet, httptest.NewRequest("GET", fmt.Sprintf("/api/ai-review/runs/%s/drafts/%s/assessments", runID, digest), nil))
 	if assessmentGet.Code != 200 || !strings.Contains(assessmentGet.Body.String(), "\"drift\":true") {
 		t.Fatalf("assessment read: %d %s", assessmentGet.Code, assessmentGet.Body.String())
+	}
+	renamed := drifted
+	renamed.ParentHash = driftHash
+	renamed.Version = "4.0.0"
+	renamed.Entries = append([]contextcatalog.Entry(nil), drifted.Entries...)
+	renamed.Entries[0].Name = "Renamed Memory"
+	renamedHash, err := contextcatalog.Publish(catalogDir, renamed, driftHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamedResponse := httptest.NewRecorder()
+	router.ServeHTTP(renamedResponse, httptest.NewRequest("GET", fmt.Sprintf("/api/ai-review/runs/%s/drafts/%s", runID, digest), nil))
+	var renamedDraft aiReviewDraft
+	if renamedResponse.Code != http.StatusOK || json.Unmarshal(renamedResponse.Body.Bytes(), &renamedDraft) != nil || len(renamedDraft.Projects) != 1 || renamedDraft.Projects[0].Current != nil || renamedDraft.Projects[0].CurrentEntryHash != "" || renamedDraft.Projects[0].CurrentState != "identity_mismatch" {
+		t.Fatalf("renamed current identity state: %d %+v", renamedResponse.Code, renamedDraft)
+	}
+	identityMismatchAssessment, _ := json.Marshal(assessmentRequest{ExpectedRevision: 1, Verdict: "needs_correction", Reason: "identity_mismatch", Note: "Current project identity changed.", BaseEntryHash: p.BaseEntryHash, ProposedEntryHash: p.ProposedEntryHash, CurrentEntryHash: ""})
+	identityMismatchPut := httptest.NewRequest(http.MethodPut, putURL, strings.NewReader(string(identityMismatchAssessment)))
+	identityMismatchPut.Header.Set("Origin", "https://mcp.example.test")
+	identityMismatchPut.Header.Set("Content-Type", "application/json")
+	identityMismatchResponse := httptest.NewRecorder()
+	router.ServeHTTP(identityMismatchResponse, identityMismatchPut)
+	if identityMismatchResponse.Code != http.StatusConflict {
+		t.Fatalf("save with renamed current project: %d %s", identityMismatchResponse.Code, identityMismatchResponse.Body.String())
+	}
+	removed := contextcatalog.Snapshot{SchemaVersion: 1, Version: "5.0.0", ParentHash: renamedHash, CreatedAt: current.CreatedAt, Entries: []contextcatalog.Entry{}}
+	removedHash, err := contextcatalog.Publish(catalogDir, removed, renamedHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removedResponse := httptest.NewRecorder()
+	router.ServeHTTP(removedResponse, httptest.NewRequest("GET", fmt.Sprintf("/api/ai-review/runs/%s/drafts/%s", runID, digest), nil))
+	var removedDraft aiReviewDraft
+	if removedResponse.Code != http.StatusOK || json.Unmarshal(removedResponse.Body.Bytes(), &removedDraft) != nil || removedDraft.CurrentStatus != "available" || removedDraft.CurrentCatalogHash != removedHash || len(removedDraft.Projects) != 1 || removedDraft.Projects[0].Current != nil || removedDraft.Projects[0].CurrentEntryHash != "" || removedDraft.Projects[0].CurrentState != "absent" || !removedDraft.Projects[0].Drift {
+		t.Fatalf("removed current project binding: %d %+v", removedResponse.Code, removedDraft)
+	}
+	removedAssessment, _ := json.Marshal(assessmentRequest{ExpectedRevision: 1, Verdict: "needs_correction", Reason: "source_mismatch", Note: "Current card was removed.", BaseEntryHash: p.BaseEntryHash, ProposedEntryHash: p.ProposedEntryHash, CurrentEntryHash: ""})
+	removedPut := httptest.NewRequest(http.MethodPut, putURL, strings.NewReader(string(removedAssessment)))
+	removedPut.Header.Set("Origin", "https://mcp.example.test")
+	removedPut.Header.Set("Content-Type", "application/json")
+	removedPutResponse := httptest.NewRecorder()
+	router.ServeHTTP(removedPutResponse, removedPut)
+	if removedPutResponse.Code != http.StatusOK {
+		t.Fatalf("save assessment for removed current project: %d %s", removedPutResponse.Code, removedPutResponse.Body.String())
+	}
+	removedAssessmentRead := httptest.NewRecorder()
+	router.ServeHTTP(removedAssessmentRead, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/ai-review/runs/%s/drafts/%s/assessments", runID, digest), nil))
+	if removedAssessmentRead.Code != http.StatusOK || !strings.Contains(removedAssessmentRead.Body.String(), "\"revision\":2") || !strings.Contains(removedAssessmentRead.Body.String(), "\"drift\":false") {
+		t.Fatalf("assessment for the reviewed missing-project state became stale: %d %s", removedAssessmentRead.Code, removedAssessmentRead.Body.String())
+	}
+	removedActivePath := filepath.Join(catalogDir, "snapshots", removedHash+".json")
+	removedActiveBytes, err := os.ReadFile(removedActivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(removedActivePath, []byte("unreadable current snapshot"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	unavailableCurrentPut := httptest.NewRequest(http.MethodPut, putURL, strings.NewReader(string(removedAssessment)))
+	unavailableCurrentPut.Header.Set("Origin", "https://mcp.example.test")
+	unavailableCurrentPut.Header.Set("Content-Type", "application/json")
+	unavailableCurrentResponse := httptest.NewRecorder()
+	router.ServeHTTP(unavailableCurrentResponse, unavailableCurrentPut)
+	if unavailableCurrentResponse.Code != http.StatusConflict {
+		t.Fatalf("save with unreadable current catalog: %d %s", unavailableCurrentResponse.Code, unavailableCurrentResponse.Body.String())
+	}
+	visiblePriorAssessment := httptest.NewRecorder()
+	router.ServeHTTP(visiblePriorAssessment, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/ai-review/runs/%s/drafts/%s/assessments", runID, digest), nil))
+	if visiblePriorAssessment.Code != http.StatusOK || !strings.Contains(visiblePriorAssessment.Body.String(), "\"revision\":2") || !strings.Contains(visiblePriorAssessment.Body.String(), "\"drift\":true") {
+		t.Fatalf("prior assessment unavailable after current catalog failure: %d %s", visiblePriorAssessment.Code, visiblePriorAssessment.Body.String())
+	}
+	if err := os.WriteFile(removedActivePath, removedActiveBytes, 0600); err != nil {
+		t.Fatal(err)
 	}
 	for _, secret := range []string{"ProjectKey", "client\"", "/Users/"} {
 		if strings.Contains(get.Body.String(), secret) {
@@ -504,4 +582,13 @@ func hasReviewCode(values []string, wanted string) bool {
 		}
 	}
 	return false
+}
+
+func TestReviewRunIDTimePreservesNanoseconds(t *testing.T) {
+	id := "20261014T033702001700206Z-" + strings.Repeat("a", 32) + "-00000001"
+	got, err := reviewRunIDTime(id)
+	want := time.Date(2026, 10, 14, 3, 37, 2, 1700206, time.UTC)
+	if err != nil || !got.Equal(want) {
+		t.Fatalf("run timestamp: got %v err=%v want %v", got, err, want)
+	}
 }

@@ -130,6 +130,7 @@ func (h *Handler) apiAIReviewRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	seen := 0
+scanHistory:
 	for seen < reviewScanLimit {
 		page, e := aimaintenance.ReadRunHistory(cfg, 100, cursor, "")
 		if e != nil {
@@ -140,23 +141,31 @@ func (h *Handler) apiAIReviewRuns(w http.ResponseWriter, r *http.Request) {
 		if page.Availability != "available" {
 			break
 		}
+		stoppedAtFromBoundary := false
 		for index, run := range page.Runs {
 			seen++
 			response.Scanned++
 			lastScanned := run.RunID
-			startedText := ""
-			if run.Started != nil {
-				startedText = run.Started.StartedAt
+			started, parseErr := reviewRunIDTime(run.RunID)
+			if parseErr != nil && run.Started != nil {
+				started, parseErr = time.Parse(time.RFC3339Nano, run.Started.StartedAt)
 			}
-			started, parseErr := time.Parse(time.RFC3339Nano, startedText)
-			if parseErr != nil && len(run.RunID) >= 25 {
-				started, parseErr = time.Parse("20060102T150405000000000Z", run.RunID[:25])
+			if from != nil && parseErr == nil && started.Before(*from) && reviewRunIDTimeValid(run.RunID) {
+				stoppedAtFromBoundary = true
+				break
 			}
 			if parseErr == nil && ((from != nil && started.Before(*from)) || (to != nil && started.After(*to))) {
 				continue
 			}
 			response.Runs = append(response.Runs, run)
 			if len(response.Runs) == limit {
+				if from != nil && index+1 < len(page.Runs) {
+					if nextTime, nextErr := reviewRunIDTime(page.Runs[index+1].RunID); nextErr == nil && nextTime.Before(*from) {
+						response.NextCursor = ""
+						response.Complete = true
+						break scanHistory
+					}
+				}
 				if index < len(page.Runs)-1 || page.NextCursor != "" {
 					response.NextCursor = lastScanned
 				} else {
@@ -164,6 +173,11 @@ func (h *Handler) apiAIReviewRuns(w http.ResponseWriter, r *http.Request) {
 				}
 				break
 			}
+		}
+		if stoppedAtFromBoundary {
+			response.NextCursor = ""
+			response.Complete = true
+			break scanHistory
 		}
 		if len(response.Runs) == limit {
 			break
@@ -183,6 +197,18 @@ func (h *Handler) apiAIReviewRuns(w http.ResponseWriter, r *http.Request) {
 		response.Complete = false
 	}
 	writeNoStoreJSON(w, response)
+}
+
+func reviewRunIDTime(runID string) (time.Time, error) {
+	if !aimaintenance.ValidRunID(runID) || len(runID) < 25 {
+		return time.Time{}, errors.New("invalid run timestamp")
+	}
+	return time.Parse("20060102T150405.000000000Z", runID[:15]+"."+runID[15:25])
+}
+
+func reviewRunIDTimeValid(runID string) bool {
+	_, err := reviewRunIDTime(runID)
+	return err == nil
 }
 
 func reviewLimit(s string) (int, error) {
@@ -268,6 +294,7 @@ type reviewProject struct {
 	BaseEntryHash     string       `json:"base_entry_hash"`
 	ProposedEntryHash string       `json:"proposed_entry_hash"`
 	CurrentEntryHash  string       `json:"current_entry_hash"`
+	CurrentState      string       `json:"current_state"`
 	Drift             bool         `json:"drift"`
 	IdentityStatus    string       `json:"identity_status"`
 }
@@ -541,7 +568,11 @@ func (h *Handler) loadAIDraft(runID, digest string) (aiReviewDraft, *aimaintenan
 		}
 		qh := entryHash(q)
 		ch := ""
-		pr := reviewProject{ProjectID: id, Namespace: src.Namespace, Tag: src.Tag, Base: baseSafe, BaseEntryHash: bh, CurrentEntryHash: ch, Drift: !bok || identityStatus != "verified", IdentityStatus: identityStatus}
+		currentState := "unavailable"
+		if out.CurrentStatus == "available" {
+			currentState = "absent"
+		}
+		pr := reviewProject{ProjectID: id, Namespace: src.Namespace, Tag: src.Tag, Base: baseSafe, BaseEntryHash: bh, CurrentEntryHash: ch, CurrentState: currentState, Drift: !bok || identityStatus != "verified", IdentityStatus: identityStatus}
 		if identityStatus == "verified" {
 			originalSafe := safeReviewEntry(src)
 			pr.Original = &originalSafe
@@ -556,9 +587,14 @@ func (h *Handler) loadAIDraft(runID, digest string) (aiReviewDraft, *aimaintenan
 				safe := safeReviewEntry(cur)
 				pr.Current = &safe
 				ch = entryHash(cur)
+				pr.CurrentState = "present"
 			} else {
 				pr.Drift = true
+				pr.CurrentState = "identity_mismatch"
 			}
+		} else if identityStatus == "verified" && currentHasIdentityCollision(current.Entries, src) {
+			pr.Drift = true
+			pr.CurrentState = "identity_mismatch"
 		}
 		pr.CurrentEntryHash = ch
 		if bok && identityStatus == "verified" {
@@ -581,6 +617,15 @@ func (h *Handler) loadAIDraft(runID, digest string) (aiReviewDraft, *aimaintenan
 		out.Missing = append(out.Missing, "source_evidence_unavailable")
 	}
 	return out, &run, nil
+}
+
+func currentHasIdentityCollision(entries []contextcatalog.Entry, source contextcatalog.Entry) bool {
+	for _, entry := range entries {
+		if entry.Namespace == source.Namespace && (entry.Tag == source.Tag || (entry.Owner == source.Owner && entry.ProjectKey == source.ProjectKey)) {
+			return true
+		}
+	}
+	return false
 }
 
 type reviewProposal struct {
@@ -723,6 +768,10 @@ func (h *Handler) apiAIReviewSaveAssessment(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "draft unavailable", 404)
 		return
 	}
+	if draft.CurrentStatus != "available" {
+		http.Error(w, "current catalog unavailable", http.StatusConflict)
+		return
+	}
 	var p *reviewProject
 	for i := range draft.Projects {
 		if draft.Projects[i].ProjectID == id {
@@ -736,6 +785,10 @@ func (h *Handler) apiAIReviewSaveAssessment(w http.ResponseWriter, r *http.Reque
 	}
 	if p.BaseEntryHash == "" {
 		http.Error(w, "base snapshot unavailable", http.StatusConflict)
+		return
+	}
+	if p.CurrentState == "identity_mismatch" || p.CurrentState == "unavailable" {
+		http.Error(w, "current project identity unavailable", http.StatusConflict)
 		return
 	}
 	if req.ProposedEntryHash != p.ProposedEntryHash || req.BaseEntryHash != p.BaseEntryHash || req.CurrentEntryHash != p.CurrentEntryHash {
@@ -797,9 +850,12 @@ func validConfiguredReviewOrigin(origin string) bool {
 }
 
 func assessmentDrift(a assessmentView, d aiReviewDraft) bool {
+	if d.CurrentStatus != "available" {
+		return true
+	}
 	for _, p := range d.Projects {
 		if p.ProjectID == a.ProjectID {
-			return p.ProposedEntryHash != a.Request.ProposedEntryHash || p.BaseEntryHash != a.Request.BaseEntryHash || p.CurrentEntryHash != a.Request.CurrentEntryHash
+			return p.IdentityStatus != "verified" || p.CurrentState == "identity_mismatch" || p.CurrentState == "unavailable" || p.ProposedEntryHash != a.Request.ProposedEntryHash || p.BaseEntryHash != a.Request.BaseEntryHash || p.CurrentEntryHash != a.Request.CurrentEntryHash
 		}
 	}
 	return true

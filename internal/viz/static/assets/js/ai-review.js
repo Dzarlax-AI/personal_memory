@@ -44,9 +44,8 @@ const reviewNode = (tag, text, className) => {
 const reviewDate = value => {
   if (!value) return 'Time unavailable';
   const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString();
+  return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString(undefined, { timeZoneName: 'short' });
 };
-const localDateValue = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 async function reviewMapLimit(values, limit, callback) {
   const results = new Array(values.length);
   let next = 0;
@@ -92,12 +91,13 @@ async function loadAIReview(refresh = false) {
   }
   const from = reviewEl('ai-review-from');
   const to = reviewEl('ai-review-to');
+  const timezoneLabel = reviewEl('ai-review-timezone');
+  if (timezoneLabel) {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time';
+    timezoneLabel.textContent = `Dates interpreted in browser local timezone (${zone})`;
+  }
   if (!from.value && !to.value) {
-    const today = new Date();
-    to.value = localDateValue(today);
-    const start = new Date(today);
-    start.setDate(start.getDate() - 13);
-    from.value = localDateValue(start);
+    [from.value, to.value] = aiReviewDates.defaultLast14Days(new Date());
   }
   aiReviewFilters = { from: from.value, to: to.value, outcome: reviewEl('ai-review-outcome').value, project: reviewEl('ai-review-project').value };
   const statusBox = reviewEl('ai-review-status');
@@ -133,8 +133,12 @@ function renderAIReviewStatus(status) {
 function rangeParams() {
   const p = new URLSearchParams();
   p.set('limit', '50');
-  if (aiReviewFilters.from) p.set('from', `${aiReviewFilters.from}T00:00:00Z`);
-  if (aiReviewFilters.to) p.set('to', `${aiReviewFilters.to}T23:59:59.999999999Z`);
+  if (aiReviewFilters.from && aiReviewFilters.to) {
+    const range = aiReviewDates.localDateRange(aiReviewFilters.from, aiReviewFilters.to);
+    p.set('from', range.from);
+    p.set('to', range.to);
+  } else if (aiReviewFilters.from) p.set('from', aiReviewDates.localDateStart(aiReviewFilters.from));
+  else if (aiReviewFilters.to) p.set('to', aiReviewDates.localDateEnd(aiReviewFilters.to));
   if (aiReviewCursor) p.set('cursor', aiReviewCursor);
   return p.toString();
 }
@@ -381,7 +385,10 @@ async function loadAIReviewDraft(run, digest, projectID = '') {
     for (const [key, label] of [['original','Original client declaration'], ['base','Base at run'], ['proposed','Proposal'], ['current','Current catalog']]) {
       const entry = project[key];
       const article = reviewNode('section', undefined, 'ai-review-version'); article.append(reviewNode('h6', label));
-      if (!entry) article.append(reviewNode('p', 'Unavailable', 'ai-review-muted'));
+      if (!entry && key === 'current' && project.current_state === 'absent') article.append(reviewNode('p', 'Project absent from current catalog.', 'ai-review-warning'));
+      else if (!entry && key === 'current' && project.current_state === 'identity_mismatch') article.append(reviewNode('p', 'A current card may represent this project, but its identity differs from the reviewed source.', 'ai-review-warning'));
+      else if (!entry && key === 'current' && draft.current_status !== 'available') article.append(reviewNode('p', 'Current catalog unavailable.', 'ai-review-muted'));
+      else if (!entry) article.append(reviewNode('p', 'Unavailable', 'ai-review-muted'));
       else renderReviewEntry(article, entry, draft.evidence || []);
       versions.append(article);
     }
@@ -490,10 +497,12 @@ function renderAssessmentForm(run, draft, project) {
   const save = reviewNode('button','Save assessment','btn btn--primary'); save.type = 'submit';
   const controls = reviewNode('div',undefined,'ai-review-assessment-controls'); controls.append(verdict, reason, note, save); form.append(controls);
   const retryRead = reviewNode('button', 'Retry saved assessment read', 'btn btn--secondary'); retryRead.type = 'button'; retryRead.hidden = true; form.append(retryRead);
+  const currentKnownAbsent = project.current_state === 'absent' && !project.current && project.current_entry_hash === '';
   const editable = draft.assessment_writable !== false && project.identity_status === 'verified' &&
-    /^[a-f0-9]{64}$/.test(project.base_entry_hash || '') && /^[a-f0-9]{64}$/.test(project.proposed_entry_hash || '') && /^[a-f0-9]{64}$/.test(project.current_entry_hash || '');
+    /^[a-f0-9]{64}$/.test(project.base_entry_hash || '') && /^[a-f0-9]{64}$/.test(project.proposed_entry_hash || '') &&
+    (/^[a-f0-9]{64}$/.test(project.current_entry_hash || '') || currentKnownAbsent);
   if (!editable) {
-    const cause = draft.assessment_writable === false ? 'Assessment writing is disabled for this draft.' : project.identity_status !== 'verified' ? 'Project identity is not verified; assessment is disabled.' : 'Required entry hashes are unavailable; assessment is disabled.';
+    const cause = draft.assessment_writable === false ? 'Assessment writing is disabled for this draft.' : project.identity_status !== 'verified' ? 'Project identity is not verified; assessment is disabled.' : !/^[a-f0-9]{64}$/.test(project.base_entry_hash || '') ? 'Base entry hash is unavailable; assessment is disabled.' : !/^[a-f0-9]{64}$/.test(project.proposed_entry_hash || '') ? 'Proposal entry hash is unavailable; assessment is disabled.' : draft.current_status !== 'available' ? 'Current catalog is unavailable; assessment is disabled.' : project.current_state === 'identity_mismatch' ? 'Current project identity differs from the reviewed source; assessment is disabled.' : 'Current entry state is not verified; assessment is disabled.';
     form.append(reviewNode('p', cause, 'ai-review-warning'));
     controls.querySelectorAll('select, textarea, button').forEach(control => { control.disabled = true; });
   }

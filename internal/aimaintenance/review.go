@@ -98,6 +98,12 @@ func SaveReviewAssessment(cfg aipolicy.Config, runID, digest, projectID string, 
 		}
 	}
 	if head.Revision != req.ExpectedRevision {
+		orphanRevision := head.Revision + 1
+		if _, orphanErr := readReviewRevision(dir, orphanRevision, runID, digest, projectID); orphanErr == nil {
+			if err := writeReviewHead(dir, reviewHead{SchemaVersion: reviewSchema, Revision: orphanRevision}); err != nil {
+				return ReviewAssessment{}, false, err
+			}
+		}
 		return ReviewAssessment{}, true, nil
 	}
 	n := head.Revision + 1
@@ -105,6 +111,9 @@ func SaveReviewAssessment(cfg aipolicy.Config, runID, digest, projectID string, 
 	name := fmt.Sprintf("revision-%08d.json", n)
 	if prior, er := readReviewRevision(dir, n, runID, digest, projectID); er == nil {
 		if prior.Request != req || prior.Revision != n {
+			if err := writeReviewHead(dir, reviewHead{SchemaVersion: reviewSchema, Revision: n}); err != nil {
+				return ReviewAssessment{}, false, err
+			}
 			return ReviewAssessment{}, true, nil
 		}
 		record = prior // Recover a landed immutable revision whose head was not published.
