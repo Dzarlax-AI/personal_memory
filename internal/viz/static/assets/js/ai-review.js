@@ -62,8 +62,23 @@ async function reviewMapLimit(values, limit, callback) {
 const reviewDuration = value => value === null || value === undefined ? 'Unknown' : `${(value / 1000).toFixed(1)} s`;
 const reviewUsage = (known, input, output) => known ? `${Number(input || 0).toLocaleString()} in · ${Number(output || 0).toLocaleString()} out` : 'Unknown';
 
+function reviewSignInLink() {
+  const link = reviewNode('a', 'Sign in again', 'btn btn--secondary');
+  link.href = `${BASE}/ai-review`;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  return link;
+}
+
 async function aiReviewRequest(path, options = {}) {
-  const response = await fetch(`${BASE}${path}`, { cache: 'no-store', ...options });
+  // Authentication must run as a navigation, never a cross-origin fetch redirect.
+  const response = await fetch(`${BASE}${path}`, { cache: 'no-store', ...options, redirect: 'manual' });
+  if (response.type === 'opaqueredirect' || response.status === 401) {
+    const error = new Error('Sign-in is required. Open AI Review in another tab, sign in, then return and retry');
+    error.status = 401;
+    error.authRequired = true;
+    throw error;
+  }
   if (!response.ok) {
     const responseText = await response.text();
     let details = responseText;
@@ -110,6 +125,7 @@ async function loadAIReview(refresh = false) {
     if (initial) aiReviewLoaded = true;
   } catch (error) {
     statusBox.replaceChildren(reviewNode('p', `Unable to load AI Review: ${error.message}`, 'ai-review-error'));
+    if (error.authRequired) statusBox.append(reviewSignInLink());
     aiReviewLoaded = true;
   } finally { aiReviewLoading = false; }
 }
@@ -176,6 +192,7 @@ async function loadAIReviewPage(reset = false) {
         catch (error) {
           if (selectionGeneration === aiReviewSelectionGeneration && requestGeneration === aiReviewPageGeneration) {
             reviewEl('ai-review-detail').replaceChildren(reviewNode('p', `Run unavailable. It may be outside retained history or the link may be invalid (${error.message}).`, 'ai-review-error'));
+            if (error.authRequired) reviewEl('ai-review-detail').append(reviewSignInLink());
           }
         }
       }
@@ -188,6 +205,7 @@ async function loadAIReviewPage(reset = false) {
   } catch (error) {
     if (requestGeneration !== aiReviewPageGeneration) return false;
     reviewEl('ai-review-runs').replaceChildren(reviewNode('p', `Unable to load run history: ${error.message}`, 'ai-review-error'));
+    if (error.authRequired) reviewEl('ai-review-runs').append(reviewSignInLink());
     return false;
   }
 }
@@ -326,7 +344,12 @@ async function openAIReviewRun(runID, digest = '', projectID = '', push = true) 
     const data = await aiReviewRequest(`/api/ai-review/runs/${encodeURIComponent(runID)}`);
     if (selectionGeneration !== aiReviewSelectionGeneration) return;
     renderAIReviewDetail(data.run, digest, projectID);
-  } catch (error) { if (selectionGeneration === aiReviewSelectionGeneration) panel.replaceChildren(reviewNode('p', `Unable to load run details: ${error.message}`, 'ai-review-error')); }
+  } catch (error) {
+    if (selectionGeneration === aiReviewSelectionGeneration) {
+      panel.replaceChildren(reviewNode('p', `Unable to load run details: ${error.message}`, 'ai-review-error'));
+      if (error.authRequired) panel.append(reviewSignInLink());
+    }
+  }
 }
 
 function renderAIReviewDetail(run, selectedDigest = '', selectedProjectID = '') {
@@ -368,7 +391,13 @@ async function loadAIReviewDraft(run, digest, projectID = '') {
   const panel = reviewEl('ai-review-detail');
   let draft;
   try { draft = await fetchAIReviewDraft(run.run_id, digest); }
-  catch (error) { if (selectionGeneration === aiReviewSelectionGeneration) panel.append(reviewNode('p', `Draft unavailable or corrupt: ${error.message}`, 'ai-review-error')); return; }
+  catch (error) {
+    if (selectionGeneration === aiReviewSelectionGeneration) {
+      panel.append(reviewNode('p', `${error.authRequired ? 'Unable to load draft' : 'Draft unavailable or corrupt'}: ${error.message}`, 'ai-review-error'));
+      if (error.authRequired) panel.append(reviewSignInLink());
+    }
+    return;
+  }
   if (selectionGeneration !== aiReviewSelectionGeneration) return;
   const section = reviewNode('section', undefined, 'ai-review-section ai-review-draft-detail');
   section.append(reviewNode('h4', `Proposal ${digest.slice(0, 16)}`));
@@ -497,6 +526,7 @@ function renderAssessmentForm(run, draft, project) {
   const save = reviewNode('button','Save assessment','btn btn--primary'); save.type = 'submit';
   const controls = reviewNode('div',undefined,'ai-review-assessment-controls'); controls.append(verdict, reason, note, save); form.append(controls);
   const retryRead = reviewNode('button', 'Retry saved assessment read', 'btn btn--secondary'); retryRead.type = 'button'; retryRead.hidden = true; form.append(retryRead);
+  const signInAgain = reviewSignInLink(); signInAgain.hidden = true; form.append(signInAgain);
   const currentKnownAbsent = project.current_state === 'absent' && !project.current && project.current_entry_hash === '';
   const editable = draft.assessment_writable !== false && project.identity_status === 'verified' &&
     /^[a-f0-9]{64}$/.test(project.base_entry_hash || '') && /^[a-f0-9]{64}$/.test(project.proposed_entry_hash || '') &&
@@ -532,7 +562,7 @@ function renderAssessmentForm(run, draft, project) {
           state.textContent = `Saved ${reviewDate(item.saved_at)} · revision ${revision}${item.drift ? ' · saved assessment is stale' : ''}`;
         } else state.textContent = 'No saved assessment';
       }
-      if (manageControls) { assessmentReadReady = true; setFormEnabled(editable); retryRead.hidden = true; }
+      if (manageControls) { assessmentReadReady = true; setFormEnabled(editable); retryRead.hidden = true; signInAgain.hidden = true; }
       return item;
     } catch (error) {
       if (generation === assessmentReadGeneration && manageControls && form.isConnected) {
@@ -540,6 +570,7 @@ function renderAssessmentForm(run, draft, project) {
         setFormEnabled(false);
         retryRead.hidden = false;
         state.textContent = `Saved assessment unavailable: ${error.message}. Controls are read only until the read succeeds.`;
+        signInAgain.hidden = !error.authRequired;
       }
       throw error;
     }
@@ -597,7 +628,10 @@ function renderAssessmentForm(run, draft, project) {
             } else conflictMessage.textContent = 'A newer revision was reported, but no current assessment could be loaded. Your values remain unsaved and saving stays locked.';
           } catch (_) { conflictMessage.textContent = 'A newer revision was reported, but the latest assessment could not be loaded. Your values remain unsaved and saving stays locked.'; }
         }
-      } else state.textContent = `Save failed: ${error.message}. Your input is still here.`;
+      } else {
+        state.textContent = `Save failed: ${error.message}. Your input is still here.`;
+        signInAgain.hidden = !error.authRequired;
+      }
     } finally { if (!conflictLocked) save.disabled = false; }
   });
   return form;
@@ -638,6 +672,7 @@ window.addEventListener('popstate', () => {
       aiReviewSelection = null;
       renderAIReviewRuns();
       reviewEl('ai-review-detail').replaceChildren(reviewNode('p', `Run unavailable. It may be outside retained history or the link may be invalid (${error.message}).`, 'ai-review-error'));
+            if (error.authRequired) reviewEl('ai-review-detail').append(reviewSignInLink());
     });
   }
 });
