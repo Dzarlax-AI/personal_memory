@@ -32,6 +32,9 @@ const (
 var runIDRE = regexp.MustCompile(`^[0-9]{8}T[0-9]{15}Z-[a-f0-9]{32}-[0-9]{8}$`)
 var historyTempRE = regexp.MustCompile(`^\.history-[0-9]{1,10}$`)
 
+// ValidRunID reports whether an identifier has the stable maintenance history form.
+func ValidRunID(id string) bool { return runIDRE.MatchString(id) }
+
 type runStarted struct {
 	SchemaVersion int    `json:"schema_version"`
 	RunID         string `json:"run_id"`

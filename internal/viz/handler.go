@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Dzarlax-AI/personal-memory/internal/aipolicy"
 	"github.com/Dzarlax-AI/personal-memory/internal/memory/lifecycle"
 	"github.com/Dzarlax-AI/personal-memory/internal/memory/maintenance"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
@@ -103,13 +104,15 @@ var staticFS embed.FS
 
 // Order matters: this is how the view fragments are concatenated into the
 // shell, which also determines the DOM order of the view containers.
-var viewNames = []string{"overview", "duplicates", "forgotten", "timeline", "graph", "documents"}
+var viewNames = []string{"overview", "duplicates", "forgotten", "timeline", "graph", "documents", "ai-review"}
 
 type Handler struct {
 	qdrant           *qdrant.Client
 	defaultThreshold float64
 	defaultMaxEdges  int
 	historyTimeout   time.Duration
+	aiReviewConfig   *aipolicy.Config
+	aiReviewOrigin   string
 
 	docChunks *qdrant.Client
 	docsDir   string
@@ -170,6 +173,14 @@ func (h *Handler) Router() chi.Router {
 	r.Get("/api/documents", h.apiDocuments)
 	r.Get("/api/documents/status", h.apiDocumentsStatus)
 	r.Patch("/api/facts/{id}/tags", h.apiUpdateFactTags)
+	if h.aiReviewConfig != nil {
+		r.Get("/api/ai-review/status", h.withReviewNoStore(h.apiAIReviewStatus))
+		r.Get("/api/ai-review/runs", h.withReviewNoStore(h.apiAIReviewRuns))
+		r.Get("/api/ai-review/runs/{run_id}", h.withReviewNoStore(h.apiAIReviewRun))
+		r.Get("/api/ai-review/runs/{run_id}/drafts/{sha256}", h.withReviewNoStore(h.apiAIReviewDraft))
+		r.Get("/api/ai-review/runs/{run_id}/drafts/{sha256}/assessments", h.withReviewNoStore(h.apiAIReviewAssessments))
+		r.Put("/api/ai-review/runs/{run_id}/drafts/{sha256}/assessments/{project_id}", h.withReviewNoStore(h.apiAIReviewSaveAssessment))
+	}
 
 	// Static assets: /viz/assets/styles.css, /viz/assets/js/*.js.
 	// chi.Mount does NOT rewrite r.URL.Path — only its internal RoutePath — so

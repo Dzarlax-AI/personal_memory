@@ -1,6 +1,6 @@
 // Router + bootstrap. Loaded last so all view-module functions are defined.
 
-const VIEWS = ['overview', 'duplicates', 'forgotten', 'timeline', 'graph', 'documents'];
+const VIEWS = ['overview', 'duplicates', 'forgotten', 'timeline', 'graph', 'documents', 'ai-review'];
 
 function parseTabFromPath() {
   const path = window.location.pathname;
@@ -39,6 +39,7 @@ function activateTab(name, pushHistory = true) {
   if (name === 'documents' && !documentsPromise && (!documentsData || documentsAreStale())) {
     loadDocuments(Boolean(documentsData && documentsAreStale()));
   }
+  if (name === 'ai-review' && !aiReviewLoaded) loadAIReview();
 
   if (pushHistory) {
     const targetPath = `${BASE}/${name}`;
