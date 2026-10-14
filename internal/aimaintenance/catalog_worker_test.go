@@ -1426,6 +1426,40 @@ func TestRegisteredHoldOmitsOnlyHeldCardBeforeModelSelection(t *testing.T) {
 	}
 }
 
+func TestRegisteredHistoricalOnlyPolicyBlocksCurrentUsesAtPublish(t *testing.T) {
+	w, provider, cfg := newRegisteredCatalogWorker(t, 1)
+	consumer := ensureRegisteredFixture(t, cfg.CatalogDir, "owner-a", "repo:project-a", "project-a")
+	ensureRegisteredFixture(t, cfg.CatalogDir, "owner-b", "repo:project-b", "project-b")
+	entryHash, err := catalogEntryHash(consumer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := contextcatalog.SetProjectPolicy(cfg.CatalogDir, contextcatalog.ProjectPolicy{ProjectID: consumer.ProjectID, HistoricalOnly: true, Reason: "test historical boundary"}, entryHash, 0); err != nil {
+		t.Fatal(err)
+	}
+	provider.result = func(in Input) Proposal {
+		proposal := registeredDescriptionProposal(in, "Maintained description")
+		proposal.Catalog.Entries[0].Uses = []string{"project-b"}
+		return proposal
+	}
+	w.cfg.Maintenance.CatalogPublish = "evidence_bounded"
+	w.catalog.cfg.Maintenance.CatalogPublish = "evidence_bounded"
+	if err := w.RunOnce(context.Background()); err == nil {
+		t.Fatal("historical-only policy allowed an unqualified current uses relationship")
+	}
+	drafts, err := os.ReadDir(filepath.Join(cfg.StateDir, "maintenance", "proposals"))
+	if err != nil || len(drafts) != 1 {
+		t.Fatalf("rejected proposal was not retained as a draft: %d %v", len(drafts), err)
+	}
+	active, _, err := contextcatalog.LoadActive(cfg.CatalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalogEntryByTag(t, active, "project-a").Uses) != 0 {
+		t.Fatalf("historical-only rejection changed current relationships: %#v", catalogEntryByTag(t, active, "project-a"))
+	}
+}
+
 func catalogEntryByTag(t *testing.T, snapshot contextcatalog.Snapshot, tag string) contextcatalog.Entry {
 	t.Helper()
 	for _, entry := range snapshot.Entries {
@@ -1461,6 +1495,14 @@ func TestRegisteredSourceRevalidationSortsAndIgnoresUnselectedBlockedProjection(
 	current, base, err := contextcatalog.LoadActive(cfg.CatalogDir)
 	if err != nil {
 		t.Fatal(err)
+	}
+	orderedByTag := map[string]contextcatalog.Entry{}
+	for _, card := range current.Entries {
+		orderedByTag[card.Tag] = card
+	}
+	available, sourcesCurrent := w.catalog.catalogSourcesState([]contextcatalog.Entry{orderedByTag["project-b"], orderedByTag["project-a"]})
+	if !available || !sourcesCurrent {
+		t.Fatal("selected source validation depended on cursor-rotated catalog ordering")
 	}
 	for i := range current.Entries {
 		if current.Entries[i].Tag == "project-z" {

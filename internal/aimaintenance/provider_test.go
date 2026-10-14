@@ -293,7 +293,7 @@ func TestBuildRequestIncludesBoundedReadOnlyRegisteredProjectDirectory(t *testin
 		t.Fatalf("unexpected directory fields: %#v", project)
 	}
 	instructions := envelope["instructions"].(string)
-	for _, required := range []string{"read-only name/tag/alias lookup aid", "never evidence", "Historical-only consumption", "external Todoist or Home Assistant service is not a local project"} {
+	for _, required := range []string{"read-only name/tag/alias lookup aid", "never evidence", "consumer -> provider", "currently consumes", "Historical-only consumption", "external Todoist or Home Assistant service is not a local project", "Preserve explicitly evidenced shared artifacts"} {
 		if !strings.Contains(instructions, required) {
 			t.Errorf("instructions omitted %q", required)
 		}
