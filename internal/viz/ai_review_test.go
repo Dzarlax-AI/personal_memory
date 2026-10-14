@@ -1,6 +1,7 @@
 package viz
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -61,6 +62,11 @@ func TestAIReviewEndpointsRequireOuterProxySecret(t *testing.T) {
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodGet, "/api/ai-review/status"},
 		{http.MethodGet, "/api/ai-review/runs"},
+		{http.MethodGet, "/api/ai-review/projects/" + strings.Repeat("b", 64) + "/versions"},
+		{http.MethodPost, "/api/ai-review/projects/" + strings.Repeat("b", 64) + "/restore-preview"},
+		{http.MethodPost, "/api/ai-review/projects/" + strings.Repeat("b", 64) + "/restore"},
+		{http.MethodGet, "/api/ai-review/catalog-operations/" + strings.Repeat("c", 64)},
+		{http.MethodPost, "/api/ai-review/projects/" + strings.Repeat("b", 64) + "/publication-hold"},
 		{http.MethodPut, "/api/ai-review/runs/20261014T120000000000000Z-0123456789abcdef0123456789abcdef-00000001/drafts/" + strings.Repeat("a", 64) + "/assessments/" + strings.Repeat("b", 64)},
 	} {
 		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(`{"expected_revision":0}`))
@@ -78,6 +84,125 @@ func TestAIReviewEndpointsRequireOuterProxySecret(t *testing.T) {
 	protected.ServeHTTP(resp, authorized)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("proxy-authorized read: %d", resp.Code)
+	}
+}
+
+func TestAIReviewCatalogWritesRejectWrongOriginAndUnknownFields(t *testing.T) {
+	state, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := aipolicy.Off()
+	cfg.StateDir, cfg.CatalogDir, cfg.Maintenance.Scope = state, catalog, "catalog_only"
+	h := NewHandler(nil, 0).WithAIReview(cfg, "https://mcp.example.test")
+	id := strings.Repeat("b", 64)
+	for _, tc := range []struct {
+		origin, body string
+		want         int
+	}{
+		{"https://evil.example.test", `{"hold":true,"reason":"pause","expected_policy_revision":0,"expected_current_entry_hash":"` + strings.Repeat("a", 64) + `"}`, http.StatusForbidden},
+		{"https://mcp.example.test", `{"hold":true,"reason":"pause","expected_policy_revision":0,"expected_current_entry_hash":"` + strings.Repeat("a", 64) + `","force":true}`, http.StatusBadRequest},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "https://mcp.example.test/api/ai-review/projects/"+id+"/publication-hold", strings.NewReader(tc.body))
+		req.Header.Set("Origin", tc.origin)
+		req.Header.Set("Content-Type", "application/json")
+		resp := httptest.NewRecorder()
+		h.Router().ServeHTTP(resp, req)
+		if resp.Code != tc.want {
+			t.Errorf("origin %s got %d want %d", tc.origin, resp.Code, tc.want)
+		}
+		if resp.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("cache-control=%q", resp.Header().Get("Cache-Control"))
+		}
+	}
+}
+
+func TestAIReviewVersionBindingsUseCurrentGenerationAfterUnrelatedPublication(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogDir := filepath.Join(root, "catalog")
+	stateDir := filepath.Join(root, "state")
+	projectDigest := sha256.Sum256([]byte("client\x00projects\x00personal-memory"))
+	projectID := hex.EncodeToString(projectDigest[:])
+	entry := contextcatalog.Entry{Namespace: "projects", Tag: "personal-memory", Name: "Memory", Summary: "Original description.", Aliases: []string{}, OwnedComponents: []string{}, Boundaries: []string{}, Uses: []string{}, SharedWith: []string{}, PositiveExamples: []string{}, NegativeExamples: []string{}, EvidenceRefs: []string{}, ReviewStatus: "approved", ProjectID: projectID, ProjectKey: "personal-memory", Owner: "client", DescriptionSource: "client_declared", DeclaredSummary: "Original declaration."}
+	first := contextcatalog.Snapshot{SchemaVersion: 1, Version: "1.0.0", CreatedAt: "2026-10-10T00:00:00Z", Entries: []contextcatalog.Entry{entry}}
+	firstHash, err := contextcatalog.Publish(catalogDir, first, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedEntry := entry
+	changedEntry.Summary = "Updated description."
+	changedEntry.DescriptionSource = "model_derived"
+	second := contextcatalog.Snapshot{SchemaVersion: 1, Version: "1.0.1", ParentHash: firstHash, CreatedAt: "2026-10-11T00:00:00Z", Entries: []contextcatalog.Entry{changedEntry}}
+	secondHash, err := contextcatalog.Publish(catalogDir, second, firstHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherDigest := sha256.Sum256([]byte("client\x00projects\x00other-project"))
+	other := entry
+	other.ProjectID, other.ProjectKey, other.Tag, other.Name = hex.EncodeToString(otherDigest[:]), "other-project", "other-project", "Other project"
+	other.Summary, other.DeclaredSummary = "Other description.", "Other declaration."
+	third := second
+	third.ParentHash, third.Version, third.CreatedAt = secondHash, "1.0.2", "2026-10-12T00:00:00Z"
+	third.Entries = []contextcatalog.Entry{changedEntry, other}
+	thirdHash, err := contextcatalog.Publish(catalogDir, third, secondHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := aipolicy.Off()
+	cfg.StateDir, cfg.CatalogDir, cfg.Maintenance.Scope = stateDir, catalogDir, "catalog_only"
+	h := NewHandler(nil, 0).WithAIReview(cfg, "https://mcp.example.test")
+	get := httptest.NewRecorder()
+	h.Router().ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/api/ai-review/projects/"+projectID+"/versions?limit=100", nil))
+	if get.Code != http.StatusOK {
+		t.Fatalf("versions status=%d body=%s", get.Code, get.Body.String())
+	}
+	var versions struct {
+		CurrentHash  string                       `json:"current_hash"`
+		CurrentEntry *reviewEntry                 `json:"current_entry"`
+		Policy       contextcatalog.ProjectPolicy `json:"policy"`
+		Versions     []contextcatalog.Version     `json:"versions"`
+	}
+	if err := json.Unmarshal(get.Body.Bytes(), &versions); err != nil {
+		t.Fatal(err)
+	}
+	if versions.CurrentHash != thirdHash || versions.Policy.CurrentEntryHash == "" || versions.CurrentEntry == nil || len(versions.Versions) < 2 || versions.Versions[0].SnapshotHash == thirdHash {
+		t.Fatalf("stale current binding after unrelated publication: %+v", versions)
+	}
+	entryJSON, _ := json.Marshal(changedEntry)
+	entrySum := sha256.Sum256(entryJSON)
+	wantEntryHash := hex.EncodeToString(entrySum[:])
+	if versions.Policy.CurrentEntryHash != wantEntryHash {
+		t.Fatalf("current entry binding=%s want %s", versions.Policy.CurrentEntryHash, wantEntryHash)
+	}
+	oldJSON, _ := json.Marshal(entry)
+	oldSum := sha256.Sum256(oldJSON)
+	previewBody, _ := json.Marshal(contextcatalog.RestoreRequest{Reason: "Preview selected version", ProjectID: projectID, HistoricalHash: firstHash, HistoricalEntryHash: hex.EncodeToString(oldSum[:]), ExpectedCurrentHash: thirdHash, ExpectedCurrentEntryHash: wantEntryHash})
+	previewReq := httptest.NewRequest(http.MethodPost, "https://mcp.example.test/api/ai-review/projects/"+projectID+"/restore-preview", bytes.NewReader(previewBody))
+	previewReq.Header.Set("Origin", "https://mcp.example.test")
+	previewReq.Header.Set("Content-Type", "application/json")
+	preview := httptest.NewRecorder()
+	h.Router().ServeHTTP(preview, previewReq)
+	if preview.Code != http.StatusOK {
+		t.Fatalf("preview status=%d body=%s", preview.Code, preview.Body.String())
+	}
+	for _, hold := range []bool{true, false} {
+		reqBody, _ := json.Marshal(publicationHoldRequest{Hold: hold, Reason: "Operator state change", ExpectedPolicyRevision: map[bool]uint64{true: 0, false: 1}[hold], ExpectedCurrentEntryHash: wantEntryHash})
+		req := httptest.NewRequest(http.MethodPost, "https://mcp.example.test/api/ai-review/projects/"+projectID+"/publication-hold", bytes.NewReader(reqBody))
+		req.Header.Set("Origin", "https://mcp.example.test")
+		req.Header.Set("Content-Type", "application/json")
+		resp := httptest.NewRecorder()
+		h.Router().ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("hold=%v status=%d body=%s", hold, resp.Code, resp.Body.String())
+		}
 	}
 }
 
@@ -590,5 +715,16 @@ func TestReviewRunIDTimePreservesNanoseconds(t *testing.T) {
 	want := time.Date(2026, 10, 14, 3, 37, 2, 1700206, time.UTC)
 	if err != nil || !got.Equal(want) {
 		t.Fatalf("run timestamp: got %v err=%v want %v", got, err, want)
+	}
+}
+
+func TestRestorePreviewAllowsNoMutationReason(t *testing.T) {
+	req := contextcatalog.RestoreRequest{ProjectID: strings.Repeat("a", 64), HistoricalHash: strings.Repeat("b", 64), HistoricalEntryHash: strings.Repeat("c", 64), ExpectedCurrentHash: strings.Repeat("d", 64), ExpectedCurrentEntryHash: strings.Repeat("e", 64)}
+	if !validRestoreRequest(req, false) {
+		t.Fatal("read-only browser preview must not require a mutation reason")
+	}
+	req.OperationID = strings.Repeat("f", 64)
+	if validRestoreRequest(req, true) {
+		t.Fatal("restore mutation must still require a reason")
 	}
 }

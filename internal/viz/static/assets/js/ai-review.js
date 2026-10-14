@@ -12,6 +12,7 @@ let aiReviewPageLoading = false;
 const aiReviewDraftCache = new Map();
 const aiReviewDraftData = new Map();
 const aiReviewAssessmentCache = new Map();
+const aiReviewVersionCache = new Map();
 function fetchAIReviewDraft(runID, digest) {
   const key = `${runID}:${digest}`;
   if (!aiReviewDraftCache.has(key)) {
@@ -385,6 +386,137 @@ function appendDefinition(root, label, value) {
   root.append(reviewNode('dt', label), reviewNode('dd', reviewText(value)));
 }
 
+async function loadProjectVersions(card, project, cursor = '') {
+  const projectID = project.project_id;
+  const previous = card.querySelector('.ai-review-catalog-history'); if (previous) previous.remove();
+  const section = reviewNode('section', undefined, 'ai-review-section ai-review-catalog-history');
+  section.append(reviewNode('h4', 'Published description history'));
+  section.append(reviewNode('p', 'Versions show changes to this project card. Restoring creates a new version and pauses automatic publication for this project.', 'ai-review-muted'));
+  const status = reviewNode('p', 'Loading version history…', 'ai-review-muted'); section.append(status); card.append(section);
+  try {
+    const data = await aiReviewRequest(`/api/ai-review/projects/${encodeURIComponent(projectID)}/versions?limit=30${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+    const prior = cursor && aiReviewVersionCache.get(projectID);
+    if (prior && prior.current_hash === data.current_hash) data.versions = [...(prior.versions || []), ...(data.versions || [])];
+    aiReviewVersionCache.set(projectID, data);
+    status.remove();
+    const policy = data.policy || {};
+    const holdLine = reviewNode('p', policy.hold ? 'Automatic publication is on hold for this project.' : 'No project publication hold is set. The scheduler and publication policy above determine whether automatic updates can run.', policy.hold ? 'ai-review-warning' : 'ai-review-muted');
+    section.append(holdLine);
+    const versions = data.versions || [];
+    const activeVersionIndex = data.current_entry && policy.current_entry_hash ? versions.findIndex(version => version.entry_hash === policy.current_entry_hash) : -1;
+    for (const [versionIndex, version] of versions.entries()) {
+      const row = reviewNode('article', undefined, 'ai-review-version-row');
+      let versionLabel = 'Historical source unknown';
+      if (version.kind === 'maintenance' || version.provenance === 'maintenance') versionLabel = 'Automatically published';
+      else if (version.kind === 'restore' || version.provenance === 'restore') versionLabel = 'Manually restored';
+      else if (version.kind === 'registration' || version.provenance === 'registration') versionLabel = 'Project registered';
+      else if (version.kind === 'manual' || version.provenance === 'publish') versionLabel = 'Manually published';
+      const activeLabel = versionIndex === activeVersionIndex ? ' · Current description' : '';
+      row.append(reviewNode('strong', `${versionLabel}${activeLabel} · ${reviewDate(version.created_at)}`));
+      row.append(reviewNode('p', (version.diff || []).join(' · ') || 'No card description diff recorded.', 'ai-review-muted'));
+      if (version.model || version.run_id || version.rules || version.proposal_checksum) {
+        const provenance = reviewNode('p', [version.model && `Model ${version.model}`, version.rules && `Rules ${version.rules}`, version.proposal_checksum && `Proposal ${version.proposal_checksum.slice(0, 16)}`].filter(Boolean).join(' · '), 'ai-review-muted');
+        if (version.run_id) {
+          const runLink = reviewNode('a', `Source run ${version.run_id}`); runLink.href = `${BASE}/ai-review?run=${encodeURIComponent(version.run_id)}`;
+          provenance.append(document.createTextNode(' · '), runLink);
+        }
+        row.append(provenance);
+      }
+      if (version.operation_id) {
+        const opLink = reviewNode('button', 'Check operation', 'btn btn--secondary'); opLink.type = 'button';
+        opLink.addEventListener('click', async () => {
+          try { const op = await aiReviewRequest(`/api/ai-review/catalog-operations/${encodeURIComponent(version.operation_id)}`); status.textContent = `Operation ${op.status} · ${op.kind} · ${reviewDate(op.created_at)}`; }
+          catch (error) { status.textContent = `Operation unavailable: ${error.message}`; }
+          if (!status.isConnected) section.append(status);
+        });
+        row.append(opLink);
+      }
+      if (version.snapshot_hash !== data.current_hash) {
+        const previewButton = reviewNode('button', 'Preview restore', 'btn btn--secondary'); previewButton.type = 'button';
+        if (!data.current_entry) { previewButton.disabled = true; previewButton.title = 'This project is absent from the current catalog.'; }
+        previewButton.addEventListener('click', () => previewProjectRestore(section, projectID, version, data));
+        row.append(previewButton);
+      }
+      section.append(row);
+    }
+    if (!versions.length) section.append(reviewNode('p', data.next_cursor ? 'No description changes on this page. Load older versions to continue.' : 'No retained description versions are available.', 'ai-review-muted'));
+    if (data.next_cursor) {
+      const older = reviewNode('button', 'Load older description versions', 'btn btn--secondary'); older.type = 'button';
+      older.addEventListener('click', () => { older.disabled = true; loadProjectVersions(card, project, data.next_cursor); }); section.append(older);
+    }
+    const holdButton = reviewNode('button', policy.hold ? 'Resume automatic publication' : 'Pause automatic publication', 'btn btn--secondary'); holdButton.type = 'button';
+    if (!data.current_entry || !policy.current_entry_hash) { holdButton.disabled = true; holdButton.title = 'This project is absent from the current catalog.'; }
+    holdButton.addEventListener('click', async () => {
+      holdButton.disabled = true;
+      try {
+        await aiReviewRequest(`/api/ai-review/projects/${encodeURIComponent(projectID)}/publication-hold`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hold: !policy.hold, reason: policy.hold ? 'Operator resumed automatic publication' : 'Operator paused automatic publication', expected_policy_revision: policy.revision || 0, expected_current_entry_hash: policy.current_entry_hash }) });
+        await loadProjectVersions(card, project);
+      } catch (error) { holdButton.disabled = false; status.textContent = error.status === 409 ? 'Catalog changed. Refresh AI Review and inspect the current version before changing the hold.' : `Unable to change publication hold: ${error.message}`; if (!status.isConnected) section.append(status); }
+    });
+    section.append(holdButton);
+  } catch (error) {
+    status.textContent = `Version history unavailable: ${error.message}`;
+    if (error.authRequired) section.append(reviewSignInLink());
+  }
+}
+
+function catalogDescriptionDiff(before, after) {
+  const fields = ['summary','aliases','owned_components','boundaries','uses','shared_with','positive_examples','negative_examples'];
+  const changes = [];
+  for (const field of fields) {
+    const a = Array.isArray(before[field]) ? before[field].join(' · ') : (before[field] || '');
+    const b = Array.isArray(after[field]) ? after[field].join(' · ') : (after[field] || '');
+    if (a !== b) changes.push(`${field}: ${a || '∅'} → ${b || '∅'}`);
+  }
+  return changes;
+}
+
+async function previewProjectRestore(section, projectID, version, binding) {
+  const oldPreview = section.querySelector('.ai-review-restore-preview'); if (oldPreview) oldPreview.remove();
+  const panel = reviewNode('div', undefined, 'ai-review-restore-preview');
+  panel.append(reviewNode('p', 'Preparing a read-only preview…', 'ai-review-muted')); section.append(panel);
+  const current = binding.versions?.[0];
+  if (!current || !binding.current_hash || !binding.policy?.current_entry_hash) { panel.replaceChildren(reviewNode('p', 'Current version bindings are unavailable. Refresh the history before restoring.', 'ai-review-warning')); return; }
+  const target = { project_id: projectID, historical_hash: version.snapshot_hash, historical_entry_hash: version.entry_hash, expected_current_hash: binding.current_hash, expected_current_entry_hash: binding.policy.current_entry_hash, expected_policy_revision: binding.policy.revision || 0 };
+  try {
+    const preview = await aiReviewRequest(`/api/ai-review/projects/${encodeURIComponent(projectID)}/restore-preview`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(target) });
+    panel.replaceChildren(reviewNode('strong', 'Restore preview · one project card'));
+    const changes = catalogDescriptionDiff(binding.current_entry || {}, preview.entry || {});
+    panel.append(reviewNode('p', changes.length ? changes.join('\n') : 'The selected description matches the current description.', 'ai-review-evidence'));
+    panel.append(reviewNode('p', 'Confirming creates a new catalog version and holds this project’s automatic publication.', 'ai-review-warning'));
+    const confirm = reviewNode('button', 'Restore this version and pause publication', 'btn btn--primary'); confirm.type = 'button';
+    confirm.addEventListener('click', () => confirmProjectRestore(panel, projectID, version, binding, target)); panel.append(confirm);
+  } catch (error) {
+    panel.replaceChildren(reviewNode('p', error.status === 409 ? 'The catalog changed. Refresh history and preview again before confirming.' : `Restore preview failed: ${error.message}`, 'ai-review-warning'));
+    if (error.authRequired) panel.append(reviewSignInLink());
+  }
+}
+
+async function confirmProjectRestore(panel, projectID, version, binding, target) {
+  const confirm = panel.querySelector('button'); if (confirm) confirm.disabled = true;
+  const reason = 'Restore selected catalog description';
+  const randomID = new Uint8Array(32); crypto.getRandomValues(randomID);
+  const operationID = Array.from(randomID, b => b.toString(16).padStart(2, '0')).join('');
+  const payload = { ...target, operation_id: operationID, reason };
+  try {
+    const result = await aiReviewRequest(`/api/ai-review/projects/${encodeURIComponent(projectID)}/restore`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    panel.replaceChildren(reviewNode('p', `Restore ${result.status}. Automatic publication is held for this project.`, 'ai-review-warning'));
+    const card = panel.closest('.ai-review-project-card');
+    if (card) await loadProjectVersions(card, { project_id: projectID });
+  } catch (error) {
+    if (error.status === 409) {
+      panel.replaceChildren(reviewNode('p', 'Catalog changed after the preview. Refresh the version history and create a new preview before confirming.', 'ai-review-warning'));
+      return;
+    }
+    try {
+      const operation = await aiReviewRequest(`/api/ai-review/catalog-operations/${encodeURIComponent(operationID)}`);
+      panel.replaceChildren(reviewNode('p', `Restore operation ${operation.status}. Refresh the version history to confirm the active description.`, 'ai-review-warning'));
+    } catch (_) {
+      panel.replaceChildren(reviewNode('p', `Restore response was not confirmed. Operation ID ${operationID}; look it up before taking another action.`, 'ai-review-warning'));
+    }
+  }
+}
+
 async function loadAIReviewDraft(run, digest, projectID = '') {
   const selectionGeneration = ++aiReviewSelectionGeneration;
   syncAIReviewURL(run.run_id, digest, projectID, false);
@@ -424,6 +556,7 @@ async function loadAIReviewDraft(run, digest, projectID = '') {
     card.append(versions);
     card.append(renderAssessmentForm(run, draft, project));
     section.append(card);
+    loadProjectVersions(card, project);
     if (projectID && project.project_id === projectID) setTimeout(() => card.scrollIntoView({ block: 'start' }), 0);
   }
   if (!(draft.projects || []).length) section.append(reviewNode('p', draft.draft_status === 'no_changes' ? 'This run recorded no proposed catalog changes.' : 'No comparable project entries are available in this draft.', 'ai-review-muted'));

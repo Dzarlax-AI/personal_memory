@@ -152,6 +152,47 @@ func cacheRecordMatchesLive(record catalogProjectionRecord, live contextcatalog.
 	return false
 }
 
+// projectionHistoryMatchesLive admits a later maintenance/restore generation
+// only when immutable catalog history proves this exact entry hash and the
+// original source identity is still intact. A derived description never
+// becomes a source projection.
+func (w *catalogWorker) projectionHistoryMatchesLive(record catalogProjectionRecord, live contextcatalog.Entry) (bool, error) {
+	if live.DescriptionSource != "model_derived" || !sameCatalogSourceIdentity(record.Original, live) {
+		return false, nil
+	}
+	liveHash, err := catalogEntryHash(live)
+	if err != nil {
+		return false, err
+	}
+	cursor := ""
+	for pageCount := 0; pageCount < 100; pageCount++ {
+		page, err := contextcatalog.ListVersions(w.cfg.CatalogDir, live.ProjectID, cursor, 100)
+		if err != nil {
+			return false, err
+		}
+		for _, version := range page.Versions {
+			if version.EntryHash != liveHash {
+				continue
+			}
+			if version.Provenance == "maintenance" || version.Provenance == "restore" {
+				return true, nil
+			}
+			// Restore records may be classified as policy operations by the
+			// catalog journal. Accept that exact version only when it restores
+			// the original declared summary; generated text can never become
+			// source evidence through this path.
+			if version.Kind == "policy" && live.DeclaredSummary != "" && live.Summary == live.DeclaredSummary {
+				return true, nil
+			}
+		}
+		if page.NextCursor == "" {
+			return false, nil
+		}
+		cursor = page.NextCursor
+	}
+	return false, errors.New("catalog version history exceeds projection verification limit")
+}
+
 func sameCatalogSourceIdentity(original, live contextcatalog.Entry) bool {
 	declaredMatches := original.DeclaredSummary == live.DeclaredSummary || (live.DescriptionSource == "model_derived" && original.DeclaredSummary == "" && live.DeclaredSummary == original.Summary)
 	provenanceMatches := live.DescriptionSource == original.DescriptionSource || live.DescriptionSource == "model_derived"
@@ -309,11 +350,19 @@ func (w *catalogWorker) persistOriginalProjections(current contextcatalog.Snapsh
 		}
 		if record != nil {
 			if !cacheRecordMatchesLive(*record, live) {
-				if live.DescriptionSource == "model_derived" || !sameCatalogSourceIdentity(*original, live) {
-					return errors.New("current catalog source projection changed")
+				if live.DescriptionSource == "model_derived" {
+					validHistory, historyErr := w.projectionHistoryMatchesLive(*record, live)
+					if historyErr != nil || !validHistory || !reflect.DeepEqual(record.Original, *original) {
+						return errors.New("current catalog source projection changed")
+					}
+					record.LiveHashes = []string{liveHash}
+				} else {
+					if !sameCatalogSourceIdentity(*original, live) {
+						return errors.New("current catalog source projection changed")
+					}
+					record.Original = *original
+					record.LiveHashes = []string{liveHash}
 				}
-				record.Original = *original
-				record.LiveHashes = []string{liveHash}
 			} else if !reflect.DeepEqual(record.Original, *original) {
 				return errors.New("current catalog source projection changed")
 			} else {

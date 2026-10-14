@@ -14,6 +14,7 @@ import (
 	"github.com/Dzarlax-AI/personal-memory/internal/aimaintenance"
 	"github.com/Dzarlax-AI/personal-memory/internal/backup"
 	"github.com/Dzarlax-AI/personal-memory/internal/config"
+	"github.com/Dzarlax-AI/personal-memory/internal/contextcatalog"
 	"github.com/Dzarlax-AI/personal-memory/internal/embeddingidentity"
 	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
 	"github.com/Dzarlax-AI/personal-memory/internal/memory"
@@ -41,6 +42,11 @@ func main() {
 	if err != nil {
 		slog.Error("invalid configuration", "error", err)
 		os.Exit(1)
+	}
+	if cfg.AI.CatalogDir != "" {
+		if _, err := contextcatalog.ReconcileOperations(cfg.AI.CatalogDir); err != nil {
+			slog.Warn("optional catalog history unavailable; catalog publications remain blocked")
+		}
 	}
 
 	slog.Info("starting personal-memory server",

@@ -112,6 +112,15 @@ func LoadSnapshot(dir, expectedHash string) (Snapshot, error) {
 // when the currently active digest matches expectedActiveHash. An empty expected
 // hash is valid only before the first publication.
 func Publish(dir string, snapshot Snapshot, expectedActiveHash string) (string, error) {
+	return PublishWithMetadata(dir, snapshot, expectedActiveHash, PublishMetadata{})
+}
+
+// PublishWithMetadata atomically publishes a snapshot and records durable
+// operation provenance when supplied by an automated maintenance run.
+func PublishWithMetadata(dir string, snapshot Snapshot, expectedActiveHash string, metadata PublishMetadata) (string, error) {
+	if metadata.Kind == "" {
+		metadata.Kind = "manual"
+	}
 	if strings.TrimSpace(dir) == "" {
 		return "", errors.New("catalog directory is required")
 	}
@@ -134,13 +143,23 @@ func Publish(dir string, snapshot Snapshot, expectedActiveHash string) (string, 
 		return "", err
 	}
 	defer unlock()
-	return publishLocked(dir, snapshot, expectedActiveHash)
+	return publishLockedMetadata(dir, snapshot, expectedActiveHash, metadata)
 }
 
 // publishLocked publishes while the caller holds lockName. Keeping this
 // helper separate lets registry mutations compare, edit, and publish one
 // generation without releasing the same lock or deadlocking in Publish.
 func publishLocked(dir string, snapshot Snapshot, expectedActiveHash string) (string, error) {
+	return publishLockedMetadata(dir, snapshot, expectedActiveHash, PublishMetadata{})
+}
+
+func publishLockedMetadata(dir string, snapshot Snapshot, expectedActiveHash string, metadata PublishMetadata) (string, error) {
+	return publishLockedMetadataSkipping(dir, snapshot, expectedActiveHash, metadata, "")
+}
+func publishLockedMetadataSkipping(dir string, snapshot Snapshot, expectedActiveHash string, metadata PublishMetadata, skipOperationID string) (string, error) {
+	if err := validMetadata(metadata); err != nil {
+		return "", err
+	}
 	if err := ensureDirTree(dir); err != nil {
 		return "", err
 	}
@@ -165,6 +184,9 @@ func publishLocked(dir string, snapshot Snapshot, expectedActiveHash string) (st
 	}
 	if currentHash != expectedActiveHash {
 		return "", ErrConflict
+	}
+	if _, err := reconcileLockedExcept(dir, skipOperationID); err != nil {
+		return "", err
 	}
 
 	encoded, err := canonicalJSON(cloneSnapshot(snapshot))
@@ -201,10 +223,33 @@ func publishLocked(dir string, snapshot Snapshot, expectedActiveHash string) (st
 			return "", err
 		}
 	}
+	opID := metadata.OperationID
+	if opID == "" {
+		opID = operationID("publish", expectedActiveHash, hash, metadata)
+	}
+	changes, err := snapshotChanges(dir, expectedActiveHash, snapshot)
+	if err != nil {
+		return "", err
+	}
+	kind := "publish"
+	if metadata.Kind == "restore" {
+		kind = "restore"
+	}
+	intent := OperationRecord{OperationID: opID, Kind: kind, Status: "intent", SourceHash: expectedActiveHash, TargetHash: hash, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Metadata: metadata, Changes: changes}
+	if metadata.Kind == "restore" {
+		intent.RequestHash = metadata.ProposalChecksum
+		intent.Reason = metadata.Reason
+	}
+	if err := writeOperationIntent(dir, intent); err != nil {
+		return "", err
+	}
 
 	pointerBytes, _ := json.Marshal(activePointer{SnapshotHash: hash})
 	pointerBytes = append(pointerBytes, '\n')
 	if err := atomicReplace(dir, activeName, pointerBytes); err != nil {
+		return "", err
+	}
+	if err := writeOperationReceipt(dir, intent, "applied", hash); err != nil {
 		return "", err
 	}
 	return hash, nil

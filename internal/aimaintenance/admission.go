@@ -8,12 +8,12 @@ import (
 	"github.com/Dzarlax-AI/personal-memory/internal/contextcatalog"
 )
 
-const maintenanceRelationshipRuleVersion = "maintenance-project-relationships-v1"
+const maintenanceRelationshipRuleVersion = "maintenance-project-relationships-v2"
 
 // maintenanceRelationshipInstructionsIdentity binds receipts to the actual
 // relationship instructions sent to the provider, not only a config default.
 func maintenanceRelationshipInstructionsIdentity() string {
-	raw := maintenanceRelationshipRuleVersion + "\x00" + explicitSharedWithRules + "\x00" + directedUsesRules
+	raw := maintenanceRelationshipRuleVersion + "\x00" + explicitSharedWithRules + "\x00" + directedUsesRules + "\x00" + registeredDirectoryRules
 	sum := sha256.Sum256([]byte(raw))
 	return maintenanceRelationshipRuleVersion + ":" + hex.EncodeToString(sum[:])
 }

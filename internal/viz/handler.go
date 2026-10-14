@@ -180,6 +180,11 @@ func (h *Handler) Router() chi.Router {
 		r.Get("/api/ai-review/runs/{run_id}/drafts/{sha256}", h.withReviewNoStore(h.apiAIReviewDraft))
 		r.Get("/api/ai-review/runs/{run_id}/drafts/{sha256}/assessments", h.withReviewNoStore(h.apiAIReviewAssessments))
 		r.Put("/api/ai-review/runs/{run_id}/drafts/{sha256}/assessments/{project_id}", h.withReviewNoStore(h.apiAIReviewSaveAssessment))
+		r.Get("/api/ai-review/projects/{project_id}/versions", h.withReviewNoStore(h.apiAIReviewVersions))
+		r.Post("/api/ai-review/projects/{project_id}/restore-preview", h.withReviewNoStore(h.apiAIReviewRestorePreview))
+		r.Post("/api/ai-review/projects/{project_id}/restore", h.withReviewNoStore(h.apiAIReviewRestore))
+		r.Get("/api/ai-review/catalog-operations/{operation_id}", h.withReviewNoStore(h.apiAIReviewOperation))
+		r.Post("/api/ai-review/projects/{project_id}/publication-hold", h.withReviewNoStore(h.apiAIReviewSetHold))
 	}
 
 	// Static assets: /viz/assets/styles.css, /viz/assets/js/*.js.

@@ -27,11 +27,12 @@ const (
 )
 
 var (
-	ErrConflict      = errors.New("active catalog changed; reload and review before publishing")
-	ErrNotFound      = errors.New("no active catalog")
-	tagPattern       = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
-	sha256Pattern    = regexp.MustCompile(`^[a-f0-9]{64}$`)
-	allowedNamespace = map[string]struct{}{"personal": {}, "work": {}, "projects": {}, "job-search": {}, "tech": {}}
+	ErrConflict            = errors.New("active catalog changed; reload and review before publishing")
+	ErrNotFound            = errors.New("no active catalog")
+	ErrOperationsAmbiguous = errors.New("catalog operation journal is ambiguous; automatic publication is blocked")
+	tagPattern             = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+	sha256Pattern          = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	allowedNamespace       = map[string]struct{}{"personal": {}, "work": {}, "projects": {}, "job-search": {}, "tech": {}}
 )
 
 // Entry describes one reviewed namespace/tag context. List order is preserved

@@ -1296,6 +1296,197 @@ func ensureRegisteredFixture(t *testing.T, catalogDir, owner, key, tag string) c
 	return contextcatalog.Entry{}
 }
 
+func TestRegisteredAutomaticPublicationSurvivesRestoreWithoutReusingDerivedSource(t *testing.T) {
+	w, provider, cfg := newRegisteredCatalogWorker(t, 1)
+	provider.result = func(in Input) Proposal {
+		return registeredDescriptionProposal(in, "Automatically maintained description")
+	}
+	w.cfg.Maintenance.CatalogPublish = "evidence_bounded"
+	w.catalog.cfg.Maintenance.CatalogPublish = "evidence_bounded"
+	original := ensureRegisteredFixture(t, cfg.CatalogDir, "owner-a", "repo:project-a", "project-a")
+	_, originalHash, err := contextcatalog.LoadActive(cfg.CatalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	afterPublish, publishedHash, err := contextcatalog.LoadActive(cfg.CatalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	published := afterPublish.Entries[0]
+	if published.Summary != "Automatically maintained description" || published.DescriptionSource != "model_derived" || published.ProjectID != original.ProjectID || published.ProjectKey != original.ProjectKey || published.Owner != original.Owner || published.DeclaredSummary != original.Summary {
+		t.Fatalf("automatic publication changed source identity or failed to publish description: %#v", published)
+	}
+	versions, err := contextcatalog.ListVersions(cfg.CatalogDir, original.ProjectID, "", 100)
+	if err != nil || len(versions.Versions) == 0 || versions.Versions[0].Provenance != "maintenance" || versions.Versions[0].RunID == "" || versions.Versions[0].ProposalChecksum == "" || versions.Versions[0].Model == "" || versions.Versions[0].Rules == "" {
+		t.Fatalf("automatic publication provenance missing: %#v %v", versions, err)
+	}
+	currentEntryHash, err := catalogEntryHash(published)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalEntryHash, err := catalogEntryHash(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := contextcatalog.Restore(cfg.CatalogDir, contextcatalog.RestoreRequest{Reason: "test description rollback", OperationID: strings.Repeat("d", 64), ProjectID: original.ProjectID, HistoricalHash: originalHash, HistoricalEntryHash: originalEntryHash, ExpectedCurrentHash: publishedHash, ExpectedCurrentEntryHash: currentEntryHash, ExpectedPolicyRevision: 0})
+	if err != nil || restored.Status != "restored" {
+		t.Fatalf("description-only restore failed: %#v %v", restored, err)
+	}
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls.Load() != 1 {
+		t.Fatalf("held project reached provider after restore: calls=%d", provider.calls.Load())
+	}
+	restoredCatalog, _, err := contextcatalog.LoadActive(cfg.CatalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoredEntry := restoredCatalog.Entries[0]
+	if restoredEntry.Summary != original.Summary || restoredEntry.DescriptionSource != "model_derived" || restoredEntry.ProjectID != original.ProjectID || restoredEntry.ClientEvidence[0] != original.ClientEvidence[0] {
+		t.Fatalf("restore did not preserve stable source identity: %#v", restoredEntry)
+	}
+	policy, err := contextcatalog.LoadProjectPolicy(cfg.CatalogDir, original.ProjectID)
+	if err != nil || !policy.Hold || policy.Revision != 1 {
+		t.Fatalf("restore did not leave an explicit publication hold: %#v %v", policy, err)
+	}
+	restoredEntryHash, err := catalogEntryHash(restoredEntry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := contextcatalog.SetProjectPolicy(cfg.CatalogDir, contextcatalog.ProjectPolicy{ProjectID: original.ProjectID, Hold: false, Reason: "test resume"}, restoredEntryHash, policy.Revision); err != nil {
+		t.Fatalf("resume automatic publication: %v", err)
+	}
+	provider.result = func(in Input) Proposal {
+		foundOriginalEvidence := false
+		for _, evidence := range in.CatalogEvidence {
+			if evidence.Kind == original.ClientEvidence[0].Kind && evidence.Text == original.ClientEvidence[0].Text {
+				foundOriginalEvidence = true
+				break
+			}
+		}
+		if !foundOriginalEvidence || len(in.Catalog.Entries) != 1 || in.Catalog.Entries[0].Summary != original.Summary {
+			t.Fatalf("restored/model-derived text replaced original source evidence: %#v", in)
+		}
+		return registeredDescriptionProposal(in, "Automatic update after restore")
+	}
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls.Load() != 2 {
+		t.Fatalf("policy revision failed to invalidate prior receipt/fingerprint: calls=%d", provider.calls.Load())
+	}
+	finalCatalog, _, err := contextcatalog.LoadActive(cfg.CatalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := finalCatalog.Entries[0]
+	if final.Summary != "Automatic update after restore" || final.DescriptionSource != "model_derived" || final.DeclaredSummary != original.Summary || final.ProjectID != original.ProjectID || final.ProjectKey != original.ProjectKey || final.Owner != original.Owner || final.ClientEvidence[0] != original.ClientEvidence[0] {
+		t.Fatalf("successive publication did not preserve original sources: %#v", final)
+	}
+}
+
+func TestRegisteredHoldOmitsOnlyHeldCardBeforeModelSelection(t *testing.T) {
+	w, provider, cfg := newRegisteredCatalogWorker(t, 2)
+	provider.result = func(in Input) Proposal { return registeredDescriptionProposal(in, "Maintained description") }
+	w.cfg.Maintenance.CatalogPublish = "evidence_bounded"
+	w.catalog.cfg.Maintenance.CatalogPublish = "evidence_bounded"
+	held := ensureRegisteredFixture(t, cfg.CatalogDir, "owner-a", "repo:project-a", "project-a")
+	active := ensureRegisteredFixture(t, cfg.CatalogDir, "owner-b", "repo:project-b", "project-b")
+	hash, err := catalogEntryHash(held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := contextcatalog.SetPublicationHold(cfg.CatalogDir, held.ProjectID, true, "test hold", hash, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls.Load() != 1 {
+		t.Fatalf("eligible card did not run while another card was held: calls=%d", provider.calls.Load())
+	}
+	select {
+	case input := <-provider.seen:
+		if len(input.Catalog.Entries) != 1 || input.Catalog.Entries[0].ProjectID != active.ProjectID {
+			t.Fatalf("held card reached model selection or active card omitted: %#v", input.Catalog.Entries)
+		}
+	default:
+		t.Fatal("provider input was not captured")
+	}
+	updated, _, err := contextcatalog.LoadActive(cfg.CatalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if catalogEntryByTag(t, updated, "project-a").Summary != held.Summary || catalogEntryByTag(t, updated, "project-b").Summary != "Maintained description" {
+		t.Fatalf("hold affected the wrong card or blocked the eligible card: %#v", updated.Entries)
+	}
+}
+
+func TestRegisteredHistoricalOnlyPolicyBlocksCurrentUsesAtPublish(t *testing.T) {
+	w, provider, cfg := newRegisteredCatalogWorker(t, 1)
+	consumer := ensureRegisteredFixture(t, cfg.CatalogDir, "owner-a", "repo:project-a", "project-a")
+	ensureRegisteredFixture(t, cfg.CatalogDir, "owner-b", "repo:project-b", "project-b")
+	entryHash, err := catalogEntryHash(consumer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := contextcatalog.SetProjectPolicy(cfg.CatalogDir, contextcatalog.ProjectPolicy{ProjectID: consumer.ProjectID, HistoricalOnly: true, Reason: "test historical boundary"}, entryHash, 0); err != nil {
+		t.Fatal(err)
+	}
+	provider.result = func(in Input) Proposal {
+		proposal := registeredDescriptionProposal(in, "Maintained description")
+		proposal.Catalog.Entries[0].Uses = []string{"project-b"}
+		return proposal
+	}
+	w.cfg.Maintenance.CatalogPublish = "evidence_bounded"
+	w.catalog.cfg.Maintenance.CatalogPublish = "evidence_bounded"
+	if err := w.RunOnce(context.Background()); err == nil {
+		t.Fatal("historical-only policy allowed an unqualified current uses relationship")
+	}
+	drafts, err := os.ReadDir(filepath.Join(cfg.StateDir, "maintenance", "proposals"))
+	if err != nil || len(drafts) != 1 {
+		t.Fatalf("rejected proposal was not retained as a draft: %d %v", len(drafts), err)
+	}
+	active, _, err := contextcatalog.LoadActive(cfg.CatalogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalogEntryByTag(t, active, "project-a").Uses) != 0 {
+		t.Fatalf("historical-only rejection changed current relationships: %#v", catalogEntryByTag(t, active, "project-a"))
+	}
+}
+
+func catalogEntryByTag(t *testing.T, snapshot contextcatalog.Snapshot, tag string) contextcatalog.Entry {
+	t.Helper()
+	for _, entry := range snapshot.Entries {
+		if entry.Tag == tag {
+			return entry
+		}
+	}
+	t.Fatalf("catalog entry %s is missing", tag)
+	return contextcatalog.Entry{}
+}
+
+func registeredDescriptionProposal(in Input, summary string) Proposal {
+	catalog := cloneSnapshot(in.Catalog)
+	catalog.ParentHash = in.baseCatalogHash
+	catalog.Version = "automatic-description"
+	for i := range catalog.Entries {
+		entry := &catalog.Entries[i]
+		entry.Summary = summary
+		entry.ReviewStatus = "draft"
+		entry.ProjectID, entry.ProjectKey, entry.Owner = "", "", ""
+		entry.DescriptionSource, entry.DeclaredSummary = "", ""
+		entry.ClientEvidence = nil
+		entry.EvidenceRefs = []string{"c000"}
+	}
+	return Proposal{SchemaVersion: 1, BaseCatalogHash: in.baseCatalogHash, Catalog: &catalog, Grouping: []GroupingProposal{}, MissingEvidence: []string{}}
+}
+
 func TestRegisteredSourceRevalidationSortsAndIgnoresUnselectedBlockedProjection(t *testing.T) {
 	w, provider, cfg := newRegisteredCatalogWorker(t, 1)
 	ensureRegisteredFixture(t, cfg.CatalogDir, "owner-b", "repo:project-b", "project-b")
@@ -1304,6 +1495,14 @@ func TestRegisteredSourceRevalidationSortsAndIgnoresUnselectedBlockedProjection(
 	current, base, err := contextcatalog.LoadActive(cfg.CatalogDir)
 	if err != nil {
 		t.Fatal(err)
+	}
+	orderedByTag := map[string]contextcatalog.Entry{}
+	for _, card := range current.Entries {
+		orderedByTag[card.Tag] = card
+	}
+	available, sourcesCurrent := w.catalog.catalogSourcesState([]contextcatalog.Entry{orderedByTag["project-b"], orderedByTag["project-a"]})
+	if !available || !sourcesCurrent {
+		t.Fatal("selected source validation depended on cursor-rotated catalog ordering")
 	}
 	for i := range current.Entries {
 		if current.Entries[i].Tag == "project-z" {
