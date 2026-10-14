@@ -24,6 +24,10 @@ var missingEvidenceCodes = map[string]bool{
 	"shared_ownership_unclear": true,
 }
 
+// ValidMissingEvidenceCode reports whether a public review code is in the
+// finite set accepted by the maintenance proposal validator.
+func ValidMissingEvidenceCode(code string) bool { return missingEvidenceCodes[code] }
+
 func validateInput(in Input) error {
 	if err := contextcatalog.Validate(in.Catalog); err != nil {
 		return fmt.Errorf("invalid maintenance catalog: %w", err)

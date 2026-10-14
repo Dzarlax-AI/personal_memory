@@ -79,6 +79,35 @@ func LoadActive(dir string) (Snapshot, string, error) {
 	return cloneSnapshot(s), hash, nil
 }
 
+// LoadSnapshot loads one immutable catalog generation by its expected digest.
+// It validates the path, file type, snapshot schema, and content hash without
+// consulting or modifying the active pointer.
+func LoadSnapshot(dir, expectedHash string) (Snapshot, error) {
+	if strings.TrimSpace(dir) == "" || !sha256Pattern.MatchString(expectedHash) {
+		return Snapshot{}, errors.New("invalid catalog snapshot reference")
+	}
+	if err := checkDirTree(dir, false); err != nil {
+		return Snapshot{}, err
+	}
+	if err := rejectSymlink(filepath.Join(dir, snapshotDirName)); err != nil {
+		return Snapshot{}, err
+	}
+	f, err := openRegular(filepath.Join(dir, snapshotDirName, expectedHash+".json"), os.O_RDONLY, 0)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	defer f.Close()
+	snapshot, err := decodeSnapshot(f)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	hash, err := Hash(snapshot)
+	if err != nil || hash != expectedHash {
+		return Snapshot{}, errors.New("catalog snapshot content does not match its digest")
+	}
+	return cloneSnapshot(snapshot), nil
+}
+
 // Publish writes an immutable snapshot and atomically advances active.json only
 // when the currently active digest matches expectedActiveHash. An empty expected
 // hash is valid only before the first publication.

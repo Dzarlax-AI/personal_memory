@@ -246,6 +246,11 @@ func main() {
 	// verifies that secret so direct container/network access fails closed.
 	if cfg.EnableViz {
 		vizHandler := viz.NewHandler(qc, cfg.VizSimilarityThreshold)
+		reviewOrigin := ""
+		if cfg.MemoryDomain != "" {
+			reviewOrigin = "https://mcp." + cfg.MemoryDomain
+		}
+		vizHandler = vizHandler.WithAIReview(cfg.AI, reviewOrigin)
 		if cfg.EnableRAG {
 			vizChunks := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionChunks)
 			vizHandler = vizHandler.WithDocumentRAG(vizChunks, cfg.RAGDocumentsDir)

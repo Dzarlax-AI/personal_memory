@@ -331,3 +331,18 @@ reading a suggestion does not authorize its application.
 See the repository example `docs/examples/write-recommendations-client.md` for
 requests and status handling. Local synthetic protocol verification is distinct
 from installing an updated proprietary client or deploying this server version.
+
+
+## Dashboard AI Review
+
+The protected Memory Dashboard includes an **AI Review** tab at `/viz/ai-review`. It reads the existing durable maintenance journal and checksum-verified catalog proposals. Reading history or saving a human assessment does not invoke a model, publish a catalog, or modify facts. The recorded model is shown for each run; no model family is hardcoded in the dashboard.
+
+The initial observation window is the last 14 days. Older runs remain available through pagination and date filters. Failed, interrupted, skipped, missing and corrupt records remain visible, including runs without drafts. Unknown usage is displayed as unknown. Assessments and proposal versions are quality evidence separate from service reliability; repeated identical proposals and unreviewed proposals are not new accepted changes. Incomplete scans are identified explicitly.
+
+A proposal detail separates the original client description and available evidence, the catalog at the time of the run, the proposed fields, and the current catalog. Missing historical sources are marked unavailable rather than reconstructed from the latest state. Review historical relationships as historical; a dependency mention is not evidence of a currently enabled integration.
+
+Per-project assessments are **Acceptable**, **Needs correction**, or **Reject**, with a reason and optional note. Saving an assessment is not approval to publish. Assessments are bound to the exact run, proposal digest, project and compared entry versions. Concurrent edits are rejected instead of overwriting another reviewer. Changing the current catalog marks drift while retaining the recorded assessment.
+
+Assessment writes require the existing authenticated Viz route, JSON and the exact configured public origin `https://mcp.<MEMORY_DOMAIN>`. Forwarded browser headers do not grant write access. With no configured domain, production wiring keeps assessment writes unavailable. An isolated fixture can explicitly configure a loopback origin. No new browser credentials or provider keys are required.
+
+Keep `StateDir/maintenance-reviews/` private and include it in durable backups alongside `maintenance-runs/`, maintenance proposals, catalog snapshots and original-source projections. Review records survive application restart and have no automatic two-week expiration. Disabling scheduling preserves existing review history. Rolling back the UI or application must retain these files; do not delete review state to revert a frontend release.

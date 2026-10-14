@@ -201,6 +201,49 @@ func RegisteredIdentity(e Entry) bool {
 	}) == nil
 }
 
+// SameReviewSourceIdentity reports whether a catalog entry still represents
+// the same registered client source. Generated catalog descriptions may vary;
+// the registered identity, declared summary, provenance, review state, and
+// client supplied evidence remain bound to the source.
+func SameReviewSourceIdentity(a, b Entry) bool {
+	if a.Namespace != b.Namespace || a.Tag != b.Tag || a.Name != b.Name ||
+		a.ProjectID != b.ProjectID || a.ProjectKey != b.ProjectKey || a.Owner != b.Owner ||
+		a.ReviewStatus != b.ReviewStatus || !sameDeclaredSource(a, b) ||
+		!sameReviewProvenance(a.DescriptionSource, b.DescriptionSource) ||
+		len(a.ClientEvidence) != len(b.ClientEvidence) {
+		return false
+	}
+	for i := range a.ClientEvidence {
+		if a.ClientEvidence[i] != b.ClientEvidence[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// SameStableProjectIdentity compares the identity fields that remain stable
+// when a registered catalog entry is manually edited after a review.
+func SameStableProjectIdentity(a, b Entry) bool {
+	return a.Namespace == b.Namespace && a.Tag == b.Tag && a.Name == b.Name &&
+		a.ProjectID != "" && a.ProjectID == b.ProjectID && a.ProjectKey == b.ProjectKey && a.Owner == b.Owner
+}
+
+func sameDeclaredSource(a, b Entry) bool {
+	if a.DeclaredSummary == b.DeclaredSummary {
+		return true
+	}
+	return a.DescriptionSource == "model_derived" && a.DeclaredSummary != "" &&
+		b.DescriptionSource == "client_declared" && b.DeclaredSummary == "" && a.DeclaredSummary == b.Summary
+}
+
+func sameReviewProvenance(a, b string) bool {
+	if a == b {
+		return true
+	}
+	// A provider may derive a summary from the registered client declaration.
+	return (a == "client_declared" && b == "model_derived") || (a == "model_derived" && b == "client_declared")
+}
+
 func validateOptionalIdentity(prefix string, e Entry) error {
 	noIdentity := e.ProjectID == "" && e.ProjectKey == "" && e.Owner == "" && len(e.ClientEvidence) == 0 && e.DeclaredSummary == ""
 	if noIdentity {
