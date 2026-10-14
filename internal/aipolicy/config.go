@@ -235,8 +235,8 @@ func (c Config) Validate() error {
 		if (c.Maintenance.CatalogPublish != "review" && c.Maintenance.CatalogPublish != "evidence_bounded") || c.Maintenance.GroupingApply != "manual" {
 			return errors.New("automatic catalog publication and grouping application unsupported")
 		}
-		if c.Maintenance.ProjectPolicy == "registered" && (c.Maintenance.Scope != "catalog_only" || c.Maintenance.CatalogPublish != "review") {
-			return errors.New("registered maintenance requires catalog_only scope and review publication")
+		if c.Maintenance.ProjectPolicy == "registered" && c.Maintenance.Scope != "catalog_only" {
+			return errors.New("registered maintenance requires catalog_only scope")
 		}
 	}
 	if c.Active() && (c.CatalogDir == "" || c.StateDir == "" || c.CatalogDir == c.StateDir) {

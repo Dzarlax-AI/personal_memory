@@ -18,7 +18,7 @@ func TestOffDoesNotReadProfile(t *testing.T) {
 func TestMaintenanceScopeDefaultsAndCatalogLimits(t *testing.T) {
 	c := Off()
 	c.Defaults()
-	if c.Maintenance.Scope != "facts_and_catalog" || c.Maintenance.ProjectPolicy != "explicit" || c.Maintenance.MaxProjectsPerRun != 4 || c.Maintenance.Enabled {
+	if c.Maintenance.Scope != "facts_and_catalog" || c.Maintenance.ProjectPolicy != "explicit" || c.Maintenance.MaxProjectsPerRun != 4 || c.Maintenance.CatalogPublish != "review" || c.Maintenance.Enabled {
 		t.Fatalf("unexpected compatibility defaults: %#v", c.Maintenance)
 	}
 	c.CatalogDir, c.StateDir = "catalog", "state"
@@ -34,7 +34,7 @@ func TestMaintenanceScopeDefaultsAndCatalogLimits(t *testing.T) {
 	}
 }
 
-func TestMaintenanceRegisteredProjectPolicyIsReviewOnly(t *testing.T) {
+func TestMaintenanceRegisteredProjectPolicyIsCatalogOnly(t *testing.T) {
 	c := Off()
 	c.CatalogDir, c.StateDir = "catalog", "state"
 	c.Maintenance = Maintenance{Enabled: true, Profile: "m", ProjectPolicy: "registered", IntervalSeconds: 60, MaxFactsPerRun: 50, Scope: "catalog_only", MaxProjectsPerRun: 4, CatalogPublish: "review", GroupingApply: "manual"}
@@ -42,18 +42,21 @@ func TestMaintenanceRegisteredProjectPolicyIsReviewOnly(t *testing.T) {
 	c.Egress = Egress{AllowedNamespaces: []string{"projects"}}
 	c.Limits = Limits{DailyCalls: 10, DailyInputTokens: 2_000_000, ReservationTokens: 131_072}
 	if err := c.Validate(); err != nil {
-		t.Fatalf("registered review-only config rejected: %v", err)
+		t.Fatalf("registered review config rejected: %v", err)
 	}
 	c.Maintenance.ProjectPolicy = "automatic"
 	if err := c.Validate(); err == nil {
 		t.Fatal("unknown maintenance project policy accepted")
 	}
-	for _, combination := range []struct{ scope, publish string }{{"facts_and_catalog", "review"}, {"catalog_only", "evidence_bounded"}} {
-		c.Maintenance.ProjectPolicy = "registered"
-		c.Maintenance.Scope, c.Maintenance.CatalogPublish = combination.scope, combination.publish
-		if err := c.Validate(); err == nil {
-			t.Fatalf("unsafe registered maintenance combination accepted: %#v", combination)
-		}
+	c.Maintenance.ProjectPolicy = "registered"
+	c.Maintenance.CatalogPublish = "evidence_bounded"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("registered evidence-bounded catalog-only config rejected: %v", err)
+	}
+	c.Maintenance.ProjectPolicy = "registered"
+	c.Maintenance.Scope, c.Maintenance.CatalogPublish = "facts_and_catalog", "review"
+	if err := c.Validate(); err == nil {
+		t.Fatal("registered facts_and_catalog maintenance accepted")
 	}
 	// An omitted policy stays compatible with the previous explicit behavior.
 	c.Maintenance.ProjectPolicy = ""

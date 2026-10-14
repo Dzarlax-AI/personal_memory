@@ -130,7 +130,7 @@ func publishRegistration(dir string, s Snapshot, parent string, result Registrat
 	s.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	base := sha256.Sum256([]byte(parent + "\x00" + result.ProjectID + "\x00" + s.CreatedAt))
 	s.Version = "registry-" + hex.EncodeToString(base[:8])
-	hash, err := publishLocked(dir, s, parent)
+	hash, err := publishLockedMetadata(dir, s, parent, PublishMetadata{Kind: "registration"})
 	if err != nil {
 		result.Status = "unavailable"
 		return result, err

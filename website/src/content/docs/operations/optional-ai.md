@@ -100,9 +100,9 @@ After registration, a client may supply the accepted tag as `source_project` wit
 
 `recall_facts` accepts optional `project_context_id`. It is resolved under the configured owner and provides context only to optional AI relevance. It does not filter by project, widen the candidate pool, bypass lifecycle/quarantine checks or promote fact authority. An unknown or foreign identity is rejected. A fact or read candidate with a forbidden project tag blocks the full affected inference request. Document retrieval remains unchanged; the client can still register before `search_documents`.
 
-Catalog maintenance has its own `maintenance.project_policy`, separate from write/read `egress.project_policy`. Omission keeps the existing `explicit` behavior based on `egress.allowed_project_tags`. Set it to `registered` only with `scope: "catalog_only"` and `catalog_publish: "review"`; this mode rejects fact-sweep and evidence-bounded publication combinations. With `registration.mode: "client_declared"`, it admits every currently eligible, valid registered project in the configured `projects` namespace, including registrations accepted later while the worker is running. Static tag grants do not bypass registration identity in this mode. Denied tags and namespace restrictions still apply. Draft, unresolved, invalid, manual identity-free, revoked, and proposed-only registrations are not admitted.
+Catalog maintenance has its own `maintenance.project_policy`, separate from write/read `egress.project_policy`. Omission keeps the existing `explicit` behavior based on `egress.allowed_project_tags`. Set it to `registered` only with `scope: "catalog_only"` and `grouping_apply: "manual"`. Publication defaults to `review`; an explicit `catalog_publish: "evidence_bounded"` permits automatic description publication without a mandatory human assessment. Fact-sweep combinations remain rejected. With `registration.mode: "client_declared"`, it admits every currently eligible, valid registered project in the configured `projects` namespace, including registrations accepted later while the worker is running. Static tag grants do not bypass registration identity in this mode. Denied tags and namespace restrictions still apply. Draft, unresolved, invalid, manual identity-free, revoked, and proposed-only registrations are not admitted.
 
-Enabling registered maintenance authorizes the selected provider to process original client-declared project summaries and bounded original README/AGENTS excerpts for all currently and subsequently eligible registrations in that namespace. This is a recipient-dependent egress choice: each new valid registration becomes in scope without a per-project grant or restart. Registration is client-declared provenance, not independent verification of semantic truth. Fact `allow_ai_processing`, write/read inference policy, and maintenance admission are independent controls. Maintenance reads no historical facts, scans or retags no facts, and has no filesystem discovery. It sends only retained original summaries and bounded original excerpts; it does not promote model-derived text into source evidence. Evidence is request-local and provider-safe, without owner, project key or project ID. The default `catalog_publish: "review"` retains proposals for inspection, leaves the active catalog unchanged, and requires manual review. Grouping remains manual.
+Enabling registered maintenance authorizes the selected provider to process original client-declared project summaries and bounded original README/AGENTS excerpts for all currently and subsequently eligible registrations in that namespace. This is a recipient-dependent egress choice: each new valid registration becomes in scope without a per-project grant or restart. Registration is client-declared provenance, not independent verification of semantic truth. Fact `allow_ai_processing`, write/read inference policy, and maintenance admission are independent controls. Maintenance reads no historical facts, scans or retags no facts, and has no filesystem discovery. It sends retained original summaries and bounded original excerpts plus a read-only directory of admitted registered project names, tags and aliases (at most 32 entries and 8 KiB); the directory is not relationship evidence. It does not promote model-derived text into source evidence. Evidence is request-local and provider-safe, without owner, project key or project ID. The default `catalog_publish: "review"` retains proposals for inspection, leaves the active catalog unchanged, and requires manual review. Grouping remains manual.
 
 The example `docs/examples/catalog-maintenance.json` keeps maintenance disabled by default while showing the registered-project opt-in with an empty static tag list. Choose the model and key file explicitly, review the egress scope, then enable maintenance deliberately. Provider permissions for classification do not also authorize sending original excerpts to a maintenance provider.
 
@@ -145,9 +145,9 @@ AI-ranked responses require candidate revalidation. The runtime may bypass cachi
 
 `shared_with` requires affirmative original evidence naming the other project and a shared component, artifact, joint maintenance or joint responsibility. Each card must cite its own source and explain the shared thing in `boundaries`. Mentions, separate ownership exclusions, common infrastructure, hosting, libraries and one-way integrations do not establish sharing. Directly evidenced dependencies may belong in `uses`; otherwise relationship arrays stay empty. Structural citation validation does not prove that these semantic conditions are satisfied, so review the actual excerpts before accepting a relationship.
 
-`uses` is directed from the consuming project to the provider. Providing an API for a client does not establish that the provider uses the client. A named contract explicitly described as shared may establish `shared_with`, with card-scoped evidence, without transferring implementation ownership; a bare API dependency does not.
+`uses` is directed from the consuming project to the provider and represents source-supported current or explicitly when-configured consumption. Historical consumption belongs in explicitly historical `boundaries`, not an unqualified `uses` edge. Optional operator `historical_only` restrictions cannot be removed by generated output. Providing an API for a client does not establish that the provider uses the client. A named contract explicitly described as shared may establish `shared_with`, with card-scoped evidence, without transferring implementation ownership; a bare API dependency does not.
 
-Legacy `facts_and_catalog` scope scans bounded fact pages as described below. `catalog_only` never reads Qdrant facts: it selects cards admitted by the maintenance-specific policy, packs each selected card with all its admitted original sources, and saves private proposal artifacts. Registered mode is limited to review-only proposals. Omitted `maintenance.project_policy` retains explicit per-tag grants for compatibility. Omitted scope keeps legacy `facts_and_catalog` behavior, including the historical fact sweep. Review proposals against original-source evidence, uncertainty and the catalog parent; generated text is not its own evidence.
+Legacy `facts_and_catalog` scope scans bounded fact pages as described below. `catalog_only` never reads Qdrant facts: it selects cards admitted by the maintenance-specific policy, packs each selected card with all its admitted original sources, and saves private proposal artifacts. Registered mode supports review proposals or explicitly enabled evidence-bounded description publication. Omitted `maintenance.project_policy` retains explicit per-tag grants for compatibility. Omitted scope keeps legacy `facts_and_catalog` behavior, including the historical fact sweep. Review proposals against original-source evidence, uncertainty and the catalog parent; generated text is not its own evidence.
 
 Grouping application uses a separately approved, mode-0600 `factgrouping.Manifest` with exact point IDs, semantic fingerprints and before/after grouping. Stop **all writers**, including other clients and operator tools, before using:
 
@@ -350,3 +350,41 @@ Keep `StateDir/maintenance-reviews/` private and include it in durable backups a
 ### AI Review sign-in recovery
 
 The reverse proxy may redirect an expired browser session to Authentik before a save reaches the application. AI Review intercepts API redirects instead of following a cross-origin login with `fetch`. It displays a sign-in message and a same-origin **Sign in again** link that opens another tab. Sign in there, return to the original assessment form, and explicitly save again. The original tab retains its unsaved note and verdict in memory; closing or reloading it discards unsaved inputs. No write is automatically retried. Revision and catalog bindings are revalidated normally, and review assessments never publish catalog changes.
+
+
+### Automatic description versions and restoration
+
+Maintenance remains optional and disabled by default. New installations default to
+review publication, and the operator chooses the model. Automatic publication
+changes description fields only; stable registration identity, original declaration,
+client evidence, facts, tags, namespaces and lifecycle remain protected. Generated
+versions are model-derived, never labeled human-approved. Missing evidence,
+unresolved proposals, changed sources, held cards and generation conflicts retain a
+draft rather than bypassing validation. A model-generated description is not source
+evidence for the next run.
+
+Catalog snapshots and catalog-operation journals are permanent private state.
+Every publication records an intent before advancing the active pointer and an
+applied receipt afterward. Interrupted operations are reconciled against verified
+snapshot history; ambiguous storage blocks automatic publication. Maintenance
+versions link their producing run, immutable proposal, configured model and rules.
+Legacy snapshots remain inspectable with unknown provenance rather than invented
+approval or model metadata. No-op descriptions do not create another version.
+
+AI Review exposes per-project version history and a field comparison with the active
+description. Preview restoration before confirming **Restore and pause**. Restoration
+copies only that card's historical description into a new current generation; it
+preserves other cards and newer registrations. Exact generation, entry and original
+source checks reject stale previews or changed identity. A restore creates a durable
+publication hold so the maintenance model cannot immediately reapply the discarded
+version. Explicit **Resume automatic publication** removes that hold without invoking
+inference or republishing in the same request. Restore failures may leave a protective
+hold; inspect the operation receipt before resuming.
+
+A lost mutation response is resolved by operation ID. The browser does not blindly
+retry restoration or resume. Historical versions, receipts and holds survive restart.
+Back up the complete catalog directory together with `ai-state`, including source
+projections, proposals, run history and assessments. Never restore the entire active
+pointer to an old snapshot to undo one description. To stop future automatic changes,
+select review publication; to roll back to an older binary that disallows registered
+automatic publication, change the policy to review before starting that binary.

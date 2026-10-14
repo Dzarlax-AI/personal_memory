@@ -3,6 +3,7 @@ package aimaintenance
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -34,6 +35,27 @@ func validateInput(in Input) error {
 	}
 	if len(in.Facts) > 100 || (len(in.Facts) == 0 && len(in.CatalogEvidence) == 0) {
 		return errors.New("maintenance input must contain facts or scoped catalog evidence")
+	}
+	if len(in.RegisteredProjects) > maxRegisteredDirectoryEntries || (len(in.RegisteredProjects) > 0 && !in.CatalogOnly) {
+		return errors.New("invalid registered project directory")
+	}
+	if len(in.RegisteredProjects) > 0 {
+		directory, err := json.Marshal(in.RegisteredProjects)
+		if err != nil || len(directory) > maxRegisteredDirectoryBytes {
+			return errors.New("registered project directory exceeds byte limit")
+		}
+		seenProjects := map[string]bool{}
+		for _, project := range in.RegisteredProjects {
+			if strings.TrimSpace(project.Name) == "" || len(project.Name) > 160 || strings.ContainsRune(project.Name, '\x00') || !projectTagRE.MatchString(project.Tag) || seenProjects[project.Tag] || len(project.Aliases) > 64 {
+				return errors.New("registered project directory entry is invalid")
+			}
+			seenProjects[project.Tag] = true
+			for _, alias := range project.Aliases {
+				if strings.TrimSpace(alias) == "" || len(alias) > 160 || strings.ContainsRune(alias, '\x00') {
+					return errors.New("registered project directory alias is invalid")
+				}
+			}
+		}
 	}
 	knownEvidence := map[string]bool{}
 	evidenceBytes := 0

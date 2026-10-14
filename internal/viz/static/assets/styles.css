@@ -489,6 +489,9 @@ body {
 .ai-review-version dt { color: var(--text-secondary); text-transform: capitalize; }
 .ai-review-version dd { margin: 0; white-space: pre-wrap; }
 .ai-review-version details { margin-top: 7px; }
+.ai-review-version-row { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 9px 0; border-top: 1px solid var(--border-light); font-size: var(--text-xs); }
+.ai-review-version-row p { margin: 0; }
+.ai-review-restore-preview { display: grid; gap: 8px; margin: 8px 0; padding: 10px; border: 1px solid var(--warn); border-radius: var(--radius-sm); white-space: pre-wrap; }
 .ai-review-version summary, .ai-review-detail summary { cursor: pointer; color: var(--accent); }
 .ai-review-evidence { white-space: pre-wrap; overflow-wrap: anywhere; }
 .ai-review-assessment { border-top: 1px dashed var(--border); padding-top: 10px; }

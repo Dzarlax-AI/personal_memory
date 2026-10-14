@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -262,6 +263,88 @@ func TestBuildRequestGivesSourceTimestampAndCitationRules(t *testing.T) {
 		if !strings.Contains(instructions, required) {
 			t.Errorf("instructions omitted %q", required)
 		}
+	}
+}
+
+func TestBuildRequestIncludesBoundedReadOnlyRegisteredProjectDirectory(t *testing.T) {
+	profile := aipolicy.Profile{Protocol: "openai-responses", Model: "local-model", Endpoint: "http://localhost/v1/responses", Local: true}
+	input := inputWithCatalogEvidence("The source describes an integration with the local calendar platform.")
+	input.CatalogOnly = true
+	input.Facts = []Fact{}
+	input.RegisteredProjects = []RegisteredProject{{Name: "Calendar Platform", Tag: "calendar-platform", Aliases: []string{"Cal API"}}}
+	body, err := BuildRequest(profile, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(envelope["input"].(string)), &payload); err != nil {
+		t.Fatal(err)
+	}
+	projects, ok := payload["registered_projects"].([]any)
+	if !ok || len(projects) != 1 {
+		t.Fatalf("registered directory missing: %#v", payload["registered_projects"])
+	}
+	project := projects[0].(map[string]any)
+	if project["tag"] != "calendar-platform" || project["name"] != "Calendar Platform" || project["owner"] != nil || project["project_id"] != nil || project["project_key"] != nil {
+		t.Fatalf("unexpected directory fields: %#v", project)
+	}
+	instructions := envelope["instructions"].(string)
+	for _, required := range []string{"read-only name/tag/alias lookup aid", "never evidence", "Historical-only consumption", "external Todoist or Home Assistant service is not a local project"} {
+		if !strings.Contains(instructions, required) {
+			t.Errorf("instructions omitted %q", required)
+		}
+	}
+	if strings.Contains(string(body), "server-owner") || strings.Contains(string(body), "repo:health-project") || strings.Contains(string(body), strings.Repeat("c", 64)) {
+		t.Fatal("registered directory request leaked owner, project key, or project ID")
+	}
+}
+
+func TestRegisteredProjectDirectoryBounds(t *testing.T) {
+	profile := aipolicy.Profile{Protocol: "openai-responses", Model: "local-model", Endpoint: "http://localhost/v1/responses", Local: true}
+	input := inputWithCatalogEvidence("A bounded original excerpt.")
+	input.CatalogOnly = true
+	input.Facts = []Fact{}
+	input.RegisteredProjects = make([]RegisteredProject, maxRegisteredDirectoryEntries+1)
+	if _, err := BuildRequest(profile, input); err == nil {
+		t.Fatal("oversized registered project count accepted")
+	}
+	input.RegisteredProjects = []RegisteredProject{{Name: strings.Repeat("x", maxRegisteredDirectoryBytes), Tag: "large"}}
+	if _, err := BuildRequest(profile, input); err == nil {
+		t.Fatal("oversized registered project directory accepted")
+	}
+}
+
+func TestRegisteredDirectoryBuilderPrioritizesSelectedCardsWithinByteLimit(t *testing.T) {
+	cfg := aipolicy.Config{}
+	cfg.Maintenance.ProjectPolicy = "registered"
+	cards := make([]contextcatalog.Entry, maxRegisteredDirectoryEntries)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range cards {
+		tag := fmt.Sprintf("project-%02d", i)
+		cards[i] = ensureRegisteredFixture(t, filepath.Join(root, tag), "owner", "repo:"+tag, tag)
+		cards[i].Aliases = []string{strings.Repeat("alias-"+tag+"-", 28)}
+	}
+	selected := []contextcatalog.Entry{cards[len(cards)-1]}
+	directory := registeredProjectDirectory(selected, cards, cfg)
+	raw, err := json.Marshal(directory)
+	if err != nil || len(raw) > maxRegisteredDirectoryBytes || len(directory) > maxRegisteredDirectoryEntries {
+		t.Fatalf("registered directory exceeded bounds: entries=%d bytes=%d err=%v", len(directory), len(raw), err)
+	}
+	foundSelected := false
+	for _, entry := range directory {
+		if entry.Tag == selected[0].Tag {
+			foundSelected = true
+		}
+	}
+	if !foundSelected {
+		t.Fatalf("selected source card missing from bounded directory: %#v", directory)
 	}
 }
 
