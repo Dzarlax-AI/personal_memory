@@ -64,9 +64,12 @@ credentials, duplicate assertions, browser origins, and noncanonical route
 variants. Its stateless transport validates the signed assertion on every
 request and creates no local MCP session.
 
-The Viz browser endpoint requires an Access JWT with the Viz audience as its
-only audience and the proxy secret. Existing review mutation Origin checks,
-CSRF protections, and review session expiry continue to apply.
+The Viz browser endpoint requires its configured Viz audience to be present in
+the signed Access JWT audience list, along with the proxy secret. Additional
+signed audiences are allowed; a token containing only the MCP audience cannot
+authorize Viz. Signature, issuer, time claims, token type and the owner email
+allowlist are still verified. Existing review mutation Origin checks, CSRF
+protections, and review session expiry continue to apply.
 
 ## Keep existing OAuth clients during migration
 

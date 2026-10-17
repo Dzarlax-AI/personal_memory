@@ -233,8 +233,7 @@ func TestNativeOperationalRouteEnforcesRequestBodyLimit(t *testing.T) {
 type accessFixtureVerifier struct{}
 
 func (accessFixtureVerifier) Verify(_ context.Context, assertion, audience string, membership bool) (string, error) {
-	wantMembership := audience == "mcp-audience"
-	if assertion != "signed-fixture" || (audience != "mcp-audience" && audience != "viz-audience") || membership != wantMembership {
+	if assertion != "signed-fixture" || (audience != "mcp-audience" && audience != "viz-audience") || !membership {
 		return "", context.Canceled
 	}
 	return "owner@example.test", nil

@@ -44,6 +44,10 @@ route and can add signed browser authentication to Viz alongside its existing
 proxy secret. Both profiles are default-off. Native `/memory` API keys and
 optional generic OAuth remain independent. Access identities are checked
 against an explicit email allowlist and map to the existing `MEMORY_USER`.
+Both profiles accept additional signed audiences while requiring their own
+configured application audience. This fixes Viz rejecting valid Cloudflare
+browser assertions with multiple audiences; MCP-only and foreign-only tokens
+still cannot authorize Viz. Its proxy-secret and CSRF checks remain required.
 See the [Access migration guide](../operations/cloudflare-access/) for
 configuration, validation, and rollback.
 

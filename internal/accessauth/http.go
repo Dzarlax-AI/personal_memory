@@ -78,7 +78,8 @@ func VizAuth(verifier TokenVerifier, audience string, next http.Handler) http.Ha
 			http.Error(w, "Access verification unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		if _, err := verifier.Verify(r.Context(), values[0], audience, false); err != nil {
+		// Cloudflare may include additional signed audiences in browser tokens.
+		if _, err := verifier.Verify(r.Context(), values[0], audience, true); err != nil {
 			// Emit each fixed reason at most once per handler lifetime.
 			// Never log the assertion, identity, or arbitrary verifier error text.
 			report(vizDenialReason(err))

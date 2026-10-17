@@ -67,7 +67,7 @@ Use `.env` (not source control) for deployment values. Required values are enfor
 
 ## Cloudflare Access
 
-Cloudflare Access is optional and independent of native API-key and generic OAuth authentication. `/memory/oauth` is reserved for the stateless Access MCP transport. Turning off its profile keeps the route unavailable; it never falls through to the native `/memory` handler. Access MCP clients use the configured MCP application audience and may carry a Cloudflare-signed audience list containing that value. The browser Viz profile requires its own distinct audience as the only audience in the assertion.
+Cloudflare Access is optional and independent of native API-key and generic OAuth authentication. `/memory/oauth` is reserved for the stateless Access MCP transport. Turning off its profile keeps the route unavailable; it never falls through to the native `/memory` handler. Access MCP clients use the configured MCP application audience and may carry a Cloudflare-signed audience list containing that value. The browser Viz profile similarly requires its own distinct audience to be present in the signed audience list; a token containing only the MCP audience cannot authorize Viz.
 
 | Variable | Default | Requirement / purpose |
 | --- | --- | --- |

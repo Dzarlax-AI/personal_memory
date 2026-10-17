@@ -3,13 +3,59 @@ package accessauth
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestVizAuthValidatesSignedAudienceMembership(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := testVerifier(t, key)
+	now := time.Now().UTC().Truncate(time.Second)
+	sign := func(issuer string, audiences []string, email string, expires time.Time) string {
+		return signAccessToken(t, key, issuer, audiences, email, "app", now.Add(-time.Minute), now.Add(-time.Minute), expires)
+	}
+	valid := sign(testIssuer, []string{"other-audience", testVizAud}, "owner@example.net", now.Add(time.Minute))
+	for _, tc := range []struct {
+		name  string
+		token string
+		want  int
+	}{
+		{"singleton Viz", sign(testIssuer, []string{testVizAud}, "owner@example.net", now.Add(time.Minute)), http.StatusOK},
+		{"Viz in signed list", valid, http.StatusOK},
+		{"Viz first in signed list", sign(testIssuer, []string{testVizAud, "other-audience"}, "owner@example.net", now.Add(time.Minute)), http.StatusOK},
+		{"MCP only", sign(testIssuer, []string{testMCPAud}, "owner@example.net", now.Add(time.Minute)), http.StatusUnauthorized},
+		{"foreign only", sign(testIssuer, []string{"other-audience"}, "owner@example.net", now.Add(time.Minute)), http.StatusUnauthorized},
+		{"wrong signature", tamperSignature(t, valid), http.StatusUnauthorized},
+		{"wrong issuer", sign("https://other.example.org", []string{testVizAud, "other-audience"}, "owner@example.net", now.Add(time.Minute)), http.StatusUnauthorized},
+		{"wrong owner", sign(testIssuer, []string{testVizAud, "other-audience"}, "other@example.net", now.Add(time.Minute)), http.StatusUnauthorized},
+		{"expired", sign(testIssuer, []string{testVizAud, "other-audience"}, "owner@example.net", now.Add(-time.Second)), http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			handler := VizAuth(verifier, testVizAud, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called = true
+				w.WriteHeader(http.StatusOK)
+			}))
+			req := httptest.NewRequest(http.MethodGet, "/viz/", nil)
+			req.Header.Set(AssertionHeader, tc.token)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tc.want || called != (tc.want == http.StatusOK) {
+				t.Fatalf("status=%d called=%v, want status=%d", rec.Code, called, tc.want)
+			}
+		})
+	}
+}
 
 func TestVizDenialDiagnosticsAreBoundedAndRedacted(t *testing.T) {
 	var output bytes.Buffer
@@ -137,7 +183,7 @@ func TestMCPAuthMethodOriginAndCredentialRules(t *testing.T) {
 	}
 }
 
-func TestVizAuthRequiresExclusiveAudienceAndPreservesOrigin(t *testing.T) {
+func TestVizAuthRequiresAudienceMembershipAndPreservesOrigin(t *testing.T) {
 	verifier := &fixtureVerifier{}
 	called := false
 	handler := VizAuth(verifier, testVizAud, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +198,7 @@ func TestVizAuthRequiresExclusiveAudienceAndPreservesOrigin(t *testing.T) {
 	req.Header.Set("Origin", "https://wrong.example.org")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted || !called || verifier.allowMulti {
+	if rec.Code != http.StatusAccepted || !called || !verifier.allowMulti {
 		t.Fatalf("status=%d called=%v allowMulti=%v", rec.Code, called, verifier.allowMulti)
 	}
 }

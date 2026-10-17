@@ -20,6 +20,10 @@ MCP client -> Traefik -> Personal Memory (Go) -> TEI -> Qdrant
 
 `/memory` is the native Streamable HTTP MCP endpoint. It keeps API-key and optional generic OAuth authentication independent. An optional Cloudflare Access profile serves MCP clients at `/memory/oauth`, with a separate stateless transport. Viz can also require a browser-specific Access assertion alongside its proxy secret. The [Access migration guide](https://dzarlax-ai.github.io/personal_memory/operations/cloudflare-access/) explains how to keep the existing Authentik issuer available until every real client, including Gemini if used, has reconnected and been accepted. `/todoist` exists only when its feature is enabled. TEI and Qdrant are internal services. Before serving requests, the application verifies the configured embedding identity against every active collection.
 
+Access MCP and Viz each require their own configured audience to be present in
+the signed assertion. Additional signed audiences are allowed; a token containing
+only the MCP audience cannot authorize Viz. Viz also requires its proxy secret.
+
 ## Recommended: ask Codex or Claude Code to set it up
 
 For a new local installation, paste this into Codex or Claude Code:
