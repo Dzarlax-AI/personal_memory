@@ -37,6 +37,16 @@ See [MCP tools](../reference/tools/) for the response contract and the
 [upgrade guide](../operations/upgrade-rollback/) for the normal deployment
 boundary.
 
+## Unreleased: optional Cloudflare Access profiles
+
+Cloudflare Access can now protect the separate stateless `/memory/oauth` MCP
+route and can add signed browser authentication to Viz alongside its existing
+proxy secret. Both profiles are default-off. Native `/memory` API keys and
+optional generic OAuth remain independent. Access identities are checked
+against an explicit email allowlist and map to the existing `MEMORY_USER`.
+See the [Access migration guide](../operations/cloudflare-access/) for
+configuration, validation, and rollback.
+
 ## Unreleased: optional AI memory layer
 
 Three independent capabilities are available as opt-in experiments: periodic

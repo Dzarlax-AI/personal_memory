@@ -10,7 +10,7 @@ Use `.env` (not source control) for deployment values. Required values are enfor
 | --- | --- | --- |
 | `MCP_PORT` | `8000` | HTTP port; integer 1–65535. |
 | `MEMORY_DOMAIN` | none | Required by the Compose/Traefik deployment; also supplies OAuth resource defaults. |
-| `API_KEY` | none | Required unless OAuth is enabled or isolated development enables `ALLOW_INSECURE_AUTH`; always required for Todoist. |
+| `API_KEY` | none | Required unless generic OAuth is enabled or isolated development enables `ALLOW_INSECURE_AUTH`; always required for Todoist. Cloudflare Access on `/memory/oauth` does not replace the native endpoint's API key. |
 | `ALLOW_INSECURE_AUTH` | `false` | Isolated-development escape hatch for `/memory` without API-key/OAuth auth and for Viz without `VIZ_PROXY_SECRET`; it never removes Todoist's `API_KEY` requirement. Never enable in staging or production. |
 | `QDRANT_URL` | `http://memory-qdrant:6333` | Qdrant base URL. |
 | `EMBED_URL` | `http://memory-embeddings:80` | TEI base URL. |
@@ -40,7 +40,7 @@ Use `.env` (not source control) for deployment values. Required values are enfor
 | `ENABLE_TODOIST` | `false` | Registers Todoist only when true; requires `TODOIST_TOKEN` and `API_KEY`. |
 | `TODOIST_TOKEN` | none | Todoist API token, only when enabled. |
 | `ENABLE_VIZ` | `false` | Registers visualization only when true. |
-| `VIZ_PROXY_SECRET` | none | Required when Viz is enabled unless isolated development explicitly sets `ALLOW_INSECURE_AUTH=true`; in production, Traefik overwrites the trusted header after ForwardAuth. |
+| `VIZ_PROXY_SECRET` | none | Required when Viz is enabled unless isolated development explicitly sets `ALLOW_INSECURE_AUTH=true` and Access Viz is disabled. When Access Viz is enabled, the application requires both this proxy secret and a valid browser Access assertion. |
 | `VIZ_SIMILARITY_THRESHOLD` | `0.65` | Visualization graph cosine threshold. |
 | `ENABLE_RAG` | `false` | Enables document search and indexing. |
 | `RAG_DOCUMENTS_DIR` | `/root/documents/personal` | Readable document root. |
@@ -64,3 +64,19 @@ Use `.env` (not source control) for deployment values. Required values are enfor
 | `OAUTH_JWKS_URL` | discovered from issuer | Optional explicit HTTPS JWKS URL. Discovery and JWKS requests reject redirects. |
 | `OAUTH_AUTHORIZATION_SERVERS` | primary and additional issuers | Optional comma-separated authorization servers. Configured issuers are always published in protected-resource metadata. |
 | `OAUTH_RESOURCE_DOCUMENTATION` | none | Optional resource documentation URL. |
+
+## Cloudflare Access
+
+Cloudflare Access is optional and independent of native API-key and generic OAuth authentication. `/memory/oauth` is reserved for the stateless Access MCP transport. Turning off its profile keeps the route unavailable; it never falls through to the native `/memory` handler. Access MCP clients use the configured MCP application audience and may carry a Cloudflare-signed audience list containing that value. The browser Viz profile requires its own distinct audience as the only audience in the assertion.
+
+| Variable | Default | Requirement / purpose |
+| --- | --- | --- |
+| `ENABLE_ACCESS_MCP` | `false` | Enables the `/memory/oauth` MCP route. |
+| `ACCESS_MCP_AUDIENCE` | none | Required when Access MCP is enabled; one exact audience copied from the MCP Access application. |
+| `ENABLE_ACCESS_VIZ` | `false` | Adds signed browser JWT verification to Viz. Requires `ENABLE_VIZ=true` and `VIZ_PROXY_SECRET`. |
+| `ACCESS_VIZ_AUDIENCE` | none | Required when Access Viz is enabled; must differ from `ACCESS_MCP_AUDIENCE` when both profiles are enabled. |
+| `ACCESS_ISSUER` | none | Required HTTPS issuer shared by enabled Access profiles. Use the issuer advertised by the configured Access provider. |
+| `ACCESS_JWKS_URL` | none | Required HTTPS signing-key URL shared by enabled Access profiles. Use the exact URL advertised by the provider; do not construct it from a presumed hostname suffix. |
+| `ACCESS_ALLOWED_EMAILS` | none | Required comma-separated exact email allowlist. All accepted emails map to the single configured `MEMORY_USER`; this does not add tenant selection. |
+
+Any partial Access configuration fails startup. Access JWTs must use RS256, verify against the configured issuer and signing keys, contain the required time claims and `type=app`, and carry an allowlisted email. The application ignores unsigned identity headers, cookies, and tool arguments. The MCP route rejects browser `Origin` headers, API-key query/header credentials, duplicate assertions, and Authorization values except a single forwarded `Bearer oauth:<opaque>` transport value.

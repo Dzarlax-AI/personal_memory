@@ -9,7 +9,10 @@ separate, API-key-only endpoint at `/todoist` and is absent until enabled.
 
 For production or remote `/memory`, send either `X-API-Key: <API_KEY>` or
 `Authorization: Bearer <API_KEY>`. OAuth tokens are accepted only when OAuth is
-enabled. The standalone local release is different: its exact endpoint is
+enabled. Cloudflare Access is a separate optional profile at
+`/memory/oauth`; enabling it does not change native API-key authentication or
+generic OAuth. See the [Cloudflare Access migration guide](../../operations/cloudflare-access/)
+for signed assertion and client setup. The standalone local release is different: its exact endpoint is
 `http://127.0.0.1:8000/memory` and intentionally needs no credentials because
 it is loopback-only.
 

@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/Dzarlax-AI/personal-memory/internal/accessauth"
 	"github.com/Dzarlax-AI/personal-memory/internal/aimaintenance"
 	"github.com/Dzarlax-AI/personal-memory/internal/backup"
 	"github.com/Dzarlax-AI/personal-memory/internal/config"
@@ -54,6 +56,18 @@ func main() {
 		"todoist", cfg.EnableTodoist,
 		"viz", cfg.EnableViz,
 	)
+	var accessVerifier accessauth.TokenVerifier
+	if cfg.Access.EnableMCP || cfg.Access.EnableViz {
+		accessVerifier, err = accessauth.NewVerifier(accessauth.Config{
+			Issuer:        cfg.Access.Issuer,
+			JWKSURL:       cfg.Access.JWKSURL,
+			AllowedEmails: cfg.Access.AllowedEmails,
+		})
+		if err != nil {
+			slog.Error("invalid Cloudflare Access configuration", "error", err)
+			os.Exit(1)
+		}
+	}
 
 	// Init dependency clients and the complete set of collections that share the
 	// active embedding model.
@@ -203,28 +217,31 @@ func main() {
 			"reindex_interval", cfg.RAGReindexInterval)
 	}
 
-	// Memory MCP endpoint accepts API key auth and optional OAuth bearer tokens.
-	r.Group(func(r chi.Router) {
-		// Auth middleware itself always fails closed on empty configuration.
-		// Bypass it only for the explicit development escape hatch; this keeps an
-		// accidental empty middleware config from silently becoming public.
-		if memoryAuthRequired(cfg.APIKey, cfg.OAuth.Enabled, cfg.AllowInsecureAuth) {
-			r.Use(middleware.Auth(middleware.AuthConfig{
-				APIKey:        cfg.APIKey,
-				OAuthEnabled:  cfg.OAuth.Enabled,
-				OAuthResource: cfg.OAuth.Resource,
-				OAuthScopes:   cfg.OAuth.Scopes,
-				Verifier:      verifier,
-			}))
-		}
-		r.Use(middleware.RequestBodyLimit(mcpRequestBodyLimit))
-
-		memoryHTTP := server.NewStreamableHTTPServer(mcpMemory)
-		memoryEndpoint := mcpEndpointHandler(memoryHTTP)
-		r.Handle("/memory", memoryEndpoint)
-		r.Handle("/memory/", memoryEndpoint)
-		r.Get("/memory/operational", memSrv.OperationalContextHandler())
-	})
+	// Native API key/OAuth clients and Access clients use separate route handlers.
+	// The native transport retains its existing session behavior; the Access
+	// transport is stateless and authenticates every request from its assertion.
+	nativeMemory := http.Handler(mcpEndpointHandler(server.NewStreamableHTTPServer(mcpMemory)))
+	var nativeOperational http.Handler = memSrv.OperationalContextHandler()
+	if memoryAuthRequired(cfg.APIKey, cfg.OAuth.Enabled, cfg.AllowInsecureAuth) {
+		auth := middleware.Auth(middleware.AuthConfig{
+			APIKey:        cfg.APIKey,
+			OAuthEnabled:  cfg.OAuth.Enabled,
+			OAuthResource: cfg.OAuth.Resource,
+			OAuthScopes:   cfg.OAuth.Scopes,
+			Verifier:      verifier,
+		})
+		nativeMemory = auth(nativeMemory)
+		nativeOperational = auth(nativeOperational)
+	}
+	nativeMemory = middleware.RequestBodyLimit(mcpRequestBodyLimit)(nativeMemory)
+	nativeOperational = middleware.RequestBodyLimit(mcpRequestBodyLimit)(nativeOperational)
+	var accessMemory http.Handler = http.NotFoundHandler()
+	if cfg.Access.EnableMCP {
+		accessHTTP := server.NewStreamableHTTPServer(mcpMemory, server.WithStateLess(true))
+		accessMemory = middleware.RequestBodyLimit(mcpRequestBodyLimit)(accessauth.MCPAuth(accessVerifier, cfg.Access.MCPAudience, accessHTTP))
+	}
+	memoryRoutes := memoryRouteHandler(nativeMemory, nativeOperational, accessMemory, cfg.Access.EnableMCP)
+	registerMemoryRoutes(r, memoryRoutes)
 
 	// Todoist MCP is registered only when explicitly enabled. Config validation
 	// requires its token and API key only behind that feature gate.
@@ -247,9 +264,8 @@ func main() {
 		slog.Info("todoist MCP enabled")
 	}
 
-	// Viz dashboard (optional). In production, Authentik authenticates the
-	// browser and Traefik overwrites the trusted proxy-secret header. The app
-	// verifies that secret so direct container/network access fails closed.
+	// Viz dashboard (optional). Cloudflare Access can add a browser-specific
+	// signed assertion; the application always retains the proxy-secret factor.
 	if cfg.EnableViz {
 		vizHandler := viz.NewHandler(qc, cfg.VizSimilarityThreshold)
 		reviewOrigin := ""
@@ -261,14 +277,14 @@ func main() {
 			vizChunks := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionChunks)
 			vizHandler = vizHandler.WithDocumentRAG(vizChunks, cfg.RAGDocumentsDir)
 		}
-		if cfg.AllowInsecureAuth && cfg.VizProxySecret == "" {
-			r.Mount("/viz", vizHandler.Router())
-		} else {
-			r.Group(func(r chi.Router) {
-				r.Use(middleware.ProxySecretAuth(cfg.VizProxySecret))
-				r.Mount("/viz", vizHandler.Router())
-			})
+		vizRoute := http.Handler(vizHandler.Router())
+		if cfg.Access.EnableViz {
+			vizRoute = accessauth.VizAuth(accessVerifier, cfg.Access.VizAudience, vizRoute)
 		}
+		if !(cfg.AllowInsecureAuth && cfg.VizProxySecret == "" && !cfg.Access.EnableViz) {
+			vizRoute = middleware.ProxySecretAuth(cfg.VizProxySecret)(vizRoute)
+		}
+		r.Mount("/viz", vizRoute)
 		slog.Info("viz dashboard enabled")
 	}
 
@@ -337,6 +353,58 @@ func main() {
 	if serveErr != nil && serveErr != http.ErrServerClosed {
 		os.Exit(1)
 	}
+}
+
+func registerMemoryRoutes(r chi.Router, handler http.Handler) {
+	r.Handle("/memory", handler)
+	r.Handle("/memory/", handler)
+	r.Handle("/memory/*", handler)
+}
+
+func memoryRouteHandler(native, operational, access http.Handler, accessEnabled bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if isMemoryAccessPath(path) {
+			if path != "/memory/oauth" || r.URL.EscapedPath() != "/memory/oauth" || !accessEnabled {
+				http.NotFound(w, r)
+				return
+			}
+			access.ServeHTTP(w, r)
+			return
+		}
+		if path == "/memory/operational" {
+			if r.URL.EscapedPath() != path {
+				http.NotFound(w, r)
+				return
+			}
+			if r.Method != http.MethodGet {
+				w.Header().Set("Allow", http.MethodGet)
+				http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+				return
+			}
+			operational.ServeHTTP(w, r)
+			return
+		}
+		if (path == "/memory" || path == "/memory/") && r.URL.EscapedPath() == path {
+			native.ServeHTTP(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	})
+}
+
+func isMemoryAccessPath(path string) bool {
+	lower := strings.ToLower(path)
+	const prefix = "/memory/oauth"
+	if lower == prefix || strings.HasPrefix(lower, prefix+"/") {
+		return true
+	}
+	if strings.HasPrefix(lower, "/memory/") {
+		remainder := strings.TrimPrefix(lower, "/memory/")
+		segment := strings.SplitN(remainder, "/", 2)[0]
+		return strings.HasPrefix(segment, "oauth;")
+	}
+	return false
 }
 
 func newEmbeddingCollections(cfg *config.Config) (memoryClient, chunksClient, foldersClient *qdrant.Client, all []*qdrant.Client) {

@@ -18,14 +18,15 @@ Two Docker services in this repo: `memory-embeddings` (TEI), `memory-mcp` (Go se
 
 ```
 Client → Traefik (mcp.<domain>) → memory-mcp:8000 (Go)
-           ├─ /memory   → memory MCP (X-API-Key)
+           ├─ /memory   → native memory MCP (X-API-Key or optional generic OAuth)
            │             (tools include RAG when ENABLE_RAG=true)
+           ├─ /memory/oauth → optional stateless MCP transport authenticated by a signed Cloudflare Access assertion
            ├─ /todoist  → todoist MCP (X-API-Key, ENABLE_TODOIST)
-           ├─ /viz/     → viz dashboard (Authentik + proxy secret, ENABLE_VIZ)
+           ├─ /viz/     → viz dashboard (proxy secret, optional browser Access assertion, ENABLE_VIZ)
            └─ /health   → liveness (no auth)
 ```
 
-Single Go process serves all routes on one port via Chi router. `/memory` accepts API-key and optional OAuth auth; optional `/todoist` is API-key-only. `/viz` combines Traefik Authentik ForwardAuth with an application-verified proxy secret so browsers get OIDC without trusting identity headers directly.
+Single Go process serves all routes on one port via Chi router. `/memory` accepts API-key and optional generic OAuth auth. `/memory/oauth` is a separate, optional Cloudflare Access route with a stateless MCP transport; it never selects the stored owner from request headers, cookies, or tool arguments. Optional `/todoist` is API-key-only. `/viz` requires the application-verified proxy secret and can also require a browser-specific signed Access assertion. The application verifies signed identity claims instead of trusting identity headers.
 
 Todoist, viz, and RAG are toggled by `ENABLE_TODOIST` / `ENABLE_VIZ` / `ENABLE_RAG` env vars. Disabled features do not require their secrets or register their routes. Todoist requires both `TODOIST_TOKEN` and `API_KEY` only when enabled. Viz requires Traefik to overwrite `X-Personal-Memory-Proxy-Secret` with `VIZ_PROXY_SECRET` after successful ForwardAuth. Backup runs as a goroutine.
 
@@ -153,6 +154,13 @@ The Qdrant client unmarshals `id` into `interface{}` and converts to string with
 | `ENABLE_VIZ` | `false` | Enable visualization dashboard |
 | `TODOIST_TOKEN` | — | Todoist API token (only when `ENABLE_TODOIST=true`) |
 | `VIZ_PROXY_SECRET` | — | Required only when `ENABLE_VIZ=true`; Traefik overwrites the trusted proxy header after ForwardAuth. |
+| `ENABLE_ACCESS_MCP` | `false` | Enables `/memory/oauth` with a separately authenticated stateless transport. Requires shared Access issuer/JWKS/email settings and `ACCESS_MCP_AUDIENCE`. |
+| `ENABLE_ACCESS_VIZ` | `false` | Adds browser Access JWT verification to Viz. Requires `ENABLE_VIZ=true`, `VIZ_PROXY_SECRET`, shared Access settings, and a distinct `ACCESS_VIZ_AUDIENCE`. |
+| `ACCESS_ISSUER` | — | Exact HTTPS issuer used by Cloudflare Access JWTs. Configure from provider metadata. |
+| `ACCESS_JWKS_URL` | — | Exact HTTPS signing-key URL advertised by the Access provider. |
+| `ACCESS_ALLOWED_EMAILS` | — | Comma-separated exact email allowlist. Every listed email maps to the configured `MEMORY_USER`. |
+| `ACCESS_MCP_AUDIENCE` | — | Expected MCP application audience; it may be one member of the signed audience list. |
+| `ACCESS_VIZ_AUDIENCE` | — | Expected browser application audience; browser tokens must contain only this audience. It must differ from the MCP audience when both are enabled. |
 | `CACHE_TTL` | `60` | Search cache TTL in seconds |
 | `DEDUP_THRESHOLD` | `0.97` | Cosine similarity for dedup |
 | `RELATED_FACT_LOW` | `0.60` | Minimum cosine similarity for related-fact candidates |
