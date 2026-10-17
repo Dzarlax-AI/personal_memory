@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net/mail"
 	"net/url"
 	"os"
 	"regexp"
@@ -30,7 +31,8 @@ type Config struct {
 	APIKey            string
 	AllowInsecureAuth bool
 
-	OAuth OAuthConfig
+	OAuth  OAuthConfig
+	Access AccessConfig
 
 	// Qdrant
 	QdrantURL string
@@ -75,6 +77,18 @@ type Config struct {
 	RAGCollectionChunks  string
 	RAGCollectionFolders string
 	RAGReindexInterval   time.Duration // 0 disables the in-server auto-rescan
+}
+
+// AccessConfig is an independent, default-off Cloudflare Access profile.
+// Access MCP and Viz can share a trusted issuer, JWKS URL, and owner email list.
+type AccessConfig struct {
+	EnableMCP     bool
+	EnableViz     bool
+	Issuer        string
+	JWKSURL       string
+	MCPAudience   string
+	VizAudience   string
+	AllowedEmails []string
 }
 
 type OAuthConfig struct {
@@ -129,6 +143,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	access, err := loadAccessConfig()
+	if err != nil {
+		return nil, err
+	}
 	vizThreshold, err := envFloat("VIZ_SIMILARITY_THRESHOLD", 0.65)
 	if err != nil {
 		return nil, err
@@ -162,6 +180,7 @@ func Load() (*Config, error) {
 		Port:              envOrDefault("MCP_PORT", "8000"),
 		APIKey:            os.Getenv("API_KEY"),
 		AllowInsecureAuth: allowInsecureAuth,
+		Access:            access,
 
 		QdrantURL:                      envOrDefault("QDRANT_URL", "http://memory-qdrant:6333"),
 		EmbedURL:                       envOrDefault("EMBED_URL", "http://memory-embeddings:80"),
@@ -210,6 +229,30 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+func loadAccessConfig() (AccessConfig, error) {
+	enableMCP, err := envBool("ENABLE_ACCESS_MCP")
+	if err != nil {
+		return AccessConfig{}, err
+	}
+	enableViz, err := envBool("ENABLE_ACCESS_VIZ")
+	if err != nil {
+		return AccessConfig{}, err
+	}
+	allowedEmails, err := nonEmptyEnvCSV("ACCESS_ALLOWED_EMAILS")
+	if err != nil {
+		return AccessConfig{}, err
+	}
+	return AccessConfig{
+		EnableMCP:     enableMCP,
+		EnableViz:     enableViz,
+		Issuer:        os.Getenv("ACCESS_ISSUER"),
+		JWKSURL:       os.Getenv("ACCESS_JWKS_URL"),
+		MCPAudience:   os.Getenv("ACCESS_MCP_AUDIENCE"),
+		VizAudience:   os.Getenv("ACCESS_VIZ_AUDIENCE"),
+		AllowedEmails: allowedEmails,
+	}, nil
 }
 
 // LoadIndexer loads only the configuration used by the standalone document
@@ -356,8 +399,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("API_KEY is required when ENABLE_TODOIST=true because the Todoist endpoint is API-key-only")
 		}
 	}
-	if c.EnableViz && c.VizProxySecret == "" && !c.AllowInsecureAuth {
+	if c.EnableViz && c.VizProxySecret == "" && (!c.AllowInsecureAuth || c.Access.EnableViz) {
 		return fmt.Errorf("VIZ_PROXY_SECRET is required when ENABLE_VIZ=true")
+	}
+	if err := c.Access.Validate(c.EnableViz); err != nil {
+		return err
 	}
 	if c.OAuth.Enabled {
 		if err := validateHTTPSURL("OAUTH_ISSUER", c.OAuth.Issuer); err != nil {
@@ -394,6 +440,74 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (c AccessConfig) Validate(vizEnabled bool) error {
+	configured := c.Issuer != "" || c.JWKSURL != "" || c.MCPAudience != "" || c.VizAudience != "" || len(c.AllowedEmails) > 0
+	if !c.EnableMCP && !c.EnableViz {
+		if configured {
+			return fmt.Errorf("ENABLE_ACCESS_MCP or ENABLE_ACCESS_VIZ is required when ACCESS_* settings are configured")
+		}
+		return nil
+	}
+	if c.EnableViz && !vizEnabled {
+		return fmt.Errorf("ENABLE_VIZ=true is required when ENABLE_ACCESS_VIZ=true")
+	}
+	for name, value := range map[string]string{"ACCESS_ISSUER": c.Issuer, "ACCESS_JWKS_URL": c.JWKSURL} {
+		if err := validateHTTPSURL(name, value); err != nil {
+			return err
+		}
+	}
+	issuerURL, _ := url.ParseRequestURI(c.Issuer)
+	if issuerURL == nil || issuerURL.User != nil || issuerURL.Path != "" || issuerURL.RawQuery != "" || issuerURL.Fragment != "" {
+		return fmt.Errorf("ACCESS_ISSUER must be an HTTPS origin")
+	}
+	if len(c.AllowedEmails) == 0 {
+		return fmt.Errorf("ACCESS_ALLOWED_EMAILS is required when a Cloudflare Access profile is enabled")
+	}
+	seenEmails := make(map[string]struct{}, len(c.AllowedEmails))
+	for _, email := range c.AllowedEmails {
+		if !validAccessEmail(email) {
+			return fmt.Errorf("ACCESS_ALLOWED_EMAILS must contain exact email addresses")
+		}
+		if _, exists := seenEmails[email]; exists {
+			return fmt.Errorf("ACCESS_ALLOWED_EMAILS must not contain duplicates")
+		}
+		seenEmails[email] = struct{}{}
+	}
+	if c.EnableMCP {
+		if err := validateAccessAudience("ACCESS_MCP_AUDIENCE", c.MCPAudience); err != nil {
+			return err
+		}
+	} else if c.MCPAudience != "" {
+		return fmt.Errorf("ACCESS_MCP_AUDIENCE requires ENABLE_ACCESS_MCP=true")
+	}
+	if c.EnableViz {
+		if err := validateAccessAudience("ACCESS_VIZ_AUDIENCE", c.VizAudience); err != nil {
+			return err
+		}
+	} else if c.VizAudience != "" {
+		return fmt.Errorf("ACCESS_VIZ_AUDIENCE requires ENABLE_ACCESS_VIZ=true")
+	}
+	if c.EnableMCP && c.EnableViz && c.MCPAudience == c.VizAudience {
+		return fmt.Errorf("ACCESS_MCP_AUDIENCE and ACCESS_VIZ_AUDIENCE must differ")
+	}
+	return nil
+}
+
+func validateAccessAudience(name, audience string) error {
+	if audience == "" || strings.TrimSpace(audience) != audience || strings.ContainsAny(audience, ",\t\r\n") {
+		return fmt.Errorf("%s must be one non-empty exact audience value", name)
+	}
+	return nil
+}
+
+func validAccessEmail(value string) bool {
+	if value == "" || strings.TrimSpace(value) != value || strings.ContainsAny(value, ",\r\n") {
+		return false
+	}
+	address, err := mail.ParseAddress(value)
+	return err == nil && address.Address == value
 }
 
 // ValidateIndexer validates the complete standalone indexer contract.

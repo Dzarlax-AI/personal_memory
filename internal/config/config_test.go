@@ -144,6 +144,51 @@ func TestLoadRejectsMalformedTypedEnvironment(t *testing.T) {
 	}
 }
 
+func TestAccessProfilesAreDefaultOffAndIndependent(t *testing.T) {
+	setSecureTestEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Access.EnableMCP || cfg.Access.EnableViz {
+		t.Fatalf("Access profiles enabled by default: %#v", cfg.Access)
+	}
+
+	setAccessTestEnv(t)
+	t.Setenv("ENABLE_ACCESS_MCP", "true")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Access.EnableMCP || cfg.Access.EnableViz || cfg.Access.MCPAudience != "mcp-audience" {
+		t.Fatalf("unexpected Access MCP profile: %#v", cfg.Access)
+	}
+}
+
+func TestAccessConfigRejectsPartialAndOverlappingProfiles(t *testing.T) {
+	tests := []struct {
+		name   string
+		values map[string]string
+		want   string
+	}{
+		{name: "shared settings without profile", values: map[string]string{"ACCESS_ISSUER": "https://access.example.org"}, want: "ENABLE_ACCESS_MCP or ENABLE_ACCESS_VIZ"},
+		{name: "missing shared JWKS", values: map[string]string{"ENABLE_ACCESS_MCP": "true", "ACCESS_ISSUER": "https://access.example.org", "ACCESS_MCP_AUDIENCE": "mcp-audience", "ACCESS_ALLOWED_EMAILS": "owner@example.net"}, want: "ACCESS_JWKS_URL"},
+		{name: "same browser and MCP audience", values: map[string]string{"ENABLE_VIZ": "true", "ENABLE_ACCESS_MCP": "true", "ENABLE_ACCESS_VIZ": "true", "ACCESS_ISSUER": "https://access.example.org", "ACCESS_JWKS_URL": "https://access.example.org/cdn-cgi/access/certs", "ACCESS_MCP_AUDIENCE": "same", "ACCESS_VIZ_AUDIENCE": "same", "ACCESS_ALLOWED_EMAILS": "owner@example.net", "VIZ_PROXY_SECRET": "secret"}, want: "must differ"},
+		{name: "Access viz still needs proxy secret in insecure mode", values: map[string]string{"ALLOW_INSECURE_AUTH": "true", "ENABLE_VIZ": "true", "ENABLE_ACCESS_VIZ": "true", "ACCESS_ISSUER": "https://access.example.org", "ACCESS_JWKS_URL": "https://access.example.org/cdn-cgi/access/certs", "ACCESS_VIZ_AUDIENCE": "viz-audience", "ACCESS_ALLOWED_EMAILS": "owner@example.net"}, want: "VIZ_PROXY_SECRET"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setSecureTestEnv(t)
+			for key, value := range tt.values {
+				t.Setenv(key, value)
+			}
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Load() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadRelatedFactLowSelectionAndWarnings(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -426,6 +471,9 @@ func TestLoadVizRequiresProxySecretOnlyWhenEnabled(t *testing.T) {
 	setSecureTestEnv(t)
 	t.Setenv("ENABLE_VIZ", "false")
 	t.Setenv("VIZ_PROXY_SECRET", "")
+	for _, name := range []string{"ENABLE_ACCESS_MCP", "ENABLE_ACCESS_VIZ", "ACCESS_ISSUER", "ACCESS_JWKS_URL", "ACCESS_MCP_AUDIENCE", "ACCESS_VIZ_AUDIENCE", "ACCESS_ALLOWED_EMAILS"} {
+		t.Setenv(name, "")
+	}
 	if _, err := Load(); err != nil {
 		t.Fatalf("disabled viz must not require proxy secret: %v", err)
 	}
@@ -434,6 +482,15 @@ func TestLoadVizRequiresProxySecretOnlyWhenEnabled(t *testing.T) {
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "VIZ_PROXY_SECRET") {
 		t.Fatalf("expected VIZ_PROXY_SECRET error, got %v", err)
 	}
+}
+
+func setAccessTestEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("ENABLE_ACCESS_MCP", "true")
+	t.Setenv("ACCESS_ISSUER", "https://access.example.org")
+	t.Setenv("ACCESS_JWKS_URL", "https://access.example.org/cdn-cgi/access/certs")
+	t.Setenv("ACCESS_MCP_AUDIENCE", "mcp-audience")
+	t.Setenv("ACCESS_ALLOWED_EMAILS", "owner@example.net")
 }
 
 func TestLoadRejectsMalformedBoolean(t *testing.T) {
