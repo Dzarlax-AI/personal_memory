@@ -1,13 +1,46 @@
 package accessauth
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestVizDenialDiagnosticsAreBoundedAndRedacted(t *testing.T) {
+	var output bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	verifier := &fixtureVerifier{err: errors.New("private-credential owner@example.net")}
+	handler := VizAuth(verifier, testVizAud, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("denied request reached Viz")
+	}))
+	for _, assertion := range []string{"", "", "private-assertion", "private-assertion"} {
+		req := httptest.NewRequest(http.MethodGet, "/viz/", nil)
+		if assertion != "" {
+			req.Header.Set(AssertionHeader, assertion)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", rec.Code)
+		}
+	}
+	logs := output.String()
+	if strings.Count(logs, "Access Viz authentication denied") != 2 || !strings.Contains(logs, `"reason":"assertion_header"`) || !strings.Contains(logs, `"reason":"invalid_assertion"`) {
+		t.Fatalf("expected one fixed diagnostic per denial stage, got %q", logs)
+	}
+	for _, private := range []string{"private-credential", "private-assertion", "owner@example.net"} {
+		if strings.Contains(logs, private) {
+			t.Fatal("authentication diagnostic exposed private input")
+		}
+	}
+}
 
 type fixtureVerifier struct {
 	gotToken    string

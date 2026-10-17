@@ -3,8 +3,10 @@ package accessauth
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 const AssertionHeader = "Cf-Access-Jwt-Assertion"
@@ -56,10 +58,12 @@ func MCPAuth(verifier TokenVerifier, audience string, next http.Handler) http.Ha
 // VizAuth requires a browser-specific Access assertion. The proxy secret stays
 // an independent required factor and is enforced by ProxySecretAuth outside.
 func VizAuth(verifier TokenVerifier, audience string, next http.Handler) http.Handler {
+	var headerDenied, verificationDenied sync.Once
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		values := r.Header.Values(AssertionHeader)
 		if len(values) != 1 || strings.TrimSpace(values[0]) != values[0] || strings.Contains(values[0], ",") {
+			headerDenied.Do(func() { slog.Warn("Access Viz authentication denied", "reason", "assertion_header") })
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -68,6 +72,9 @@ func VizAuth(verifier TokenVerifier, audience string, next http.Handler) http.Ha
 			return
 		}
 		if _, err := verifier.Verify(r.Context(), values[0], audience, false); err != nil {
+			// Emit at most one fixed reason for this stage per handler lifetime.
+			// Never log the assertion, identity, or arbitrary verifier error text.
+			verificationDenied.Do(func() { slog.Warn("Access Viz authentication denied", "reason", vizDenialReason(err)) })
 			if errors.Is(err, ErrUnavailable) {
 				http.Error(w, "Access verification unavailable", http.StatusServiceUnavailable)
 				return
@@ -77,6 +84,24 @@ func VizAuth(verifier TokenVerifier, audience string, next http.Handler) http.Ha
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func vizDenialReason(err error) string {
+	if errors.Is(err, ErrUnavailable) {
+		return "verifier_unavailable"
+	}
+	switch err.Error() {
+	case "invalid Access assertion claims":
+		return "required_claims"
+	case "invalid Access assertion audience":
+		return "audience_cardinality"
+	case "future Access assertion":
+		return "future_issued_at"
+	case "unmapped Access identity":
+		return "identity_not_allowed"
+	default:
+		return "invalid_assertion"
+	}
 }
 
 func validateAccessCredentials(r *http.Request) error {
