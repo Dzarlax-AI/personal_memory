@@ -31,9 +31,22 @@ func TestVizDenialDiagnosticsAreBoundedAndRedacted(t *testing.T) {
 			t.Fatalf("status = %d, want 401", rec.Code)
 		}
 	}
+	for _, err := range []error{errors.New("invalid Access assertion audience"), ErrUnavailable} {
+		verifier.err = err
+		for range 2 {
+			req := httptest.NewRequest(http.MethodGet, "/viz/", nil)
+			req.Header.Set(AssertionHeader, "private-assertion")
+			handler.ServeHTTP(httptest.NewRecorder(), req)
+		}
+	}
 	logs := output.String()
-	if strings.Count(logs, "Access Viz authentication denied") != 2 || !strings.Contains(logs, `"reason":"assertion_header"`) || !strings.Contains(logs, `"reason":"invalid_assertion"`) {
-		t.Fatalf("expected one fixed diagnostic per denial stage, got %q", logs)
+	if strings.Count(logs, "Access Viz authentication denied") != 4 {
+		t.Fatalf("expected one fixed diagnostic per reason, got %q", logs)
+	}
+	for _, reason := range []string{"assertion_header", "invalid_assertion", "audience_cardinality", "verifier_unavailable"} {
+		if strings.Count(logs, `"reason":"`+reason+`"`) != 1 {
+			t.Fatalf("diagnostic missing or repeated for %s", reason)
+		}
 	}
 	for _, private := range []string{"private-credential", "private-assertion", "owner@example.net"} {
 		if strings.Contains(logs, private) {

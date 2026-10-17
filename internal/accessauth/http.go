@@ -58,23 +58,30 @@ func MCPAuth(verifier TokenVerifier, audience string, next http.Handler) http.Ha
 // VizAuth requires a browser-specific Access assertion. The proxy secret stays
 // an independent required factor and is enforced by ProxySecretAuth outside.
 func VizAuth(verifier TokenVerifier, audience string, next http.Handler) http.Handler {
-	var headerDenied, verificationDenied sync.Once
+	denied := map[string]*sync.Once{}
+	for _, reason := range []string{"assertion_header", "verifier_unavailable", "required_claims", "audience_cardinality", "future_issued_at", "identity_not_allowed", "invalid_assertion"} {
+		denied[reason] = new(sync.Once)
+	}
+	report := func(reason string) {
+		denied[reason].Do(func() { slog.Warn("Access Viz authentication denied", "reason", reason) })
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		values := r.Header.Values(AssertionHeader)
 		if len(values) != 1 || strings.TrimSpace(values[0]) != values[0] || strings.Contains(values[0], ",") {
-			headerDenied.Do(func() { slog.Warn("Access Viz authentication denied", "reason", "assertion_header") })
+			report("assertion_header")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		if verifier == nil {
+			report("verifier_unavailable")
 			http.Error(w, "Access verification unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		if _, err := verifier.Verify(r.Context(), values[0], audience, false); err != nil {
-			// Emit at most one fixed reason for this stage per handler lifetime.
+			// Emit each fixed reason at most once per handler lifetime.
 			// Never log the assertion, identity, or arbitrary verifier error text.
-			verificationDenied.Do(func() { slog.Warn("Access Viz authentication denied", "reason", vizDenialReason(err)) })
+			report(vizDenialReason(err))
 			if errors.Is(err, ErrUnavailable) {
 				http.Error(w, "Access verification unavailable", http.StatusServiceUnavailable)
 				return
