@@ -7,10 +7,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -79,13 +82,150 @@ func TestVerifierJWKSOutageIsUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var fetches atomic.Int32
 	verifier.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		fetches.Add(1)
 		return nil, errors.New("fixture outage")
 	})}
-	token := signAccessToken(t, key, testIssuer, []string{testMCPAud}, "owner@example.net", "app", time.Now().Add(-time.Minute), time.Now().Add(-time.Minute), time.Now().Add(time.Minute))
-	_, err = verifier.Verify(context.Background(), token, testMCPAud, true)
-	if !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("Verify() error = %v, want ErrUnavailable", err)
+	now := time.Now().UTC().Truncate(time.Second)
+	verifier.now = func() time.Time { return now }
+	for i := 0; i < 12; i++ {
+		token := signAccessTokenWithKid(t, key, fmt.Sprintf("missing-%d", i), testIssuer, []string{testMCPAud}, "owner@example.net", "app", now.Add(-time.Minute), now.Add(-time.Minute), now.Add(time.Minute))
+		_, err = verifier.Verify(context.Background(), token, testMCPAud, true)
+		if !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("Verify() error = %v, want ErrUnavailable", err)
+		}
+	}
+	if got := fetches.Load(); got != 1 {
+		t.Fatalf("JWKS fetches after repeated outage checks = %d, want 1", got)
+	}
+}
+
+func TestVerifierRefreshCooldownBoundsUnknownKidsAndAllowsRotation(t *testing.T) {
+	oldKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotatedKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := NewVerifier(Config{Issuer: testIssuer, JWKSURL: testJWKS, AllowedEmails: []string{"owner@example.net"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	verifier.now = func() time.Time { return now }
+	body := jwksForKeys(t, map[string]*rsa.PrivateKey{"old-key": oldKey})
+	var fetches atomic.Int32
+	verifier.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		fetches.Add(1)
+		if r.URL.String() != testJWKS {
+			return nil, errors.New("unexpected JWKS URL")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body))), Header: make(http.Header)}, nil
+	})}
+	validFor := func(key *rsa.PrivateKey, kid string) string {
+		return signAccessTokenWithKid(t, key, kid, testIssuer, []string{testMCPAud}, "owner@example.net", "app", now.Add(-time.Minute), now.Add(-time.Minute), now.Add(time.Minute))
+	}
+	if _, err := verifier.Verify(context.Background(), validFor(oldKey, "old-key"), testMCPAud, true); err != nil {
+		t.Fatalf("initial key verification failed: %v", err)
+	}
+	if got := fetches.Load(); got != 1 {
+		t.Fatalf("initial JWKS fetches = %d, want 1", got)
+	}
+
+	const misses = 32
+	var wg sync.WaitGroup
+	for i := 0; i < misses; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			token := validFor(oldKey, fmt.Sprintf("attacker-kid-%d", i))
+			if _, err := verifier.Verify(context.Background(), token, testMCPAud, true); err == nil {
+				t.Errorf("unknown kid %d was accepted", i)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if got := fetches.Load(); got != 1 {
+		t.Fatalf("JWKS fetches after concurrent unknown kids = %d, want 1", got)
+	}
+	if _, err := verifier.Verify(context.Background(), validFor(oldKey, "old-key"), testMCPAud, true); err != nil {
+		t.Fatalf("cached valid key failed during cooldown: %v", err)
+	}
+	if got := fetches.Load(); got != 1 {
+		t.Fatalf("cached valid key triggered %d JWKS fetches, want 1", got)
+	}
+
+	now = now.Add(jwksRefreshCooldown)
+	body = jwksForKeys(t, map[string]*rsa.PrivateKey{"old-key": oldKey, "rotated-key": rotatedKey})
+	rotatedResult := make(chan error, 1)
+	for i := 0; i < misses; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if i == 0 {
+				_, err := verifier.Verify(context.Background(), validFor(rotatedKey, "rotated-key"), testMCPAud, true)
+				rotatedResult <- err
+				return
+			}
+			token := validFor(oldKey, fmt.Sprintf("rotation-race-%d", i))
+			if _, err := verifier.Verify(context.Background(), token, testMCPAud, true); err == nil {
+				t.Errorf("unknown rotation-race kid %d was accepted", i)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if err := <-rotatedResult; err != nil {
+		t.Fatalf("rotated key was not accepted after cooldown: %v", err)
+	}
+	if got := fetches.Load(); got != 2 {
+		t.Fatalf("JWKS fetches after concurrent rotation misses = %d, want 2", got)
+	}
+	if _, err := verifier.Verify(context.Background(), validFor(rotatedKey, "rotated-key"), testMCPAud, true); err != nil {
+		t.Fatalf("cached rotated key verification failed: %v", err)
+	}
+	if got := fetches.Load(); got != 2 {
+		t.Fatalf("cached rotated key triggered %d JWKS fetches, want 2", got)
+	}
+}
+
+func TestVerifierDoesNotUseExpiredKeysDuringRefreshCooldown(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := NewVerifier(Config{Issuer: testIssuer, JWKSURL: testJWKS, AllowedEmails: []string{"owner@example.net"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	verifier.now = func() time.Time { return now }
+	verifier.cacheTTL = time.Second
+	var fetches atomic.Int32
+	body := jwksForKeys(t, map[string]*rsa.PrivateKey{"test-key": key})
+	verifier.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		fetches.Add(1)
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body))), Header: make(http.Header)}, nil
+	})}
+	token := signAccessToken(t, key, testIssuer, []string{testMCPAud}, "owner@example.net", "app", now.Add(-time.Minute), now.Add(-time.Minute), now.Add(time.Hour))
+	if _, err := verifier.Verify(context.Background(), token, testMCPAud, true); err != nil {
+		t.Fatalf("initial key verification failed: %v", err)
+	}
+	now = now.Add(2 * time.Second)
+	if _, err := verifier.Verify(context.Background(), token, testMCPAud, true); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("expired cached key error = %v, want ErrUnavailable", err)
+	}
+	if got := fetches.Load(); got != 1 {
+		t.Fatalf("expired key caused %d fetches during cooldown, want 1", got)
+	}
+	now = now.Add(jwksRefreshCooldown)
+	if _, err := verifier.Verify(context.Background(), token, testMCPAud, true); err != nil {
+		t.Fatalf("key was not refreshed after cooldown: %v", err)
+	}
+	if got := fetches.Load(); got != 2 {
+		t.Fatalf("fetch count after cooldown = %d, want 2", got)
 	}
 }
 
@@ -107,9 +247,7 @@ func testVerifier(t *testing.T, key *rsa.PrivateKey) *Verifier {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n := base64.RawURLEncoding.EncodeToString(key.N.Bytes())
-	e := base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes())
-	body, _ := json.Marshal(map[string]any{"keys": []map[string]string{{"kid": "test-key", "kty": "RSA", "use": "sig", "alg": "RS256", "n": n, "e": e}}})
+	body := jwksForKeys(t, map[string]*rsa.PrivateKey{"test-key": key})
 	verifier.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.String() != testJWKS {
 			return nil, errors.New("unexpected JWKS URL")
@@ -119,15 +257,38 @@ func testVerifier(t *testing.T, key *rsa.PrivateKey) *Verifier {
 	return verifier
 }
 
-func signAccessToken(t *testing.T, key *rsa.PrivateKey, issuer string, audience []string, email, tokenType string, iat, nbf, exp time.Time) string {
+func jwksForKeys(t *testing.T, keys map[string]*rsa.PrivateKey) []byte {
 	t.Helper()
-	return signClaims(t, key, jwt.MapClaims{"iss": issuer, "aud": audience, "iat": iat.Unix(), "nbf": nbf.Unix(), "exp": exp.Unix(), "email": email, "type": tokenType})
+	entries := make([]map[string]string, 0, len(keys))
+	for kid, key := range keys {
+		n := base64.RawURLEncoding.EncodeToString(key.N.Bytes())
+		e := base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes())
+		entries = append(entries, map[string]string{"kid": kid, "kty": "RSA", "use": "sig", "alg": "RS256", "n": n, "e": e})
+	}
+	body, err := json.Marshal(map[string]any{"keys": entries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func signAccessToken(t *testing.T, key *rsa.PrivateKey, issuer string, audience []string, email, tokenType string, iat, nbf, exp time.Time) string {
+	return signAccessTokenWithKid(t, key, "test-key", issuer, audience, email, tokenType, iat, nbf, exp)
+}
+
+func signAccessTokenWithKid(t *testing.T, key *rsa.PrivateKey, kid, issuer string, audience []string, email, tokenType string, iat, nbf, exp time.Time) string {
+	t.Helper()
+	return signClaimsWithKid(t, key, kid, jwt.MapClaims{"iss": issuer, "aud": audience, "iat": iat.Unix(), "nbf": nbf.Unix(), "exp": exp.Unix(), "email": email, "type": tokenType})
 }
 
 func signClaims(t *testing.T, key *rsa.PrivateKey, claims jwt.MapClaims) string {
+	return signClaimsWithKid(t, key, "test-key", claims)
+}
+
+func signClaimsWithKid(t *testing.T, key *rsa.PrivateKey, kid string, claims jwt.MapClaims) string {
 	t.Helper()
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	token.Header["kid"] = "test-key"
+	token.Header["kid"] = kid
 	raw, err := token.SignedString(key)
 	if err != nil {
 		t.Fatal(err)

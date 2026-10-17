@@ -18,7 +18,10 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-const maxAssertionBytes = 16 << 10
+const (
+	maxAssertionBytes   = 16 << 10
+	jwksRefreshCooldown = 30 * time.Second
+)
 
 var ErrUnavailable = errors.New("Cloudflare Access verification unavailable")
 
@@ -36,9 +39,12 @@ type Verifier struct {
 	now      func() time.Time
 	cacheTTL time.Duration
 
-	mu      sync.Mutex
-	keys    map[string]*rsa.PublicKey
-	fetched time.Time
+	mu          sync.Mutex
+	keys        map[string]*rsa.PublicKey
+	fetched     time.Time
+	lastRefresh time.Time
+	hasRefresh  bool
+	refreshErr  error
 }
 
 type accessClaims struct {
@@ -147,6 +153,12 @@ func (v *Verifier) cachedKeys(ctx context.Context) (map[string]*rsa.PublicKey, e
 	if len(v.keys) > 0 && v.now().Sub(v.fetched) < v.cacheTTL {
 		return v.keys, nil
 	}
+	if v.inRefreshCooldown(v.now()) {
+		if v.refreshErr != nil {
+			return nil, v.refreshErr
+		}
+		return nil, fmt.Errorf("%w: key refresh cooldown", ErrUnavailable)
+	}
 	if err := v.fetchLocked(ctx); err != nil {
 		return nil, err
 	}
@@ -160,6 +172,22 @@ func (v *Verifier) refresh(ctx context.Context) error {
 }
 
 func (v *Verifier) fetchLocked(ctx context.Context) error {
+	now := v.now()
+	if v.inRefreshCooldown(now) {
+		return v.refreshErr
+	}
+	v.lastRefresh = now
+	v.hasRefresh = true
+	err := v.fetchOnceLocked(ctx)
+	v.refreshErr = err
+	return err
+}
+
+func (v *Verifier) inRefreshCooldown(now time.Time) bool {
+	return v.hasRefresh && now.Sub(v.lastRefresh) < jwksRefreshCooldown
+}
+
+func (v *Verifier) fetchOnceLocked(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.jwksURL, nil)
 	if err != nil {
 		return fmt.Errorf("fetch Access keys: %w", err)
