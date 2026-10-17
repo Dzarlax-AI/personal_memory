@@ -241,6 +241,59 @@ func TestNewVerifierRejectsNonHTTPSAndMalformedAllowlist(t *testing.T) {
 	}
 }
 
+func TestCallerCancellationCannotPoisonSharedJWKSRefresh(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stale := range []bool{false, true} {
+		for _, before := range []bool{false, true} {
+			t.Run(fmt.Sprintf("expired=%v/cancel-before=%v", stale, before), func(t *testing.T) {
+				v := testVerifier(t, key)
+				now := time.Now().UTC().Truncate(time.Second)
+				token := signAccessToken(t, key, testIssuer, []string{testMCPAud}, "owner@example.net", "app", now.Add(-time.Minute), now.Add(-time.Minute), now.Add(time.Hour))
+				v.now = func() time.Time { return now }
+				if stale {
+					if _, err := v.Verify(context.Background(), token, testMCPAud, true); err != nil {
+						t.Fatal(err)
+					}
+					now = now.Add(v.cacheTTL)
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				if before {
+					cancel()
+				}
+				body := jwksForKeys(t, map[string]*rsa.PrivateKey{"test-key": key})
+				var fetches atomic.Int32
+				v.client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					fetches.Add(1)
+					if !before {
+						cancel()
+					}
+					if err := req.Context().Err(); err != nil {
+						return nil, err
+					}
+					deadline, ok := req.Context().Deadline()
+					if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 5*time.Second {
+						t.Error("shared JWKS fetch must have its own short deadline")
+					}
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body))), Header: make(http.Header)}, nil
+				})}
+				if _, err := v.Verify(ctx, token, testMCPAud, true); err != nil {
+					t.Fatalf("caller cancellation poisoned shared refresh: %v", err)
+				}
+				if _, err := v.Verify(context.Background(), token, testMCPAud, true); err != nil {
+					t.Fatalf("subsequent caller failed during cooldown: %v", err)
+				}
+				if fetches.Load() != 1 {
+					t.Fatalf("JWKS fetch count = %d, want one shared fetch", fetches.Load())
+				}
+			})
+		}
+	}
+}
+
 func testVerifier(t *testing.T, key *rsa.PrivateKey) *Verifier {
 	t.Helper()
 	verifier, err := NewVerifier(Config{Issuer: testIssuer, JWKSURL: testJWKS, AllowedEmails: []string{"owner@example.net"}})
