@@ -160,7 +160,7 @@ The Qdrant client unmarshals `id` into `interface{}` and converts to string with
 | `ACCESS_JWKS_URL` | — | Exact HTTPS signing-key URL advertised by the Access provider. |
 | `ACCESS_ALLOWED_EMAILS` | — | Comma-separated exact email allowlist. Every listed email maps to the configured `MEMORY_USER`. |
 | `ACCESS_MCP_AUDIENCE` | — | Expected MCP application audience; it may be one member of the signed audience list. |
-| `ACCESS_VIZ_AUDIENCE` | — | Expected browser application audience; browser tokens must contain only this audience. It must differ from the MCP audience when both are enabled. |
+| `ACCESS_VIZ_AUDIENCE` | — | Expected browser application audience; it must be present in the signed audience list. It must differ from the MCP audience when both are enabled. |
 | `CACHE_TTL` | `60` | Search cache TTL in seconds |
 | `DEDUP_THRESHOLD` | `0.97` | Cosine similarity for dedup |
 | `RELATED_FACT_LOW` | `0.60` | Minimum cosine similarity for related-fact candidates |

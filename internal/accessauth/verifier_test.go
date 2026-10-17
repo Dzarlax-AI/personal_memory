@@ -45,7 +45,7 @@ func TestVerifierAccessClaimsAndAudiencePolicy(t *testing.T) {
 		t.Fatalf("MCP audience membership rejected valid token: %v", err)
 	}
 	if _, err := verifier.Verify(context.Background(), validDual, testMCPAud, false); err == nil {
-		t.Fatal("browser profile accepted token with additional audiences")
+		t.Fatal("strict audience policy accepted token with additional audiences")
 	}
 	foreign := signAccessToken(t, key, testIssuer, []string{testVizAud}, "owner@example.net", "app", now.Add(-time.Minute), now.Add(-time.Minute), now.Add(time.Minute))
 	if _, err := verifier.Verify(context.Background(), foreign, testMCPAud, true); err == nil {

@@ -89,8 +89,8 @@ func NewVerifier(cfg Config) (*Verifier, error) {
 	}, nil
 }
 
-// Verify accepts the configured audience as the sole audience for browser
-// requests, or as one member of an Access MCP token's audience list.
+// Verify requires the configured audience in the signed audience list.
+// Callers can additionally require it to be the sole audience.
 func (v *Verifier) Verify(ctx context.Context, raw, audience string, allowAdditionalAudiences bool) (string, error) {
 	if raw == "" || len(raw) > maxAssertionBytes || strings.TrimSpace(raw) != raw || strings.Contains(raw, ",") {
 		return "", errors.New("invalid Access assertion format")
