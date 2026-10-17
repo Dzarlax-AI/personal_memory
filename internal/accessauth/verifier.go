@@ -21,6 +21,7 @@ import (
 const (
 	maxAssertionBytes   = 16 << 10
 	jwksRefreshCooldown = 30 * time.Second
+	jwksFetchTimeout    = 4 * time.Second
 )
 
 var ErrUnavailable = errors.New("Cloudflare Access verification unavailable")
@@ -82,7 +83,7 @@ func NewVerifier(cfg Config) (*Verifier, error) {
 		issuer:   strings.TrimSuffix(issuer, "/"),
 		jwksURL:  cfg.JWKSURL,
 		allowed:  allowed,
-		client:   &http.Client{Timeout: 4 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		client:   &http.Client{Timeout: jwksFetchTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		now:      time.Now,
 		cacheTTL: 10 * time.Minute,
 	}, nil
@@ -178,7 +179,11 @@ func (v *Verifier) fetchLocked(ctx context.Context) error {
 	}
 	v.lastRefresh = now
 	v.hasRefresh = true
-	err := v.fetchOnceLocked(ctx)
+	// The result is shared, so one caller cannot cancel it for every waiter.
+	// The independent deadline still bounds network work after a disconnect.
+	fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jwksFetchTimeout)
+	defer cancel()
+	err := v.fetchOnceLocked(fetchCtx)
 	v.refreshErr = err
 	return err
 }
