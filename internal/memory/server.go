@@ -25,7 +25,7 @@ type Server struct {
 	aiMu                   sync.RWMutex
 	ai                     *aiRuntime
 	qdrant                 *qdrant.Client
-	embed                  *embeddings.Client
+	embed                  embeddings.Embedder
 	cache                  *Cache
 	user                   string
 	dedupThreshold         float64
@@ -167,7 +167,7 @@ const (
 
 var validPointIDPattern = regexp.MustCompile(`^(?:[0-9]+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$`)
 
-func NewServer(qc *qdrant.Client, ec *embeddings.Client, cache *Cache, user string, dedupThreshold, relatedFactLow, mutationMatchThreshold float64) *Server {
+func NewServer(qc *qdrant.Client, ec embeddings.Embedder, cache *Cache, user string, dedupThreshold, relatedFactLow, mutationMatchThreshold float64) *Server {
 	return &Server{
 		qdrant:                 qc,
 		embed:                  ec,
@@ -647,7 +647,7 @@ func (s *Server) mutationTarget(ctx context.Context, args map[string]interface{}
 	if query == "" {
 		return qdrant.Point{}, fmt.Sprintf("%s or point_id is required", queryKey)
 	}
-	vec, err := s.embed.Embed(ctx, query)
+	vec, err := embeddings.Embed(ctx, s.embed, query, embeddings.RetrievalQuery)
 	if err != nil {
 		return qdrant.Point{}, fmt.Sprintf("embedding failed: %v", err)
 	}
@@ -845,7 +845,7 @@ func (s *Server) storeFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	}
 
 	aiDecision := s.aiClassify(ctx, fact, namespace, tags, primaryTag, origin, subject, allowAI)
-	vec, err := s.embed.Embed(ctx, fact)
+	vec, err := embeddings.Embed(ctx, s.embed, fact, embeddings.FactPassage)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("embedding failed: %v", err)), nil
 	}
@@ -1028,7 +1028,7 @@ func (s *Server) recallFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		defer s.cache.FinishRecall(cacheKey, flight, nil)
 	}
 
-	vec, err := s.embed.Embed(ctx, query)
+	vec, err := embeddings.Embed(ctx, s.embed, query, embeddings.RetrievalQuery)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("embedding failed: %v", err)), nil
 	}
@@ -1189,7 +1189,7 @@ func (s *Server) updateFact(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	// Embedding does not participate in mutation ordering and stays outside the
 	// namespace lock. Lifecycle metadata is revalidated against the exact point
 	// after the lock is acquired.
-	newVec, err := s.embed.Embed(ctx, newFact)
+	newVec, err := embeddings.Embed(ctx, s.embed, newFact, embeddings.FactPassage)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("embedding new fact failed: %v", err)), nil
 	}
@@ -1545,7 +1545,7 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	for index := range candidates {
 		texts[index] = candidates[index].text
 	}
-	vectors, batchErr := s.embed.EmbedBatch(ctx, texts)
+	vectors, batchErr := embeddings.EmbedBatch(ctx, s.embed, texts, embeddings.FactPassage)
 	if batchErr == nil {
 		for index := range candidates {
 			candidates[index].vector = vectors[index]
@@ -1556,7 +1556,7 @@ func (s *Server) importFacts(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		// fails, without logging private text or a possibly echoing TEI body.
 		slog.Warn("import batch embed failed; retrying individually", "candidate_count", len(candidates))
 		for index := range candidates {
-			vec, embedErr := s.embed.Embed(ctx, candidates[index].text)
+			vec, embedErr := embeddings.Embed(ctx, s.embed, candidates[index].text, embeddings.FactPassage)
 			if embedErr != nil {
 				slog.Warn("import embed failed", "item_index", candidates[index].itemIndex, "point_id", candidates[index].pointID)
 				setOutcome(candidates[index].itemIndex, "embedding_failed", candidates[index].pointID, "embedding failed", nil)
@@ -1698,7 +1698,7 @@ func (s *Server) findRelated(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError(validationError), nil
 	}
 
-	vec, err := s.embed.Embed(ctx, query)
+	vec, err := embeddings.Embed(ctx, s.embed, query, embeddings.RetrievalQuery)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("embedding failed: %v", err)), nil
 	}

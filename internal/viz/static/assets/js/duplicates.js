@@ -10,7 +10,7 @@ async function loadDuplicates(maxNodes = 1000) {
   const container = document.getElementById('dup-content');
   container.innerHTML = '<div class="loading"><div class="spinner"></div>Scanning for duplicates...</div>';
   duplicatesPromise = (async () => {
-    const res = await fetch(`${BASE}/api/duplicates?threshold=0.90&max_nodes=${maxNodes}`);
+    const res = await fetch(`${BASE}/api/duplicates?max_nodes=${maxNodes}`);
     if (!res.ok) {
       const error = new Error(await responseMessage(res));
       error.status = res.status;

@@ -12,6 +12,7 @@ import (
 
 	"github.com/Dzarlax-AI/personal-memory/internal/aimaintenance"
 	"github.com/Dzarlax-AI/personal-memory/internal/aipolicy"
+	"github.com/Dzarlax-AI/personal-memory/internal/config"
 	"github.com/Dzarlax-AI/personal-memory/internal/factgrouping"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 )
@@ -35,8 +36,14 @@ func main() {
 		}
 		return
 	}
+	defaultCollection, err := config.MemoryCollectionFromEnvironment()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "invalid active embedding configuration")
+		os.Exit(1)
+	}
 	fs := flag.NewFlagSet("ai-maintenance", flag.ExitOnError)
 	manifest := fs.String("manifest", "", "private approved manifest")
+	collection := fs.String("collection", defaultCollection, "explicit memory collection")
 	journal := fs.String("journal", "", "private outcome journal")
 	url := fs.String("qdrant-url", "", "explicit Qdrant endpoint")
 	stopped := fs.Bool("confirm-server-stopped", false, "all writers stopped")
@@ -52,7 +59,7 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	j, err := factgrouping.Run(ctx, qdrant.NewClient(*url, "memory"), m, *journal, *stopped, os.Args[1] == "rollback")
+	j, err := factgrouping.Run(ctx, qdrant.NewClient(*url, *collection), m, *journal, *stopped, os.Args[1] == "rollback")
 	json.NewEncoder(os.Stdout).Encode(j)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

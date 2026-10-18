@@ -42,14 +42,14 @@ verify-assets:
 	fi
 
 build: dev-deps
-	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory ./cmd/conformance-memory ./cmd/memory-integration ./cmd/maintenance ./cmd/context-catalog ./cmd/ai-maintenance ./cmd/eval-ai-memory
+	go build ./cmd/server ./cmd/indexer ./cmd/migrate-embeddings ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory ./cmd/conformance-memory ./cmd/memory-integration ./cmd/maintenance ./cmd/context-catalog ./cmd/ai-maintenance ./cmd/eval-ai-memory
 
 vet:
 	go vet ./...
 
 test: dev-deps vet
 	go test ./...
-	go build ./cmd/server ./cmd/indexer ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory ./cmd/conformance-memory ./cmd/memory-integration ./cmd/maintenance ./cmd/context-catalog ./cmd/ai-maintenance ./cmd/eval-ai-memory
+	go build ./cmd/server ./cmd/indexer ./cmd/migrate-embeddings ./cmd/migrate-memory-ids ./cmd/migrate-memory-lifecycle ./cmd/eval-memory ./cmd/conformance-memory ./cmd/memory-integration ./cmd/maintenance ./cmd/context-catalog ./cmd/ai-maintenance ./cmd/eval-ai-memory
 
 QDRANT_TEST_URL ?= http://127.0.0.1:6333
 # eval-memory compare uses this distinct status for an expected gate rejection;

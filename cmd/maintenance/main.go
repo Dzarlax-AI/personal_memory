@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Dzarlax-AI/personal-memory/internal/config"
 	"github.com/Dzarlax-AI/personal-memory/internal/memory/maintenance"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 )
@@ -182,7 +183,11 @@ func writeMutationSummary(stdout io.Writer, operation string, result maintenance
 }
 
 func parseAnalyzeOptions(args []string, now time.Time) (analyzeOptions, error) {
-	defaults := analyzeOptions{qdrantURL: os.Getenv("QDRANT_URL"), collection: "memory", supersededRetentionDays: 30, staleDays: 90, lowRecallThreshold: 1, referenceTime: now.UTC()}
+	defaultCollection, err := config.MemoryCollectionFromEnvironment()
+	if err != nil {
+		return analyzeOptions{}, err
+	}
+	defaults := analyzeOptions{qdrantURL: os.Getenv("QDRANT_URL"), collection: defaultCollection, supersededRetentionDays: 30, staleDays: 90, lowRecallThreshold: 1, referenceTime: now.UTC()}
 	if defaults.qdrantURL == "" {
 		defaults.qdrantURL = "http://memory-qdrant:6333"
 	}

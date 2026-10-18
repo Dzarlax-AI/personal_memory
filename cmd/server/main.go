@@ -17,8 +17,6 @@ import (
 	"github.com/Dzarlax-AI/personal-memory/internal/backup"
 	"github.com/Dzarlax-AI/personal-memory/internal/config"
 	"github.com/Dzarlax-AI/personal-memory/internal/contextcatalog"
-	"github.com/Dzarlax-AI/personal-memory/internal/embeddingidentity"
-	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
 	"github.com/Dzarlax-AI/personal-memory/internal/memory"
 	"github.com/Dzarlax-AI/personal-memory/internal/middleware"
 	oauthauth "github.com/Dzarlax-AI/personal-memory/internal/oauth"
@@ -72,29 +70,16 @@ func main() {
 	// Init dependency clients and the complete set of collections that share the
 	// active embedding model.
 	qc, qcChunks, qcFolders, embeddingCollections := newEmbeddingCollections(cfg)
-	ec := embeddings.NewClient(cfg.EmbedURL)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	identity, err := embeddingidentity.Ensure(ctx, ec, embeddingCollections, embeddingidentity.Expected{
-		ModelID:       cfg.EmbedModelID,
-		ModelRevision: cfg.EmbedModelRevision,
-		InputProfile:  cfg.EmbedInputProfile,
-	}, cfg.AdoptExistingEmbeddingIdentity)
+	ec, ragEC, err := cfg.PrepareEmbeddings(ctx, qc, qcChunks, qcFolders)
 	if err != nil {
 		slog.Error("embedding identity verification failed", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("embedding identity verified",
-		"model", identity.ModelID,
-		"revision", identity.ModelRevision,
-		"dtype", identity.ModelDType,
-		"pooling", identity.Pooling,
-		"input_profile", identity.InputProfile,
-		"vector_size", identity.VectorSize,
-		"collections", collectionNames(embeddingCollections),
-	)
+	slog.Info("embedding identities verified", "collections", collectionNames(embeddingCollections))
 
 	// Init memory server only after the persistent vector-space contract is
 	// verified. A failed identity check starts no workers and opens no listener.
@@ -205,7 +190,7 @@ func main() {
 	// RAG MCP (optional).
 	var ragSrv *rag.Server
 	if cfg.EnableRAG {
-		ragSrv = rag.NewServer(ctx, qcChunks, qcFolders, ec, cfg)
+		ragSrv = rag.NewServer(ctx, qcChunks, qcFolders, ragEC, cfg)
 		if err := ragSrv.EnsureIndexes(ctx); err != nil {
 			slog.Error("failed to init RAG indexes", "error", err)
 			os.Exit(1)
@@ -273,6 +258,9 @@ func main() {
 			reviewOrigin = "https://mcp." + cfg.MemoryDomain
 		}
 		vizHandler = vizHandler.WithAIReview(cfg.AI, reviewOrigin)
+		if cfg.EmbeddingProfiles != nil {
+			vizHandler = vizHandler.WithDuplicateThreshold(cfg.VizSimilarityThreshold)
+		}
 		if cfg.EnableRAG {
 			vizChunks := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionChunks)
 			vizHandler = vizHandler.WithDocumentRAG(vizChunks, cfg.RAGDocumentsDir)
@@ -408,7 +396,7 @@ func isMemoryAccessPath(path string) bool {
 }
 
 func newEmbeddingCollections(cfg *config.Config) (memoryClient, chunksClient, foldersClient *qdrant.Client, all []*qdrant.Client) {
-	memoryClient = qdrant.NewClient(cfg.QdrantURL, "memory")
+	memoryClient = qdrant.NewClient(cfg.QdrantURL, cfg.MemoryCollectionName())
 	all = []*qdrant.Client{memoryClient}
 	if cfg.EnableRAG {
 		chunksClient = qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionChunks)

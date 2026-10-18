@@ -50,7 +50,7 @@ type queryEmbedder interface {
 type Server struct {
 	chunks         *qdrant.Client
 	folders        *qdrant.Client
-	embed          *embeddings.Client
+	embed          embeddings.Embedder
 	searchChunks   pointSearcher
 	searchFolders  pointSearcher
 	validateChunks generationScroller
@@ -81,7 +81,7 @@ func (s *Server) SetBlendedReranker(service rerank.Reranker, candidateCap int) e
 
 // NewServer builds the RAG MCP server. lifeCtx should be the long-lived
 // server context so background reindex goroutines can be cancelled on shutdown.
-func NewServer(lifeCtx context.Context, chunks, folders *qdrant.Client, embed *embeddings.Client, cfg *config.Config) *Server {
+func NewServer(lifeCtx context.Context, chunks, folders *qdrant.Client, embed embeddings.Embedder, cfg *config.Config) *Server {
 	idx := NewIndexer(chunks, folders, embed, cfg.RAGDocumentsDir, cfg.RAGChunkMaxBytes)
 	return &Server{
 		chunks:         chunks,
@@ -146,6 +146,9 @@ func (s *Server) handleSearchDocuments(ctx context.Context, req mcp.CallToolRequ
 		return mcp.NewToolResultError(validationErr), nil
 	}
 
+	if _, explicit := args["mode"]; !explicit && s.cfg.RAGSearchMode != "" {
+		mode = s.cfg.RAGSearchMode
+	}
 	vec, err := s.queryEmbed.Embed(ctx, query)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("embed error: %v", err)), nil

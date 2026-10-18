@@ -107,12 +107,13 @@ var staticFS embed.FS
 var viewNames = []string{"overview", "duplicates", "forgotten", "timeline", "graph", "documents", "ai-review"}
 
 type Handler struct {
-	qdrant           *qdrant.Client
-	defaultThreshold float64
-	defaultMaxEdges  int
-	historyTimeout   time.Duration
-	aiReviewConfig   *aipolicy.Config
-	aiReviewOrigin   string
+	qdrant             *qdrant.Client
+	defaultThreshold   float64
+	duplicateThreshold float64
+	defaultMaxEdges    int
+	historyTimeout     time.Duration
+	aiReviewConfig     *aipolicy.Config
+	aiReviewOrigin     string
 
 	docChunks *qdrant.Client
 	docsDir   string
@@ -138,10 +139,11 @@ type documentsRefresh struct {
 
 func NewHandler(qc *qdrant.Client, defaultThreshold float64) *Handler {
 	h := &Handler{
-		qdrant:           qc,
-		defaultThreshold: defaultThreshold,
-		defaultMaxEdges:  500,
-		historyTimeout:   vizComputationTimeout,
+		qdrant:             qc,
+		defaultThreshold:   defaultThreshold,
+		duplicateThreshold: 0.90,
+		defaultMaxEdges:    500,
+		historyTimeout:     vizComputationTimeout,
 	}
 	html, err := buildShellHTML()
 	if err != nil {
@@ -566,7 +568,7 @@ func payloadHasTag(raw interface{}, tag string) bool {
 }
 
 func (h *Handler) apiDuplicates(w http.ResponseWriter, r *http.Request) {
-	threshold, err := boundedFloatParam(r, "threshold", 0.90, 0, 1)
+	threshold, err := boundedFloatParam(r, "threshold", h.duplicateThreshold, 0, 1)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1369,4 +1371,11 @@ func originSummary(payload map[string]interface{}) json.RawMessage {
 	}
 	b, _ = json.Marshal(origin)
 	return b
+}
+
+// WithDuplicateThreshold binds diagnostic duplicate suggestions to the active
+// memory profile. It does not change write-time duplicate prevention.
+func (h *Handler) WithDuplicateThreshold(value float64) *Handler {
+	h.duplicateThreshold = value
+	return h
 }
