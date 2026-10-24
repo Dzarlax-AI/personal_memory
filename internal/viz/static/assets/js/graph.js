@@ -373,7 +373,13 @@ function syncCachedFactTags(id, tags, primaryTagValue) {
   (factsData?.nodes || []).forEach(update);
   (graphDataCache?.nodes || []).forEach(update);
 
-  if (factsData?.nodes) renderTreemap(factsData.nodes);
+  duplicatesData.forEach(pair => { if (pair.a) update(pair.a); if (pair.b) update(pair.b); });
+  if (factsData?.nodes) {
+    renderMemory(factsData.nodes);
+    renderForgotten(factsData.nodes);
+    renderTreemap(factsData.nodes);
+  }
+  if (duplicatesLoaded) renderDuplicates();
   if (graphDataCache?.nodes) {
     const namespace = document.getElementById('ns-filter').value;
     const selectedTag = graphFilter.projectTag || originalTagFilter(document.getElementById('tag-filter'));

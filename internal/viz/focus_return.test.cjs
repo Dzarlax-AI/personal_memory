@@ -106,3 +106,43 @@ test('timeline accessible list paginates at 50 events', () => {
   assert.equal(items.length, 123);
   assert.equal(more.hidden, true);
 });
+
+test('saved tag edits refresh Memory rows, active tag filtering, and suggestions', () => {
+  const workspaceSource = fs.readFileSync(path.join(__dirname, 'static/assets/js/workspace.ts'), 'utf8');
+  const sharedSource = fs.readFileSync(path.join(__dirname, 'static/assets/js/shared.js'), 'utf8');
+  const elements = new Map();
+  const element = () => ({ value: '', dataset: {}, children: [], html: '',
+    get innerHTML() { return this.html; }, set innerHTML(value) { this.html = value; this.children = []; },
+    textContent: '', hidden: false,
+    replaceChildren() { this.children = []; this.innerHTML = ''; },
+    appendChild(child) { this.children.push(child); }, addEventListener() {} });
+  for (const id of ['memory-text-filter', 'memory-ns-filter', 'memory-tag-filter', 'memory-tag-options', 'memory-lifecycle-filter', 'memory-list', 'memory-summary', 'memory-more']) elements.set(id, element());
+  elements.get('memory-lifecycle-filter').value = 'current';
+  const context = {
+    memoryShown: 50,
+    factsData: { nodes: [{ id: 'edited', text: 'Edited fact', namespace: 'projects', tags: ['old'], primary_tag: 'old', created_at: '2026-10-24' }] },
+    graphDataCache: null,
+    duplicatesData: [{ a: { id: 'edited', tags: ['old'], primary_tag: 'old' }, b: { id: 'untouched', tags: ['keep'] } }],
+    duplicatesLoaded: false,
+    renderForgotten() {}, renderTreemap() {}, showDetail() {},
+    document: { getElementById: id => elements.get(id), createElement: element },
+  };
+  const source = sharedSource + ['memoryFilters', 'populateMemoryFilters', 'renderMemory', 'filteredMemoryFacts', 'renderMemoryList'].map(name => functionSource(workspaceSource, name)).join('\n') + functionSource(graphSource, 'syncCachedFactTags');
+  vm.createContext(context);
+  context.initialNodes = context.factsData.nodes;
+  vm.runInContext(source + '\nfactsData = { nodes: initialNodes }; renderMemory(factsData.nodes);', context);
+  assert.match(elements.get('memory-list').children[0].innerHTML, /old/);
+  vm.runInContext("syncCachedFactTags('edited', ['new'], 'new');", context);
+  assert.match(elements.get('memory-list').children[0].innerHTML, /new/);
+  assert.equal(context.duplicatesData[0].a.primary_tag, 'new');
+  assert.deepEqual(context.duplicatesData[0].b.tags, ['keep']);
+  assert.deepEqual(elements.get('memory-tag-options').children.map(option => option.value), ['new']);
+
+  elements.get('memory-tag-filter').value = 'new';
+  vm.runInContext('renderMemoryList();', context);
+  assert.equal(elements.get('memory-list').children.length, 1);
+  vm.runInContext("syncCachedFactTags('edited', ['other'], 'other');", context);
+  assert.equal(elements.get('memory-list').children.length, 0);
+  assert.match(elements.get('memory-list').innerHTML, /No facts match/);
+  assert.deepEqual(elements.get('memory-tag-options').children.map(option => option.value), ['other']);
+});
