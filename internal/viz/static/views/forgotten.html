@@ -1,18 +1,15 @@
   <div class="view" id="forgotten-view">
-    <h2 class="section-title">Never Recalled</h2>
-    <div class="section-sub">Facts with recall_count = 0. If they're never useful, consider removing them.</div>
+    <h2 class="section-title">Recall history</h2>
+    <div class="section-sub">Facts with no recorded recalls. Recall counts are usage signals and do not indicate whether a fact is useful.</div>
     <div class="filter-toolbar">
-      <label for="forgotten-ns-filter">Namespace</label>
-      <select id="forgotten-ns-filter"><option value="">All</option></select>
-      <label for="forgotten-tag-filter">Tag</label>
-      <input id="forgotten-tag-filter" type="search" list="forgotten-tag-options" placeholder="All tags" autocomplete="off">
+      <div class="filter-field"><label for="forgotten-ns-filter">Namespace</label><select id="forgotten-ns-filter"><option value="">All</option></select></div>
+      <div class="filter-field"><label for="forgotten-tag-filter">Tag</label><input id="forgotten-tag-filter" type="search" list="forgotten-tag-options" placeholder="All tags" autocomplete="off"></div>
       <datalist id="forgotten-tag-options"></datalist>
-      <label for="forgotten-sort">Sort</label>
-      <select id="forgotten-sort">
+      <div class="filter-field"><label for="forgotten-sort">Sort</label><select id="forgotten-sort">
         <option value="oldest">Oldest</option>
         <option value="newest">Newest</option>
         <option value="namespace">Namespace</option>
-      </select>
+      </select></div>
       <label class="checkbox-label"><input type="checkbox" id="forgotten-permanent-only"> Permanent only</label>
       <span class="toolbar-count" id="forgotten-count" aria-live="polite"></span>
     </div>

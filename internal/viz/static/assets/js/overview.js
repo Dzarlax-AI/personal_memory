@@ -9,6 +9,7 @@ async function loadFacts() {
     if (!res.ok) throw new Error(`facts request failed: ${res.status}`);
     factsData = await res.json();
     renderStats(factsData.nodes);
+    if (typeof renderMemory === 'function') renderMemory(factsData.nodes);
     renderTreemap(factsData.nodes);
     renderForgotten(factsData.nodes);
     renderHeatmap(factsData.nodes);
@@ -24,17 +25,19 @@ async function loadFacts() {
 async function initFacts() {
   if (!factsData) {
     document.getElementById('treemap').innerHTML = '<div class="loading"><div class="spinner"></div>Loading knowledge map...</div>';
+    document.getElementById('memory-summary').textContent = 'Loading facts…';
+    document.getElementById('memory-list').innerHTML = '<div class="loading">Loading saved facts…</div>';
   }
   try {
     await loadFacts();
   } catch (e) {
     renderFactsFailure(document.getElementById('treemap'), 'the overview', initFacts);
+    document.getElementById('memory-summary').textContent = 'Facts could not be loaded.';
+    renderFactsFailure(document.getElementById('memory-list'), 'memory', initFacts);
   }
 }
 
-// This operator-only inspection is intentionally opt-in. The dashboard's
-// normal cached facts response, graph, duplicates, and other views remain
-// active-only, while this selector has no mutation, refresh, or purge action.
+// This operator-only inspection is intentionally opt-in and read-only.
 let quarantinedInspectionAbortController = null;
 let quarantinedInspectionGeneration = 0;
 

@@ -9,6 +9,8 @@ let aiReviewSelection = null;
 let aiReviewSelectionGeneration = 0;
 let aiReviewPageGeneration = 0;
 let aiReviewPageLoading = false;
+let aiReviewProposalRows = [];
+let aiReviewProposalReadFailures = 0;
 const aiReviewDraftCache = new Map();
 const aiReviewDraftData = new Map();
 const aiReviewAssessmentCache = new Map();
@@ -117,13 +119,14 @@ async function loadAIReview(refresh = false) {
   }
   aiReviewFilters = { from: from.value, to: to.value, outcome: reviewEl('ai-review-outcome').value, project: reviewEl('ai-review-project').value };
   const statusBox = reviewEl('ai-review-status');
-  statusBox.replaceChildren(reviewNode('p', 'Loading review status…', 'ai-review-muted'));
+  statusBox.replaceChildren(reviewNode('p', 'Loading proposal history…', 'ai-review-muted'));
   try {
     const status = await aiReviewRequest('/api/ai-review/status');
     aiReviewStatusData = status;
     renderAIReviewStatus(status);
     const initial = await loadAIReviewPage(true);
     if (initial) aiReviewLoaded = true;
+    if (aiReviewStatusData?.availability === 'available') statusBox.replaceChildren();
   } catch (error) {
     statusBox.replaceChildren(reviewNode('p', `Unable to load AI Review: ${error.message}`, 'ai-review-error'));
     if (error.authRequired) statusBox.append(reviewSignInLink());
@@ -132,7 +135,8 @@ async function loadAIReview(refresh = false) {
 }
 
 function renderAIReviewStatus(status) {
-  const box = reviewEl('ai-review-status');
+  const box = reviewEl('ai-review-diagnostics-status');
+  if (!box) return;
   box.replaceChildren();
   const line = reviewNode('div', undefined, 'ai-review-status-line');
   line.append(reviewNode('strong', `Availability: ${reviewText(status.availability)}`));
@@ -145,6 +149,11 @@ function renderAIReviewStatus(status) {
   box.append(line);
   const note = status.availability === 'available' ? 'This page reads recorded runs and the currently configured model and scheduler state. Assessments are saved for review only.' : 'Review history is unavailable for the current configuration.';
   box.append(reviewNode('p', note, status.availability === 'available' ? 'ai-review-muted' : 'ai-review-error'));
+  const visibleStatus = reviewEl('ai-review-status');
+  if (visibleStatus) {
+    visibleStatus.replaceChildren();
+    if (status.availability !== 'available') visibleStatus.append(reviewNode('p', `AI review history: ${reviewText(status.availability)}.`, 'ai-review-warning'));
+  }
 }
 
 function rangeParams() {
@@ -176,11 +185,11 @@ async function loadAIReviewPage(reset = false) {
     aiReviewRuns.push(...(Array.isArray(result.runs) ? result.runs : []).filter(run => !knownIDs.has(run.run_id)));
     aiReviewCursor = result.next_cursor || '';
     aiReviewComplete = result.complete === true;
-    renderAIReviewRuns();
     await updateAIReviewOptions();
     if (requestGeneration !== aiReviewPageGeneration) return false;
+    renderAIReviewDiagnosticsRuns();
     renderAIReviewRuns();
-    await renderAIReviewMetrics(result.complete === true, requestGeneration);
+    await rebuildAIReviewProposals(requestGeneration);
     if (requestGeneration !== aiReviewPageGeneration) return false;
     reviewEl('ai-review-list-meta').textContent = `${aiReviewRuns.length} runs loaded${result.complete ? ' · complete for this date range' : ' · partial history; load older runs for more'}`;
     reviewEl('ai-review-more').hidden = !aiReviewCursor;
@@ -219,29 +228,144 @@ function draftLabel(ref) {
   return ref.sha256 ? `Draft ${ref.sha256.slice(0, 12)}` : 'Draft reference incomplete';
 }
 
+function assessmentStatus(row) {
+  if (!row.assessmentKnown) return 'Assessment unknown';
+  const value = row.assessment;
+  if (!value) return 'Unreviewed';
+  if (value.drift) return 'Stale assessment';
+  return ({ acceptable: 'Acceptable', needs_correction: 'Needs correction', rejected: 'Rejected' })[value.request?.verdict] || 'Assessment unknown';
+}
+
+function publicationStatus(project) {
+  if (/^[a-f0-9]{64}$/.test(project.current_entry_hash || '') && /^[a-f0-9]{64}$/.test(project.proposed_entry_hash || '')) {
+    return project.current_entry_hash === project.proposed_entry_hash ? 'Current catalog matches proposal' : 'Proposal not current';
+  }
+  return 'Publication state unknown';
+}
+
+async function rebuildAIReviewProposals(requestGeneration = aiReviewPageGeneration) {
+  const references = [];
+  for (const run of aiReviewRuns) for (const ref of run.drafts || []) if (ref.sha256) references.push({ run, ref });
+  const details = await reviewMapLimit(references, 4, async item => {
+    try { return { ...item, detail: await fetchAIReviewDraft(item.run.run_id, item.ref.sha256) }; }
+    catch (_) { return { ...item, error: true }; }
+  });
+  if (requestGeneration !== aiReviewPageGeneration) return;
+  const groups = new Map();
+  let failures = 0;
+  for (const item of details) {
+    if (item.error) { failures++; continue; }
+    for (const project of item.detail.projects || []) {
+      if (!/^[a-f0-9]{64}$/.test(project.project_id || '') || !/^[a-f0-9]{64}$/.test(project.proposed_entry_hash || '')) { failures++; continue; }
+      const key = `${project.project_id}:${project.proposed_entry_hash}`;
+      const row = groups.get(key) || { key, project, candidates: [] };
+      row.candidates.push({ run: item.run, draft: item.ref, project, detail: item.detail });
+      groups.set(key, row);
+    }
+  }
+  const rows = [...groups.values()];
+  for (const row of rows) {
+    row.candidates.sort((a, b) => Date.parse(runStarted(b.run)) - Date.parse(runStarted(a.run)) || b.run.run_id.localeCompare(a.run.run_id));
+    const newest = row.candidates[0];
+    row.run = newest.run; row.draft = newest.draft; row.project = newest.project; row.detail = newest.detail;
+    row.assessmentKnown = true; row.assessment = null;
+    const checks = await reviewMapLimit(row.candidates, 4, async candidate => {
+      try { return { candidate, saved: await fetchAIReviewAssessments(candidate.run.run_id, candidate.draft.sha256) }; }
+      catch (_) { return { error: true }; }
+    });
+    if (requestGeneration !== aiReviewPageGeneration) return;
+    const matching = [];
+    for (const result of checks) {
+      if (result.error) { row.assessmentKnown = false; continue; }
+      for (const assessment of result.saved.assessments || []) {
+        if (assessment.project_id === row.project.project_id && assessment.request?.proposed_entry_hash === row.project.proposed_entry_hash) matching.push({ assessment, runID: result.candidate.run.run_id });
+      }
+    }
+    matching.sort((a, b) => Date.parse(b.assessment.saved_at || '') - Date.parse(a.assessment.saved_at || '') || (b.assessment.revision || 0) - (a.assessment.revision || 0) || b.runID.localeCompare(a.runID));
+    row.assessment = matching[0]?.assessment || null;
+  }
+  if (requestGeneration !== aiReviewPageGeneration) return;
+  aiReviewProposalRows = rows.sort((a, b) => Date.parse(runStarted(b.run)) - Date.parse(runStarted(a.run)) || a.project.project_id.localeCompare(b.project.project_id));
+  aiReviewProposalReadFailures = failures;
+  renderAIReviewRuns();
+  renderAIReviewMetrics(aiReviewComplete, requestGeneration);
+}
+
+function filteredAIReviewProposals() {
+  return aiReviewProposalRows.filter(row => {
+    if (aiReviewFilters.outcome && outcomeOf(row.run) !== aiReviewFilters.outcome) return false;
+    if (aiReviewFilters.project && row.project.project_id !== aiReviewFilters.project) return false;
+    return true;
+  });
+}
+
+function countProposalAssessments(rows) {
+  const counts = { acceptable: 0, needs_correction: 0, rejected: 0, unreviewed: 0, stale: 0, unknown: 0 };
+  for (const row of rows) {
+    if (!row.assessmentKnown) counts.unknown++;
+    else if (!row.assessment) counts.unreviewed++;
+    else if (row.assessment.drift) counts.stale++;
+    else if (Object.hasOwn(counts, row.assessment.request?.verdict)) counts[row.assessment.request.verdict]++;
+    else counts.unknown++;
+  }
+  return counts;
+}
+
+function renderAIReviewDiagnosticsRuns() {
+  const root = reviewEl('ai-review-diagnostics-runs');
+  if (!root) return;
+  root.replaceChildren();
+  root.append(reviewNode('p', 'Run history uses the selected date, outcome, and project filters.', 'ai-review-muted'));
+  const runs = aiReviewRuns.filter(run => {
+    if (aiReviewFilters.outcome && outcomeOf(run) !== aiReviewFilters.outcome) return false;
+    if (aiReviewFilters.project && !(run.drafts || []).some(ref => (aiReviewDraftData.get(`${run.run_id}:${ref.sha256}`)?.projects || []).some(project => project.project_id === aiReviewFilters.project))) return false;
+    return true;
+  });
+  for (const run of runs) {
+    const card = reviewNode('button', undefined, 'ai-review-run'); card.type = 'button';
+    card.append(reviewNode('span', `${outcomeOf(run)} · ${reviewDate(runStarted(run))}`, 'ai-review-run-header'));
+    card.append(reviewNode('span', `Model: ${reviewText(run.started?.model)} · ${reviewDuration(run.completion?.duration_ms)} · ${run.completion?.provider_attempts ?? 'Unknown'} attempts`, 'ai-review-run-meta'));
+    const reasons = [...new Set([run.completion?.reason_code, ...(run.events || []).map(e => e.reason_code)].filter(Boolean))];
+    if (reasons.length) card.append(reviewNode('span', `Reasons: ${reasons.join(', ')}`, 'ai-review-reasons'));
+    card.addEventListener('click', () => openAIReviewRun(run.run_id));
+    root.append(card);
+  }
+}
+
 function renderAIReviewRuns() {
   const root = reviewEl('ai-review-runs');
   root.replaceChildren();
-  const filtered = aiReviewRuns.filter(run => {
-    if (aiReviewFilters.outcome && outcomeOf(run) !== aiReviewFilters.outcome) return false;
-    if (aiReviewFilters.project && !(run.drafts || []).some(d => (aiReviewDraftData.get(`${run.run_id}:${d.sha256}`)?.projects || []).some(p => p.project_id === aiReviewFilters.project))) return false;
-    return true;
-  });
-  if (!filtered.length) { root.append(reviewNode('p', aiReviewRuns.length ? 'No runs match these filters.' : 'No runs recorded in this range.', 'empty-state')); return; }
-  for (const run of filtered) {
-    const card = reviewNode('button', undefined, 'ai-review-run');
-    card.type = 'button';
-    card.setAttribute('aria-pressed', String(aiReviewSelection?.runID === run.run_id));
-    card.addEventListener('click', () => openAIReviewRun(run.run_id));
-    const header = reviewNode('span', undefined, 'ai-review-run-header');
-    header.append(reviewNode('strong', outcomeOf(run)), reviewNode('time', reviewDate(runStarted(run))));
-    card.append(header);
-    card.append(reviewNode('span', `Model: ${reviewText(run.started?.model)} · ${reviewDuration(run.completion?.duration_ms)} · ${run.completion?.provider_attempts ?? 'Unknown'} attempts`, 'ai-review-run-meta'));
-    card.append(reviewNode('span', `Usage: ${reviewUsage(run.completion?.usage_known, run.completion?.input_tokens, run.completion?.output_tokens)}`, 'ai-review-run-meta'));
-    const reasons = [...new Set([run.completion?.reason_code, ...(run.events || []).map(e => e.reason_code)].filter(Boolean))];
-    if (reasons.length) card.append(reviewNode('span', `Reasons: ${reasons.join(', ')}`, 'ai-review-reasons'));
-    const refs = run.drafts || [];
-    card.append(reviewNode('span', refs.length ? refs.map(draftLabel).join(' · ') : 'No draft recorded', 'ai-review-run-meta'));
+  const rows = filteredAIReviewProposals();
+  const counts = countProposalAssessments(rows);
+  const completeScope = aiReviewComplete && aiReviewProposalReadFailures === 0 && counts.unknown === 0;
+  const scope = `${aiReviewFilters.from || 'Any date'} to ${aiReviewFilters.to || 'Any date'} · ${completeScope ? 'complete loaded scope' : 'partial loaded scope'}`;
+  const summary = reviewEl('ai-updates-summary');
+  if (summary) {
+    summary.replaceChildren();
+    summary.append(reviewNode('p', `${scope}${aiReviewProposalReadFailures ? ` · ${aiReviewProposalReadFailures} proposal detail${aiReviewProposalReadFailures === 1 ? '' : 's'} unavailable` : ''}. Assessments summarize only readable proposals; unknown reads are excluded from counts.`, 'ai-review-metric-note'));
+    const badges = reviewNode('div', undefined, 'ai-updates-counts');
+    for (const [key, label] of [['unreviewed','Unreviewed'],['stale','Stale assessment'],['acceptable','Acceptable'],['needs_correction','Needs correction'],['rejected','Rejected']]) {
+      const badge = reviewNode('span', undefined, 'ai-updates-count'); badge.append(reviewNode('strong', String(counts[key])), reviewNode('span', label)); badges.append(badge);
+    }
+    if (counts.unknown > 0) badges.append(reviewNode('span', `Unknown · ${counts.unknown}`, 'ai-updates-count ai-updates-count--unknown'));
+    summary.append(badges);
+    summary.append(reviewNode('p', `${rows.length} distinct proposal${rows.length === 1 ? '' : 's'} · ${aiReviewRuns.length} run${aiReviewRuns.length === 1 ? '' : 's'} loaded${aiReviewComplete ? '' : ' · more history may contain additional proposals'}`, 'ai-review-muted'));
+  }
+  if (!rows.length) { root.append(reviewNode('p', aiReviewRuns.length ? 'No proposals match these filters.' : 'No project proposals in this loaded period.', 'empty-state')); return; }
+  for (const row of rows) {
+    const project = row.project;
+    const card = reviewNode('button', undefined, 'ai-updates-proposal'); card.type = 'button';
+    const title = project.proposed?.name || project.tag || project.project_id;
+    card.append(reviewNode('span', title, 'ai-updates-proposal-title'));
+    card.append(reviewNode('span', `${reviewText(project.namespace)}/${reviewText(project.tag)} · ${reviewDate(runStarted(row.run))}`, 'ai-review-run-meta'));
+    const states = reviewNode('span', undefined, 'ai-updates-proposal-states');
+    states.append(reviewNode('span', assessmentStatus(row), `ai-updates-pill ${row.assessmentKnown ? 'ai-updates-pill--assessment' : 'ai-updates-pill--unknown'}`));
+    const publication = publicationStatus(project);
+    states.append(reviewNode('span', publication, `ai-updates-pill ${publication === 'Current catalog matches proposal' ? 'ai-updates-pill--published' : 'ai-updates-pill--pending'}`));
+    card.append(states);
+    card.append(reviewNode('span', `Latest run: ${outcomeOf(row.run)} · ${row.candidates.length} matching proposal record${row.candidates.length === 1 ? '' : 's'}`, 'ai-review-run-meta'));
+    card.setAttribute('aria-label', `Open proposal for ${title}; ${assessmentStatus(row)}; ${publicationStatus(project)}`);
+    card.addEventListener('click', () => openAIReviewProposal(row));
     root.append(card);
   }
 }
@@ -250,13 +374,13 @@ async function updateAIReviewOptions() {
   const outcome = reviewEl('ai-review-outcome');
   const project = reviewEl('ai-review-project');
   const oldOutcome = outcome.value, oldProject = project.value;
-  const outcomes = [...new Set(aiReviewRuns.map(outcomeOf))].sort();
+  const outcomes = [...new Set(aiReviewRuns.filter(run => outcomeOf(run) !== 'no_changes').map(outcomeOf))].sort();
   const projectNames = new Map();
   const jobs = [...aiReviewRuns].flatMap(run => (run.drafts || []).filter(d => d.sha256).map(d => ({ run, draft: d })));
   await reviewMapLimit(jobs, 4, async ({ run, draft }) => {
     try {
       const detail = await fetchAIReviewDraft(run.run_id, draft.sha256);
-      for (const project of detail.projects || []) projectNames.set(project.project_id, `${project.proposed?.name || project.tag || project.project_id} · ${project.namespace}/${project.tag}`);
+      for (const project of detail.projects || []) if (project.proposed_entry_hash) projectNames.set(project.project_id, `${project.proposed?.name || project.tag || project.project_id} · ${project.namespace}/${project.tag}`);
     } catch (_) { /* Unavailable drafts do not create selectable project filters. */ }
   });
   outcome.replaceChildren(new Option('All outcomes', ''), ...outcomes.map(v => new Option(v, v)));
@@ -267,48 +391,13 @@ async function updateAIReviewOptions() {
 async function renderAIReviewMetrics(complete, requestGeneration = aiReviewPageGeneration) {
   const root = reviewEl('ai-review-metrics-content');
   const summary = reviewEl('ai-review-metrics-summary');
-  summary.textContent = `Review metrics · ${aiReviewFilters.from || 'any'} to ${aiReviewFilters.to || 'any'} · calculating…`;
-  root.replaceChildren(reviewNode('p', 'Loading detailed review metrics…', 'ai-review-metric-note'));
-  const drafts = new Map();
-  for (const run of aiReviewRuns) for (const ref of run.drafts || []) if (ref.sha256) drafts.set(`${run.run_id}:${ref.sha256}`, { run, ref });
-  const versions = new Map();
-  let failures = 0;
-  const results = await reviewMapLimit([...drafts.values()], 4, async ({ run, ref }) => {
-    try {
-      const draft = await fetchAIReviewDraft(run.run_id, ref.sha256);
-      const saved = await fetchAIReviewAssessments(run.run_id, ref.sha256);
-      let invalidProjectBinding = false;
-      for (const project of draft.projects || []) {
-        if (!project.project_id || !/^[a-f0-9]{64}$/.test(project.proposed_entry_hash || '')) { invalidProjectBinding = true; continue; }
-        const key = `${project.project_id}:${project.proposed_entry_hash}`;
-        const prior = versions.get(key) || { assessment: null };
-        const candidates = (saved.assessments || []).filter(a => a.project_id === project.project_id && a.request.proposed_entry_hash === project.proposed_entry_hash);
-        for (const candidate of candidates) {
-          const candidateTime = Date.parse(candidate.saved_at || '');
-          const priorTime = Date.parse(prior.assessment?.saved_at || '');
-          const newer = Number.isFinite(candidateTime) && (!Number.isFinite(priorTime) || candidateTime > priorTime);
-          const tieBreak = Number.isFinite(candidateTime) && candidateTime === priorTime &&
-            (candidate.revision > prior.assessment?.revision || (candidate.revision === prior.assessment?.revision && run.run_id > (prior.sourceRunID || '')));
-          if (!prior.assessment || newer || tieBreak) { prior.assessment = candidate; prior.sourceRunID = run.run_id; }
-        }
-        versions.set(key, prior);
-      }
-      return !invalidProjectBinding;
-    } catch (_) { return false; }
-  });
-  failures = results.filter(ok => !ok).length;
+  if (!root || !summary) return;
   if (requestGeneration !== aiReviewPageGeneration) return;
-  const counts = { acceptable: 0, needs_correction: 0, rejected: 0, unreviewed: 0, stale: 0 };
-  for (const value of versions.values()) {
-    if (!value.assessment) counts.unreviewed++;
-    else if (value.assessment.drift) counts.stale++;
-    else counts[Object.hasOwn(counts, value.assessment.request.verdict) ? value.assessment.request.verdict : 'unreviewed']++;
-  }
-  const completeScope = complete && failures === 0;
-  const scopeText = `Date range ${aiReviewFilters.from || 'any'} to ${aiReviewFilters.to || 'any'} · ${completeScope ? 'complete loaded scope' : 'partial loaded scope'}${failures ? ` · ${failures} draft detail${failures === 1 ? '' : 's'} unavailable` : ''}`;
-  summary.textContent = `Review metrics · ${aiReviewFilters.from || 'any'} to ${aiReviewFilters.to || 'any'} · ${aiReviewRuns.length} runs · ${counts.acceptable} acceptable · ${counts.needs_correction} needs correction · ${counts.rejected} rejected · ${counts.unreviewed} unreviewed · ${counts.stale} stale · ${completeScope ? 'complete' : 'partial'}`;
+  const rows = filteredAIReviewProposals();
+  const completeScope = complete && aiReviewProposalReadFailures === 0 && rows.every(row => row.assessmentKnown);
+  summary.textContent = `Diagnostics · ${aiReviewRuns.length} runs · ${completeScope ? 'complete' : 'partial'} proposal scope`;
   root.replaceChildren();
-  root.append(reviewNode('p', `${scopeText}.`, 'ai-review-metric-note'));
+  root.append(reviewNode('p', `Date range ${aiReviewFilters.from || 'any'} to ${aiReviewFilters.to || 'any'} · ${completeScope ? 'complete loaded scope' : 'partial loaded scope'}${aiReviewProposalReadFailures ? ` · ${aiReviewProposalReadFailures} proposal details unavailable` : ''}.`, 'ai-review-metric-note'));
   root.append(reviewNode('h4', 'Run reliability · recorded outcomes', 'ai-review-metric-heading'));
   const runOutcomes = new Map();
   aiReviewRuns.forEach(run => runOutcomes.set(outcomeOf(run), (runOutcomes.get(outcomeOf(run)) || 0) + 1));
@@ -318,10 +407,11 @@ async function renderAIReviewMetrics(complete, requestGeneration = aiReviewPageG
   }
   if (!runOutcomes.size) reliability.append(reviewNode('p', 'No runs in this date range.', 'ai-review-muted'));
   root.append(reliability);
+  const counts = countProposalAssessments(rows);
   root.append(reviewNode('h4', 'Proposal assessments · project level', 'ai-review-metric-heading'));
-  root.append(reviewNode('p', 'Proposal versions are deduplicated per project by proposed entry hash. The newest saved assessment is used; stale assessments remain separate. Unreviewed versions are never accepted.', 'ai-review-metric-note'));
+  root.append(reviewNode('p', 'Distinct project proposals are deduplicated by project ID and proposed entry hash. Counts cover the loaded period and filters. A failed assessment read is unknown, never unreviewed.', 'ai-review-metric-note'));
   const metrics = reviewNode('div', undefined, 'ai-review-metric-cards');
-  for (const [key, label] of [['acceptable','Acceptable'],['needs_correction','Needs correction'],['rejected','Rejected'],['unreviewed','Unreviewed'],['stale','Stale assessment']]) {
+  for (const [key, label] of [['acceptable','Acceptable'],['needs_correction','Needs correction'],['rejected','Rejected'],['unreviewed','Unreviewed'],['stale','Stale assessment'],['unknown','Unknown']]) {
     const card = reviewNode('div', undefined, 'ai-review-metric'); card.append(reviewNode('strong', String(counts[key])), reviewNode('span', label)); metrics.append(card);
   }
   root.append(metrics);
@@ -335,8 +425,39 @@ function syncAIReviewURL(runID = '', digest = '', projectID = '', push = true) {
   history[push ? 'pushState' : 'replaceState']({ tab: 'ai-review' }, '', url);
 }
 
+function confirmAIReviewNavigation() {
+  const dirtyForms = [...document.querySelectorAll('.ai-review-assessment[data-dirty="true"]')].filter(form => form.isConnected);
+  if (!dirtyForms.length) return true;
+  if (!window.confirm('This assessment has unsaved changes. Leave this proposal and discard them?')) return false;
+  dirtyForms.forEach(form => { form.dataset.dirty = 'false'; });
+  return true;
+}
+
+function openAIReviewProposal(row) {
+  if (!confirmAIReviewNavigation()) return;
+  aiReviewSelection = { runID: row.run.run_id, digest: row.draft.sha256, projectID: row.project.project_id };
+  syncAIReviewURL(row.run.run_id, row.draft.sha256, row.project.project_id);
+  renderAIReviewRuns();
+  reviewEl('ai-review-detail').replaceChildren(reviewNode('p', 'Loading project comparison…', 'ai-review-muted'));
+  loadAIReviewDraft(row.run, row.draft.sha256, row.project.project_id);
+}
+
 async function openAIReviewRun(runID, digest = '', projectID = '', push = true) {
+  if (!confirmAIReviewNavigation()) return;
   const selectionGeneration = ++aiReviewSelectionGeneration;
+  if (digest && projectID) {
+    let run = aiReviewRuns.find(item => item.run_id === runID);
+    if (!run) try { run = (await aiReviewRequest(`/api/ai-review/runs/${encodeURIComponent(runID)}`)).run; } catch (_) { /* Existing fallback below reports the run lookup failure. */ }
+    if (selectionGeneration !== aiReviewSelectionGeneration) return;
+    if (run) {
+      aiReviewSelection = { runID, digest, projectID };
+      syncAIReviewURL(runID, digest, projectID, push);
+      renderAIReviewRuns();
+      reviewEl('ai-review-detail').replaceChildren(reviewNode('p', 'Loading project comparison…', 'ai-review-muted'));
+      await loadAIReviewDraft(run, digest, projectID);
+      return;
+    }
+  }
   aiReviewSelection = { runID, digest, projectID };
   syncAIReviewURL(runID, digest, projectID, push);
   renderAIReviewRuns();
@@ -418,6 +539,11 @@ async function loadProjectVersions(card, project, cursor = '') {
         const provenance = reviewNode('p', [version.model && `Model ${version.model}`, version.rules && `Rules ${version.rules}`, version.proposal_checksum && `Proposal ${version.proposal_checksum.slice(0, 16)}`].filter(Boolean).join(' · '), 'ai-review-muted');
         if (version.run_id) {
           const runLink = reviewNode('a', `Source run ${version.run_id}`); runLink.href = `${BASE}/ai-review?run=${encodeURIComponent(version.run_id)}`;
+          runLink.addEventListener('click', event => {
+            if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            event.preventDefault();
+            openAIReviewRun(version.run_id);
+          });
           provenance.append(document.createTextNode(' · '), runLink);
         }
         row.append(provenance);
@@ -517,15 +643,17 @@ async function confirmProjectRestore(panel, projectID, version, binding, target)
   }
 }
 
-async function loadAIReviewDraft(run, digest, projectID = '') {
+async function loadAIReviewDraft(run, digest, projectID = '', replacePanel = Boolean(projectID)) {
   const selectionGeneration = ++aiReviewSelectionGeneration;
   syncAIReviewURL(run.run_id, digest, projectID, false);
   const panel = reviewEl('ai-review-detail');
+  if (replacePanel) panel.replaceChildren(reviewNode('p', 'Loading project comparison…', 'ai-review-muted'));
   let draft;
   try { draft = await fetchAIReviewDraft(run.run_id, digest); }
   catch (error) {
     if (selectionGeneration === aiReviewSelectionGeneration) {
-      panel.append(reviewNode('p', `${error.authRequired ? 'Unable to load draft' : 'Draft unavailable or corrupt'}: ${error.message}`, 'ai-review-error'));
+      const message = reviewNode('p', `${error.authRequired ? 'Unable to load draft' : 'Draft unavailable or corrupt'}: ${error.message}`, 'ai-review-error');
+      if (replacePanel) panel.replaceChildren(message); else panel.append(message);
       if (error.authRequired) panel.append(reviewSignInLink());
     }
     return;
@@ -536,12 +664,19 @@ async function loadAIReviewDraft(run, digest, projectID = '') {
   section.append(reviewNode('p', `Draft status: ${reviewText(draft.availability)} · catalog state: ${reviewText(draft.current_status)}`, 'ai-review-muted'));
   section.append(reviewNode('p', 'Check the recorded temporal scope; a dependency mention is not evidence of current enablement.', 'ai-review-muted'));
   if (draft.missing?.length) section.append(reviewNode('p', `Missing: ${draft.missing.join(', ')}`, 'ai-review-reasons'));
-  for (const project of draft.projects || []) {
+  const selectedProjects = projectID ? (draft.projects || []).filter(project => project.project_id === projectID) : (draft.projects || []);
+  for (const project of selectedProjects) {
     const card = reviewNode('article', undefined, 'ai-review-project-card');
     card.id = `review-project-${project.project_id}`;
     card.append(reviewNode('h5', `${project.proposed?.name || project.tag || project.project_id} · ${project.namespace}/${project.tag}`));
     card.append(reviewNode('p', project.drift ? 'Current catalog has drifted since this proposal.' : 'Current catalog matches the recorded base.', project.drift ? 'ai-review-warning' : 'ai-review-muted'));
     card.append(renderProposalDiff(project));
+    const evidence = document.createElement('details'); evidence.append(reviewNode('summary', 'Evidence and source references'));
+    if (draft.evidence?.length) draft.evidence.forEach(item => evidence.append(reviewNode('p', `${item.kind}: ${item.available ? item.text : 'Unavailable'}`, 'ai-review-evidence')));
+    if (project.proposed?.client_evidence?.length) project.proposed.client_evidence.forEach(item => evidence.append(reviewNode('p', `${item.kind}: ${item.available ? item.text : 'Unavailable'}`, 'ai-review-evidence')));
+    if (!draft.evidence?.length && !project.proposed?.client_evidence?.length) evidence.append(reviewNode('p', 'No evidence was recorded for this proposal.', 'ai-review-muted'));
+    card.append(evidence);
+    card.append(renderAssessmentForm(run, draft, project));
     const versions = reviewNode('div', undefined, 'ai-review-versions');
     for (const [key, label] of [['original','Original client declaration'], ['base','Base at run'], ['proposed','Proposal'], ['current','Current catalog']]) {
       const entry = project[key];
@@ -553,19 +688,27 @@ async function loadAIReviewDraft(run, digest, projectID = '') {
       else renderReviewEntry(article, entry, draft.evidence || []);
       versions.append(article);
     }
-    card.append(versions);
-    card.append(renderAssessmentForm(run, draft, project));
+    const versionDisclosure = document.createElement('details'); versionDisclosure.className = 'ai-review-reference';
+    versionDisclosure.append(reviewNode('summary', 'Full Original, Base, Proposed, and Current versions'));
+    versionDisclosure.append(versions);
+    card.append(versionDisclosure);
     section.append(card);
     loadProjectVersions(card, project);
     if (projectID && project.project_id === projectID) setTimeout(() => card.scrollIntoView({ block: 'start' }), 0);
   }
-  if (!(draft.projects || []).length) section.append(reviewNode('p', draft.draft_status === 'no_changes' ? 'This run recorded no proposed catalog changes.' : 'No comparable project entries are available in this draft.', 'ai-review-muted'));
+  if (!selectedProjects.length) section.append(reviewNode('p', projectID ? 'This proposal is not available in the selected draft.' : draft.draft_status === 'no_changes' ? 'This run recorded no proposed catalog changes.' : 'No comparable project entries are available in this draft.', 'ai-review-muted'));
   if (draft.evidence?.length) {
-    const details = document.createElement('details'); details.append(reviewNode('summary', 'Draft evidence'));
+    const details = document.createElement('details'); details.append(reviewNode('summary', 'All draft evidence'));
     draft.evidence.forEach(item => details.append(reviewNode('p', `${item.kind}: ${item.available ? item.text : 'Unavailable'}`, 'ai-review-evidence')));
     section.append(details);
   }
+  const diagnostics = document.createElement('details'); diagnostics.className = 'ai-review-run-diagnostics';
+  diagnostics.append(reviewNode('summary', 'Technical run events'));
+  diagnostics.append(reviewNode('p', `${outcomeOf(run)} · ${reviewDate(runStarted(run))} · ${reviewText(run.started?.model)} · ${reviewDuration(run.completion?.duration_ms)} · ${run.completion?.provider_attempts ?? 'Unknown'} provider attempts`, 'ai-review-muted'));
+  for (const event of run.events || []) diagnostics.append(reviewNode('p', `${reviewDate(event.at)} · ${event.type || 'Event'} · ${event.reason_code || 'No reason recorded'}`, 'ai-review-run-meta'));
+  section.append(diagnostics);
   if (selectionGeneration !== aiReviewSelectionGeneration) return;
+  if (replacePanel) panel.replaceChildren();
   panel.append(section);
   if (aiReviewSelection) { aiReviewSelection.digest = digest; aiReviewSelection.projectID = projectID; }
 }
@@ -599,7 +742,7 @@ function renderProposalDiff(project) {
     }
     const removed = [];
     for (const [value, count] of remaining) for (let i = 0; i < count; i++) removed.push(value);
-    if (added.length || removed.length) changes.push({ field, added, removed, type: 'list' });
+    if (added.length || removed.length) changes.push({ field, before, after, added, removed, type: 'list' });
   }
   if (!changes.length) {
     section.append(reviewNode('p', 'No changes proposed compared with the recorded base.', 'ai-review-muted'));
@@ -608,12 +751,18 @@ function renderProposalDiff(project) {
   const list = document.createElement('ul');
   for (const change of changes) {
     const item = document.createElement('li');
+    item.className = 'ai-review-change';
+    item.append(reviewNode('strong', change.field));
     if (change.type === 'field') {
-      item.append(reviewNode('strong', `${change.field}: `), reviewNode('span', `“${change.before}” → “${change.after}”`));
+      const values = reviewNode('div', undefined, 'ai-review-change-values');
+      const before = reviewNode('div', undefined, 'ai-review-change-value'); before.append(reviewNode('span', `Before: ${change.before}`));
+      const proposed = reviewNode('div', undefined, 'ai-review-change-value'); proposed.append(reviewNode('span', `Proposed: ${change.after}`));
+      values.append(before, proposed); item.append(values);
     } else {
-      item.append(reviewNode('strong', `${change.field}: `));
-      if (change.added.length) item.append(reviewNode('span', `Added: ${change.added.join(' · ')}`));
-      if (change.removed.length) item.append(reviewNode('span', `${change.added.length ? ' · ' : ''}Removed: ${change.removed.join(' · ')}`));
+      const values = reviewNode('div', undefined, 'ai-review-change-values');
+      values.append(reviewNode('div', `Before: ${change.before.length ? change.before.join(' · ') : 'None'}`, 'ai-review-change-value'));
+      values.append(reviewNode('div', `Proposed: ${change.after.length ? change.after.join(' · ') : 'None'}`, 'ai-review-change-value'));
+      item.append(values);
     }
     list.append(item);
   }
@@ -649,6 +798,7 @@ function renderReviewEntry(root, entry, draftEvidence = []) {
 function renderAssessmentForm(run, draft, project) {
   const form = reviewNode('form', undefined, 'ai-review-assessment');
   form.dataset.projectId = project.project_id;
+  form.dataset.dirty = 'false';
   form.append(reviewNode('h6', 'Human assessment'));
   const state = reviewNode('p', 'Loading saved assessment…', 'ai-review-muted'); form.append(state);
   const verdict = document.createElement('select'); verdict.setAttribute('aria-label','Assessment');
@@ -713,6 +863,7 @@ function renderAssessmentForm(run, draft, project) {
   controls.querySelectorAll('select, textarea').forEach(control => {
     const markDirty = () => {
       formDirty = true;
+      form.dataset.dirty = 'true';
       if (!conflictLocked) state.textContent = 'Unsaved draft · changes are not recorded yet.';
     };
     control.addEventListener('input', markDirty);
@@ -734,6 +885,8 @@ function renderAssessmentForm(run, draft, project) {
     try {
       const result = await aiReviewRequest(`/api/ai-review/runs/${encodeURIComponent(run.run_id)}/drafts/${encodeURIComponent(draft.sha256)}/assessments/${encodeURIComponent(project.project_id)}`, { method: 'PUT', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(request) });
       revision = result.revision || revision;
+      formDirty = false;
+      form.dataset.dirty = 'false';
       state.textContent = `Saved ${reviewDate(result.saved_at)} · revision ${revision}. Review only; no catalog change was made.`;
       await loadAIReview(true);
     } catch (error) {
@@ -770,8 +923,9 @@ function renderAssessmentForm(run, draft, project) {
   return form;
 }
 
-reviewEl('ai-review-refresh').addEventListener('click', () => loadAIReview(true));
+reviewEl('ai-review-refresh').addEventListener('click', () => { if (confirmAIReviewNavigation()) loadAIReview(true); });
 reviewEl('ai-review-apply').addEventListener('click', () => {
+  if (!confirmAIReviewNavigation()) return;
   aiReviewFilters = { from: reviewEl('ai-review-from').value, to: reviewEl('ai-review-to').value, outcome: reviewEl('ai-review-outcome').value, project: reviewEl('ai-review-project').value };
   aiReviewCursor = ''; aiReviewRuns = []; loadAIReview(true);
 });
@@ -781,15 +935,24 @@ reviewEl('ai-review-more').addEventListener('click', async () => {
   const button = reviewEl('ai-review-more'); button.disabled = true;
   try { await loadAIReviewPage(false); } finally { aiReviewPageLoading = false; button.disabled = false; }
 });
+window.addEventListener('beforeunload', event => {
+  if (![...document.querySelectorAll('.ai-review-assessment[data-dirty="true"]')].some(form => form.isConnected)) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
 window.addEventListener('popstate', () => {
   if (parseTabFromPath() !== 'ai-review' || !aiReviewLoaded) return;
+  if (!confirmAIReviewNavigation()) {
+    syncAIReviewURL(aiReviewSelection?.runID || '', aiReviewSelection?.digest || '', aiReviewSelection?.projectID || '', false);
+    return;
+  }
   const query = new URLSearchParams(location.search); const run = aiReviewRuns.find(x => x.run_id === query.get('run'));
   const runID = query.get('run');
   if (!runID) {
     aiReviewSelectionGeneration++;
     aiReviewSelection = null;
     renderAIReviewRuns();
-    reviewEl('ai-review-detail').replaceChildren(reviewNode('p', 'Select a run to inspect its events and drafts.', 'empty-state'));
+    reviewEl('ai-review-detail').replaceChildren(reviewNode('p', 'Select a project proposal to compare its changes and record an assessment.', 'empty-state'));
     return;
   }
   if (run) openAIReviewRun(run.run_id, query.get('draft') || '', query.get('project') || '', false);

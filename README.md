@@ -8,21 +8,66 @@ Personal Memory is a self-hosted semantic memory layer for MCP-compatible AI cli
 - Optional Markdown/text RAG with incremental indexing.
 - Optional Todoist MCP endpoint; the token remains server-side.
 - Optional authenticated visualization dashboard.
+- Local or explicitly selected cloud embedding backends, with separate fact and document bindings.
 - Qdrant snapshots and embedding-identity verification.
 
 ## Architecture
 
 ```text
-MCP client -> Traefik -> Personal Memory (Go) -> TEI -> Qdrant
+MCP client -> Traefik -> Personal Memory (Go) -> Qdrant
+                                      ├-> Embedding backend
+                                      │   ├-> Local: TEI or llama.cpp
+                                      │   └-> Cloud: OpenAI or Google Gemini
                                       ├-> Todoist (optional)
                                       └-> RAG/Viz (optional)
 ```
 
-`/memory` is the native Streamable HTTP MCP endpoint. It keeps API-key and optional generic OAuth authentication independent. An optional Cloudflare Access profile serves MCP clients at `/memory/oauth`, with a separate stateless transport. Viz can also require a browser-specific Access assertion alongside its proxy secret. The [Access migration guide](https://dzarlax-ai.github.io/personal_memory/operations/cloudflare-access/) explains how to keep the existing Authentik issuer available until every real client, including Gemini if used, has reconnected and been accepted. `/todoist` exists only when its feature is enabled. TEI and Qdrant are internal services. Before serving requests, the application verifies the configured embedding identity against every active collection.
+`/memory` is the native Streamable HTTP MCP endpoint. It keeps API-key and optional generic OAuth authentication independent. An optional Cloudflare Access profile serves MCP clients at `/memory/oauth`, with a separate stateless transport. Viz can also require a browser-specific Access assertion alongside its proxy secret. The [Access migration guide](https://dzarlax-ai.github.io/personal_memory/operations/cloudflare-access/) explains how to keep the existing Authentik issuer available until every real client, including Gemini if used, has reconnected and been accepted. `/todoist` exists only when its feature is enabled. Qdrant and local model servers stay internal. Cloud embedding requests go to the selected provider only when its profile is active. Before serving requests, the application verifies the selected embedding identity against every active collection.
 
 Access MCP and Viz each require their own configured audience to be present in
 the signed assertion. Additional signed audiences are allowed; a token containing
 only the MCP audience cannot authorize Viz. Viz also requires its proxy secret.
+
+## Local and cloud embeddings
+
+The server and standalone indexer support these explicit backend profiles:
+
+| Location | Provider | Supported models | Input profile |
+| --- | --- | --- | --- |
+| Local | TEI | `intfloat/multilingual-e5-small` | `legacy-raw-v1` or `multilingual-e5-v1` |
+| Local | llama.cpp | `embeddinggemma-2` | `embeddinggemma-search-v1` |
+| Cloud | OpenAI | `text-embedding-3-small`, `text-embedding-3-large` | `openai-text-v1` |
+| Cloud | Google | `gemini-embedding-2`, `gemini-embedding-001` | `gemini-embedding-2-search-v1`, `gemini-embedding-001-task-v1`, respectively |
+
+Without `EMBED_PROFILES_FILE`, the existing local TEI setup uses the legacy
+`EMBED_*` variables and collection names. The manual local-release setup below
+continues to use that path. Published release assets are version-bound; choose an
+application revision that includes backend profiles before using the advanced
+configuration.
+
+For backend selection, start with the checked-in
+[profile examples and migration guide](docs/examples/embedding-backends/README.md)
+and [example JSON](docs/examples/embedding-backends/profiles.json). Mount the JSON
+read-only and set `EMBED_PROFILES_FILE` to its **container path** in both the
+server and standalone indexer. `bindings.memory` selects a profile and fact
+collection; `bindings.rag` selects a profile, chunk/folder collections, and an
+explicit `flat` or `hierarchical` search mode. Facts and documents can use
+different profiles. The example deliberately keeps E5 active.
+
+Only active cloud profiles read the secret named by `api_key_env`; keep its value
+outside the JSON and source control. Inactive profiles do not probe providers or
+read keys. Cloud use sends the selected fact, query, or document input to that
+provider and needs explicit permission for that data. There is no automatic
+cross-provider fallback.
+
+For a new vector space, prepare new matching collections before switching
+bindings. Nonlegacy memory bindings require calibrated `dedup`, `related`,
+`mutation`, and `viz` thresholds plus a recorded `basis`; nonlegacy hierarchical
+RAG also requires `folder_threshold`. Existing vectors cannot be relabeled as a
+new provider, model, dimension, normalization, or input profile. Use the
+[manifest-bound migration and rollback procedure](docs/examples/embedding-backends/README.md#migration-on-the-data-host)
+for an existing installation. Preserve the old collections; after new writes,
+rollback must transfer the current data rather than select stale collections.
 
 ## Recommended: ask Codex or Claude Code to set it up
 

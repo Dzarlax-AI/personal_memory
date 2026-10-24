@@ -1,71 +1,85 @@
 // Router + bootstrap. Loaded last so all view-module functions are defined.
 
-const VIEWS = ['overview', 'duplicates', 'forgotten', 'timeline', 'graph', 'documents', 'ai-review'];
+const VIEWS = ['memory', 'overview', 'duplicates', 'forgotten', 'timeline', 'graph', 'quality', 'quality-maintenance', 'documents', 'ai-review'];
 
 function parseTabFromPath() {
   const path = window.location.pathname;
   const rel = path.startsWith(BASE) ? path.slice(BASE.length) : path;
   const segments = rel.split('/').filter(Boolean);
-  const tab = segments[0] || 'overview';
-  return VIEWS.includes(tab) ? tab : 'overview';
+  const tab = segments[0] || 'memory';
+  if (tab === 'quality' && new URLSearchParams(window.location.search).get('check') === 'maintenance') return 'quality-maintenance';
+  return VIEWS.includes(tab) ? tab : 'memory';
+}
+
+function sectionForView(name) {
+  if (['duplicates', 'forgotten', 'quality', 'quality-maintenance'].includes(name)) return 'quality';
+  if (name === 'ai-review') return 'ai-review';
+  if (name === 'documents') return 'documents';
+  return 'memory';
 }
 
 function isTabAvailable(name) {
-  const el = document.querySelector(`.tab-nav-item[data-view="${name}"]`);
-  return el && el.style.display !== 'none';
+  const el = document.querySelector(`.primary-nav-item[data-section="${sectionForView(name)}"]`);
+  return Boolean(el && getComputedStyle(el).display !== 'none');
 }
 
 function activateTab(name, pushHistory = true) {
-  if (!isTabAvailable(name)) name = 'overview';
-
-  document.querySelectorAll('.tab-nav-item').forEach(t => {
-    t.classList.remove('active');
-    t.removeAttribute('aria-current');
+  if (!VIEWS.includes(name)) name = 'memory';
+  if (!isTabAvailable(name)) name = 'memory';
+  const section = sectionForView(name);
+  document.querySelectorAll('.primary-nav-item').forEach(item => {
+    const active = item.dataset.section === section;
+    item.classList.toggle('active', active);
+    if (active) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
   });
-  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  const tab = document.querySelector(`.tab-nav-item[data-view="${name}"]`);
-  if (tab) {
-    tab.classList.add('active');
-    tab.setAttribute('aria-current', 'page');
-  }
-  const view = document.getElementById(name + '-view');
+  document.querySelectorAll('.tab-nav-item').forEach(item => {
+    const active = item.dataset.view === name;
+    item.classList.toggle('active', active);
+    if (active) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
+  });
+  document.querySelectorAll('.view').forEach(view => view.classList.remove('active'));
+  const viewName = name === 'quality-maintenance' ? 'quality' : (name === 'quality' ? 'duplicates' : name);
+  const view = document.getElementById(viewName + '-view');
   if (view) view.classList.add('active');
+  document.getElementById('memory-subnav').classList.toggle('section-open', section === 'memory');
+  document.getElementById('quality-subnav').classList.toggle('section-open', section === 'quality');
+  document.getElementById('primary-nav').classList.remove('open');
+  document.getElementById('mobile-menu-toggle').setAttribute('aria-expanded', 'false');
 
-  // Lazy-load per-tab heavy content once.
-  if (name === 'duplicates' && !duplicatesLoaded && !duplicatesPromise) loadDuplicates();
+  if (name === 'memory' && !factsData) initFacts();
+  if (name === 'overview' && !factsData) initFacts();
+  if ((name === 'duplicates' || name === 'quality') && !duplicatesLoaded && !duplicatesPromise) loadDuplicates();
   if (name === 'forgotten' && !factsData) loadForgotten();
   if (name === 'timeline' && !timeline && !timelinePromise) loadTimeline();
   if (name === 'graph' && !graphLoaded && !graphPromise) loadGraph();
+  if (name === 'quality-maintenance') {
+    document.getElementById('maintenance-status-filter').value = 'quarantined';
+    loadQuarantinedFacts();
+  }
   if (name === 'documents' && !documentsPromise && (!documentsData || documentsAreStale())) {
     loadDocuments(Boolean(documentsData && documentsAreStale()));
   }
   if (name === 'ai-review' && !aiReviewLoaded) loadAIReview();
 
   if (pushHistory) {
-    const targetPath = `${BASE}/${name}`;
-    if (window.location.pathname !== targetPath) {
-      window.history.pushState({ tab: name }, '', targetPath);
-    }
+    const href = name === 'quality-maintenance'
+      ? `${BASE}/quality?check=maintenance` : `${BASE}/${name}`;
+    if (`${window.location.pathname}${window.location.search}` !== href) window.history.pushState({ tab: name }, '', href);
   }
 }
 
-// Tab clicks switch view AND update URL. Anchors have real hrefs for
-// progressive enhancement (Cmd+click opens in new tab), so intercept
-// the default nav for in-page routing.
-document.querySelectorAll('.tab-nav-item').forEach(tab => {
-  tab.addEventListener('click', (e) => {
-    if (e.metaKey || e.ctrlKey || e.shiftKey) return; // let the browser handle
-    e.preventDefault();
-    activateTab(tab.dataset.view);
+// Keep real links available for modified clicks and opening in a new tab.
+document.querySelectorAll('a[data-view]').forEach(link => {
+  link.addEventListener('click', event => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || link.target === '_blank') return;
+    event.preventDefault();
+    activateTab(link.dataset.view);
   });
 });
 
-// Browser back/forward.
 window.addEventListener('popstate', () => activateTab(parseTabFromPath(), false));
-
-// Initial bootstrap. Activate the target tab synchronously so the page
-// renders immediately; data fetches happen in parallel and fill the views
-// as they resolve.
 activateTab(parseTabFromPath(), false);
 initFacts();
 loadDocumentStatus().catch(() => {});

@@ -38,6 +38,9 @@ type Config struct {
 	QdrantURL string
 
 	// Embeddings
+	EmbeddingProfiles              *EmbeddingProfiles
+	MemoryCollection               string
+	RAGSearchMode                  string
 	EmbedURL                       string
 	EmbedModelID                   string
 	EmbedModelRevision             string
@@ -217,6 +220,9 @@ func Load() (*Config, error) {
 		RAGCollectionFolders: envOrDefault("RAG_COLLECTION_FOLDERS", "doc_folders"),
 		RAGReindexInterval:   ragReindexInterval,
 	}
+	if err := cfg.loadEmbeddingProfiles(); err != nil {
+		return nil, err
+	}
 	cfg.AI, err = aipolicy.Load(os.Getenv("MEMORY_AI_CONFIG_FILE"))
 	if err != nil {
 		return nil, err
@@ -300,6 +306,9 @@ func LoadIndexer() (*Config, error) {
 		RAGCollectionChunks:            envOrDefault("RAG_COLLECTION_CHUNKS", "doc_chunks"),
 		RAGCollectionFolders:           envOrDefault("RAG_COLLECTION_FOLDERS", "doc_folders"),
 		RAGReindexInterval:             ragReindexInterval,
+	}
+	if err := cfg.loadEmbeddingProfiles(); err != nil {
+		return nil, err
 	}
 	if err := cfg.ValidateIndexer(); err != nil {
 		return nil, err
@@ -516,26 +525,35 @@ func (c *Config) ValidateIndexer() error {
 }
 
 func (c *Config) validateIndexerSettings(requireEnabled bool) error {
-	for name, raw := range map[string]string{"QDRANT_URL": c.QdrantURL, "EMBED_URL": c.EmbedURL} {
-		if err := validateHTTPURL(name, raw); err != nil {
+	if err := validateHTTPURL("QDRANT_URL", c.QdrantURL); err != nil {
+		return err
+	}
+	if c.EmbeddingProfiles != nil {
+		if err := c.validateEmbeddingBindings(requireEnabled); err != nil {
 			return err
 		}
-	}
-	if strings.TrimSpace(c.EmbedModelID) == "" {
-		return fmt.Errorf("EMBED_MODEL cannot be empty")
-	}
-	if !immutableModelRevisionPattern.MatchString(c.EmbedModelRevision) {
-		return fmt.Errorf("EMBED_MODEL_REVISION must be an immutable 40-character hexadecimal commit")
-	}
-	c.EmbedInputProfile = embeddings.NormalizeInputProfile(c.EmbedInputProfile)
-	if err := embeddings.ValidateInputProfile(c.EmbedInputProfile, c.EmbedModelID); err != nil {
-		return fmt.Errorf("EMBED_INPUT_PROFILE: %w", err)
-	}
-	if c.EmbedInputProfile != embeddings.LegacyRawV1 {
-		return fmt.Errorf(
-			"EMBED_INPUT_PROFILE: production runtime supports only %q until purpose-aware embedding is wired through every memory and RAG path",
-			embeddings.LegacyRawV1,
-		)
+	} else {
+		for name, raw := range map[string]string{"QDRANT_URL": c.QdrantURL, "EMBED_URL": c.EmbedURL} {
+			if err := validateHTTPURL(name, raw); err != nil {
+				return err
+			}
+		}
+		if strings.TrimSpace(c.EmbedModelID) == "" {
+			return fmt.Errorf("EMBED_MODEL cannot be empty")
+		}
+		if !immutableModelRevisionPattern.MatchString(c.EmbedModelRevision) {
+			return fmt.Errorf("EMBED_MODEL_REVISION must be an immutable 40-character hexadecimal commit")
+		}
+		c.EmbedInputProfile = embeddings.NormalizeInputProfile(c.EmbedInputProfile)
+		if err := embeddings.ValidateInputProfile(c.EmbedInputProfile, c.EmbedModelID); err != nil {
+			return fmt.Errorf("EMBED_INPUT_PROFILE: %w", err)
+		}
+		if c.EmbedInputProfile != embeddings.LegacyRawV1 {
+			return fmt.Errorf(
+				"EMBED_INPUT_PROFILE: production runtime supports only %q until purpose-aware embedding is wired through every memory and RAG path",
+				embeddings.LegacyRawV1,
+			)
+		}
 	}
 	if requireEnabled && !c.EnableRAG {
 		return fmt.Errorf("ENABLE_RAG must be true for the standalone indexer")

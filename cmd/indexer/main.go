@@ -8,8 +8,6 @@ import (
 	"syscall"
 
 	"github.com/Dzarlax-AI/personal-memory/internal/config"
-	"github.com/Dzarlax-AI/personal-memory/internal/embeddingidentity"
-	"github.com/Dzarlax-AI/personal-memory/internal/embeddings"
 	"github.com/Dzarlax-AI/personal-memory/internal/qdrant"
 	"github.com/Dzarlax-AI/personal-memory/internal/rag"
 )
@@ -26,13 +24,8 @@ func main() {
 
 	qcChunks := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionChunks)
 	qcFolders := qdrant.NewClient(cfg.QdrantURL, cfg.RAGCollectionFolders)
-	ec := embeddings.NewClient(cfg.EmbedURL)
-
-	if _, err := embeddingidentity.Ensure(ctx, ec, []*qdrant.Client{qcChunks, qcFolders}, embeddingidentity.Expected{
-		ModelID:       cfg.EmbedModelID,
-		ModelRevision: cfg.EmbedModelRevision,
-		InputProfile:  cfg.EmbedInputProfile,
-	}, cfg.AdoptExistingEmbeddingIdentity); err != nil {
+	_, ec, err := cfg.PrepareEmbeddings(ctx, nil, qcChunks, qcFolders)
+	if err != nil {
 		slog.Error("embedding identity verification failed", "error", err)
 		os.Exit(1)
 	}

@@ -8,13 +8,13 @@ Self-hosted semantic memory + Todoist integration. Written in Go as a single sta
 
 Stack:
 - **Qdrant** — vector database for storing embeddings (shared `infra-qdrant` in production)
-- **text-embeddings-inference (TEI)** — local embedding model server
+- **Embedding backends** — legacy local TEI, or opt-in profiles for TEI, llama.cpp EmbeddingGemma, OpenAI, and Google Gemini
 - **Traefik v3** — reverse proxy with Let's Encrypt SSL
 - **mcp-go + Chi** — Go HTTP server and MCP implementation
 
 ## Architecture
 
-Two Docker services in this repo: `memory-embeddings` (TEI), `memory-mcp` (Go server). Qdrant is provided by the infra stack (`infra-qdrant`) and reached on the `infra` Docker network. TEI and Qdrant are internal — not exposed outside Docker networks.
+Two Docker services in this repo: `memory-embeddings` (TEI), `memory-mcp` (Go server). Qdrant is provided by the infra stack (`infra-qdrant`) and reached on the `infra` Docker network. Qdrant and local model servers are internal — not exposed outside Docker networks. `EMBED_PROFILES_FILE` opts into independent memory/RAG backend bindings; cloud inputs go only to the explicitly selected provider.
 
 ```
 Client → Traefik (mcp.<domain>) → memory-mcp:8000 (Go)
@@ -50,11 +50,13 @@ cmd/
   maintenance/             — manifest-bound lifecycle maintenance analyzer/actions
   eval-memory/main.go      — schema-v3 retrieval runner, comparison gate, and TEI materializer
   migrate-memory-lifecycle/ — dry-run/apply/rollback lifecycle migration
+  migrate-embeddings/       — manifest-bound embedding transfer into new collections
 internal/
   config/                  — env vars → struct
   middleware/auth.go       — X-API-Key + Bearer auth
   qdrant/client.go         — Qdrant REST client (upsert, search, scroll, delete, snapshots, field index)
-  embeddings/client.go     — TEI REST client (Embed + EmbedBatch, batch size 32)
+  embeddings/              — legacy TEI client plus purpose-aware local/cloud backend adapters
+  embeddingmigration/      — bounded manifest-bound embedding prepare/apply/verify
   memory/
     server.go              — 12 memory MCP tools
     cache.go               — in-memory cache with TTL + invalidation
@@ -148,7 +150,8 @@ The Qdrant client unmarshals `id` into `interface{}` and converts to string with
 | `EMBED_URL` | `http://memory-embeddings:80` | TEI endpoint |
 | `EMBED_MODEL` | `intfloat/multilingual-e5-small` | Expected TEI model ID |
 | `EMBED_MODEL_REVISION` | pinned commit | Immutable 40-character model commit |
-| `EMBED_INPUT_PROFILE` | `legacy-raw-v1` | Versioned embedding input transformation. The server and standalone indexer currently reject non-legacy profiles; `multilingual-e5-v1` is eval/materialization-only. |
+| `EMBED_PROFILES_FILE` | unset | Optional JSON backend profiles and memory/RAG collection bindings; use the same file in the server and standalone indexer. Only active profiles read keys or probe services. |
+| `EMBED_INPUT_PROFILE` | `legacy-raw-v1` | Legacy TEI configuration accepts only this profile; opt-in backend profiles select their own purpose-aware input profiles. |
 | `ADOPT_EXISTING_EMBEDDING_IDENTITY` | `false` | One-start binding for verified legacy collections without identity metadata; never overrides mismatch |
 | `ENABLE_TODOIST` | `false` | Enable Todoist MCP server |
 | `ENABLE_VIZ` | `false` | Enable visualization dashboard |
@@ -189,7 +192,7 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - `forget_old` defaults to `dry_run=true` — safe by default
 - New point IDs are deterministic from namespace + exact text; legacy numeric/text-only IDs are handled on read and by the standalone migration
 - `primary_tag` is an explicit grouping signal for visualization and model routing. Do not infer it from a hardcoded project list. If exactly one tag is stored and `primary_tag` is omitted, the server promotes that tag to `primary_tag`; if multiple tags are stored, clients should set `primary_tag` explicitly.
-- TEI and Qdrant accessed via Docker network (no auth needed)
+- Qdrant and local embedding servers are accessed via internal Docker networks. Active cloud embedding profiles use their named API-key environment variable and official provider endpoints; never put key values in the profile JSON.
 - Similarity scores are cosine proximity, not contradiction or entailment probability. Duplicate, related, disputed, and superseded are distinct concepts; inspect structured related candidates semantically before acting on them.
 - `store_fact` returns `status`, `stored`, optional `point_id`/`duplicate`, and `related_facts`; `find_related` returns `count` and `related_facts`. Candidates include text, score, namespace, tags, and normalized lifecycle metadata, with a text fallback for older clients.
 - Duplicate prevention is unchanged except that a valid superseded fact does not block a new current fact. Related-fact feedback does not auto-supersede, classify disputes, or invoke an LLM.
@@ -217,7 +220,8 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - Verifies configured model ID/revision against TEI `/info`, including dtype, pooling, and probe vector size
 - Preflights every active collection before any metadata write; non-empty legacy collections require one-shot explicit adoption
 - Stored mismatches always fail startup and cannot be overridden by the adoption flag
-- Embedding identity includes the versioned input profile. The server and standalone indexer fail configuration validation for non-legacy profiles until purpose-aware embedding is wired through every runtime memory/RAG path; `multilingual-e5-v1` remains available to eval/materialization only.
+- Embedding identity includes provider, model, dimensions, normalization and versioned input profile. The legacy path accepts only `legacy-raw-v1`; opt-in backend profiles wire purpose-aware embedding through memory and RAG. New providers use identity schema 2; legacy TEI schema 1 remains compatible.
+- Nonlegacy memory bindings require calibrated dedup/related/mutation/viz thresholds plus a basis; nonlegacy hierarchical RAG requires a folder threshold. Identity mismatches fail startup. `cmd/migrate-embeddings` prepares/applies/verifies manifest-bound transfers into new collections with stopped writers; after new writes, rollback requires reverse migration or source-based document rebuild, never a stale binding switch. See `docs/examples/embedding-backends/README.md`.
 
 ### eval and retrieval
 - `cmd/eval-memory` supports deterministic precomputed `fixture`, TEI-backed `tei-fixture`, and read-only `live` sources, plus strict schema-v3 materialization with mode-`0600` output.
@@ -225,10 +229,10 @@ Never hardcode credentials. Use `.env` file (excluded from git).
 - Canonical schema-v3 reports round diagnostic result scores to five decimal places to absorb cross-architecture Qdrant float32 noise; ranking order and metrics are not rounded.
 - Current public evidence is `evaldata/public/v3/` (dataset version 3.1.0): 48 facts with 41 current/legacy candidates, 41 chunks, 41 folders, 21 queries, and 20 lifecycle transitions. Public v1/v2 artifacts are historical.
 - `make eval-public` requires only an isolated Qdrant. It replays the legacy-raw vector-only baseline and the legacy-raw hybrid RRF candidate (`dense_candidate_limit=40`, `rrf_constant=60`) and byte-compares both generated JSON reports with pinned evidence. CI must not add TEI, GPU, or model downloads for this target.
-- The bounded four-configuration benchmark produced no winner. Raw hybrid improved aggregate ranking slightly but did not improve a protected cohort and roughly doubled same-host five-run diagnostic search p95; both multilingual E5 role-profile configurations regressed aggregate ranking. Production remains legacy raw vector-only, with no hybrid enablement, migration, deploy change, or reindex from this experiment.
+- The bounded four-configuration benchmark produced no winner. Raw hybrid improved aggregate ranking slightly but did not improve a protected cohort and roughly doubled same-host five-run diagnostic search p95; both multilingual E5 role-profile configurations regressed aggregate ranking. This experiment did not enable hybrid retrieval, migrate collections, deploy, or reindex. Runtime backend selection is separate and follows the explicit embedding profile configuration.
 - Timing diagnostics are informational and host-specific; no automatic latency threshold participates in evaluation gates.
 - Schema v4 adds bounded document-routing identity and privacy-safe traces without changing v3 artifacts. `make eval-public-v4` replays hierarchical-only, flat-only, blended RRF, and an explicitly unavailable reranker fail-open case using only isolated Qdrant and precomputed vectors.
-- The public v4 routing benchmark has no winner: flat-only improves aggregate ranking but regresses the protected identifier/path cohort, while blended RRF improves aggregate ranking without the required strict protected-cohort improvement. Production remains hierarchical-only. The unavailable reranker replay is resilience evidence only; reranking stays disabled until real model-quality and latency evidence exists.
+- The public v4 routing benchmark has no winner: flat-only improves aggregate ranking but regresses the protected identifier/path cohort, while blended RRF improves aggregate ranking without the required strict protected-cohort improvement. This experiment did not change the runtime document-routing binding. The unavailable reranker replay is resilience evidence only; reranking stays disabled until real model-quality and latency evidence exists.
 
 ### rag/indexer.go
 - Single `ScrollAll` at the start of `Run` snapshots every file's hash + expected chunk count; per-file hash checks are in-memory afterwards (no N+1 round-trips)

@@ -3,37 +3,85 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Memory Dashboard</title>
+<title>Personal Memory</title>
 <link rel="stylesheet" href="/viz/assets/vendor/dzarlax.css">
 <script src="/viz/assets/vendor/vis-network.min.js"></script>
 <script src="/viz/assets/vendor/vis-timeline-graph2d.min.js"></script>
 <link href="/viz/assets/vendor/vis-timeline-graph2d.min.css" rel="stylesheet">
 <link rel="stylesheet" href="/viz/assets/styles.css">
+<link rel="stylesheet" href="/viz/assets/ai-updates.css">
 </head>
 <body>
   <header class="viz-header">
-    <h1>Memory Dashboard</h1>
+    <button class="mobile-menu-toggle" id="mobile-menu-toggle" type="button" aria-expanded="false" aria-controls="primary-nav">Menu</button>
+    <a class="brand-link" data-view="memory" href="/viz/memory" aria-label="Personal Memory home">Personal Memory</a>
     <div class="viz-stats" id="stats" aria-live="polite"></div>
   </header>
-
-  <nav class="tab-nav viz-tabs">
-    <a class="tab-nav-item" data-view="overview" href="/viz/overview">Overview</a>
-    <a class="tab-nav-item" data-view="duplicates" href="/viz/duplicates">Duplicates <span class="badge badge--neutral" id="dup-badge">0</span></a>
-    <a class="tab-nav-item" data-view="forgotten" href="/viz/forgotten">Forgotten <span class="badge badge--neutral" id="forgot-badge">0</span></a>
-    <a class="tab-nav-item" data-view="timeline" href="/viz/timeline">Timeline</a>
-    <a class="tab-nav-item" data-view="graph" href="/viz/graph">Graph</a>
-    <a class="tab-nav-item" data-view="documents" href="/viz/documents" id="docs-tab">Documents <span class="badge badge--neutral" id="docs-badge" aria-live="polite">—</span></a>
-    <a class="tab-nav-item" data-view="ai-review" href="/viz/ai-review">AI Review</a>
-  </nav>
-
-  <!-- VIEWS -->
-
+  <div class="app-layout">
+    <nav class="primary-nav" id="primary-nav" aria-label="Main navigation">
+      <a class="primary-nav-item" data-section="memory" data-view="memory" href="/viz/memory">Memory</a>
+      <a class="primary-nav-item" data-section="ai-review" data-view="ai-review" href="/viz/ai-review">AI Updates</a>
+      <a class="primary-nav-item" data-section="quality" data-view="quality" href="/viz/quality">Quality</a>
+      <a class="primary-nav-item" data-section="documents" data-view="documents" href="/viz/documents" id="docs-tab">Documents <span class="badge badge--neutral" id="docs-badge" aria-live="polite">—</span></a>
+      <div class="nav-secondary" id="memory-subnav" aria-label="Memory views">
+        <a class="tab-nav-item" data-view="overview" href="/viz/overview">Overview</a>
+        <a class="tab-nav-item" data-view="graph" href="/viz/graph">Graph</a>
+        <a class="tab-nav-item" data-view="timeline" href="/viz/timeline">Timeline</a>
+      </div>
+      <div class="nav-secondary" id="quality-subnav" aria-label="Quality checks">
+        <a class="tab-nav-item" data-view="duplicates" href="/viz/duplicates">Similar facts <span class="badge badge--neutral" id="dup-badge">0</span></a>
+        <a class="tab-nav-item" data-view="forgotten" href="/viz/forgotten">Recall history <span class="badge badge--neutral" id="forgot-badge">0</span></a>
+        <a class="tab-nav-item" data-view="quality-maintenance" href="/viz/quality?check=maintenance">Maintenance inspection</a>
+      </div>
+    </nav>
+    <main class="workspace" id="workspace">
+      <!-- VIEWS -->
+    </main>
+  </div>
+  <section class="detail-panel" id="detail-panel" role="region" aria-labelledby="detail-heading" aria-describedby="detail-state" tabindex="-1" aria-hidden="true">
+    <button class="close-btn" id="detail-close" type="button" aria-label="Close fact details">&times;</button>
+    <h3 id="detail-heading">Fact details</h3>
+    <div id="detail-state" class="detail-state" role="status" aria-live="polite"></div>
+    <div id="detail-content" hidden>
+      <div class="fact-text" id="detail-text"></div>
+      <div class="lifecycle-badges" id="detail-lifecycle"></div>
+      <div class="detail-source"><span>Source</span><span id="detail-provenance"></span></div>
+      <details class="detail-disclosure">
+        <summary>Technical metadata</summary>
+        <div class="meta" id="detail-meta"></div>
+        <dl class="curated-detail" id="curated-detail">
+          <dt>Authority</dt><dd id="detail-authority"></dd>
+          <dt>Verified</dt><dd id="detail-verified"></dd>
+          <dt>Lifecycle changed</dt><dd id="detail-transitioned"></dd>
+          <dt>Updated</dt><dd id="detail-updated"></dd>
+          <dt>Last recalled</dt><dd id="detail-last-recalled"></dd>
+          <dt>Text source</dt><dd id="detail-text-source"></dd>
+        </dl>
+      </details>
+      <details class="detail-disclosure">
+        <summary>Edit tags</summary>
+        <div class="tag-editor">
+          <label for="detail-tags">Tags</label>
+          <div class="tag-editor-row"><input id="detail-tags" type="text" autocomplete="off"><button id="save-tags" class="toolbar-btn" type="button">Save</button></div>
+          <label for="detail-primary-tag">Primary tag</label>
+          <input id="detail-primary-tag" type="text" autocomplete="off">
+          <div id="tag-save-status" class="save-status" role="status" aria-live="polite"></div>
+        </div>
+      </details>
+      <details class="history-region detail-disclosure" aria-labelledby="history-heading">
+        <summary id="history-heading">Semantic history</summary>
+        <div id="history-status" class="history-status" role="status" aria-live="polite"></div>
+        <div id="history-content"></div>
+      </details>
+    </div>
+  </section>
   <script src="/viz/assets/js/shared.js"></script>
   <script src="/viz/assets/js/overview.js"></script>
   <script src="/viz/assets/js/duplicates.js"></script>
   <script src="/viz/assets/js/forgotten.js"></script>
   <script src="/viz/assets/js/timeline.js"></script>
   <script src="/viz/assets/js/graph.js"></script>
+  <script src="/viz/assets/js/workspace.ts" type="application/javascript"></script>
   <script src="/viz/assets/js/documents.js"></script>
   <script src="/viz/assets/js/ai-review-dates.js"></script>
   <script src="/viz/assets/js/ai-review.js"></script>

@@ -23,7 +23,7 @@ import (
 type Indexer struct {
 	chunks   *qdrant.Client
 	folders  *qdrant.Client
-	embed    *embeddings.Client
+	embed    embeddings.Embedder
 	docsDir  string
 	maxBytes int
 }
@@ -33,9 +33,9 @@ const maxIndexerChunkBytes = 1024 * 1024
 // folderSummaryVersion changes whenever the deterministic summary input or
 // payload contract changes. It lets reindex refresh folder vectors without
 // touching already-complete chunk generations.
-const folderSummaryVersion = "relative-metadata-v2"
+const folderSummaryVersion = "bounded-summary-v3"
 
-func NewIndexer(chunks, folders *qdrant.Client, embed *embeddings.Client, docsDir string, maxBytes int) *Indexer {
+func NewIndexer(chunks, folders *qdrant.Client, embed embeddings.Embedder, docsDir string, maxBytes int) *Indexer {
 	return &Indexer{
 		chunks:   chunks,
 		folders:  folders,
@@ -264,7 +264,7 @@ func (idx *Indexer) indexFile(ctx context.Context, path string, existing *fileSt
 	for i, c := range chunks {
 		texts[i] = c.text
 	}
-	vecs, err := idx.embed.EmbedBatch(ctx, texts)
+	vecs, err := embeddings.EmbedBatch(ctx, idx.embed, texts, embeddings.ChunkPassage)
 	if err != nil {
 		return false, fmt.Errorf("embed %s: %w", path, err)
 	}
@@ -351,7 +351,7 @@ func (idx *Indexer) indexFolder(ctx context.Context, dir string) error {
 	if err != nil {
 		return err
 	}
-	vec, err := idx.embed.Embed(ctx, summary)
+	vec, err := embeddings.Embed(ctx, idx.embed, summary, embeddings.FolderPassage)
 	if err != nil {
 		return err
 	}

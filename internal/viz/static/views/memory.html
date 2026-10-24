@@ -1,0 +1,16 @@
+<div class="view memory-view" id="memory-view">
+  <div class="page-heading">
+    <div><div class="eyebrow">Your knowledge</div><h1 class="page-title">Memory</h1><p class="section-sub">Browse stored facts. Text filtering applies to facts already loaded in this view.</p></div>
+    <a class="quiet-link" href="/viz/overview" data-view="overview">Knowledge map</a>
+  </div>
+  <div class="memory-summary" id="memory-summary" role="status" aria-live="polite">Loading facts…</div>
+  <div class="filter-toolbar memory-filters">
+    <div class="filter-field"><label for="memory-text-filter">Text</label><input id="memory-text-filter" type="search" placeholder="Filter loaded facts" autocomplete="off"></div>
+    <div class="filter-field"><label for="memory-ns-filter">Namespace</label><select id="memory-ns-filter"><option value="">All</option></select></div>
+    <div class="filter-field"><label for="memory-tag-filter">Tag</label><input id="memory-tag-filter" type="search" list="memory-tag-options" placeholder="All tags" autocomplete="off"></div><datalist id="memory-tag-options"></datalist>
+    <div class="filter-field"><label for="memory-lifecycle-filter">Lifecycle</label><select id="memory-lifecycle-filter"><option value="current">Current</option><option value="historical">Historical</option><option value="superseded">Superseded</option><option value="disputed">Disputed</option><option value="invalid">Invalid metadata</option><option value="">All</option></select></div>
+    <button id="memory-reset" class="toolbar-btn" type="button">Reset</button>
+  </div>
+  <div id="memory-list" class="memory-list" aria-live="polite"></div>
+  <button id="memory-more" class="toolbar-btn load-more" type="button" hidden>Show more</button>
+</div>

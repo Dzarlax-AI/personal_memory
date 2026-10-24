@@ -61,6 +61,7 @@ function renderForgottenList() {
     return;
   }
   container.innerHTML = forgotten.slice(0, forgottenShown).map(forgottenHTML).join('');
+  container.querySelectorAll('.forgotten-item[data-fact-id]').forEach(button => button.addEventListener('click', () => showDetail(button.dataset.factId, button)));
   more.hidden = forgottenShown >= forgotten.length;
   more.textContent = `Show ${Math.min(50, forgotten.length - forgottenShown)} more (${forgotten.length - forgottenShown} remaining)`;
 }
@@ -68,7 +69,7 @@ function renderForgottenList() {
 function forgottenHTML(fact) {
   const text = factText(fact);
   const primary = primaryTag(fact);
-  return `<article class="forgotten-item"><div class="fact-text">${escapeHtml(text.slice(0, 200))}${text.length > 200 ? '...' : ''}<div class="lifecycle-badges">${lifecycleBadgeHTML(fact)}${authorityBadgesHTML(fact)}</div></div><div class="meta-col"><span style="color:${nsColor(fact.namespace)}">${escapeHtml(normalizeNamespace(fact.namespace))}</span><span>${escapeHtml(primary || 'no primary tag')}</span><span>${escapeHtml((fact.created_at || '').slice(0, 10))}</span>${fact.permanent ? '<span style="color:var(--orange)">permanent</span>' : ''}</div></article>`;
+  return `<button class="forgotten-item" type="button" data-fact-id="${escapeAttr(fact.id || '')}"><span class="fact-text">${escapeHtml(text.slice(0, 200))}${text.length > 200 ? '...' : ''}<span class="lifecycle-badges">${lifecycleBadgeHTML(fact)}${authorityBadgesHTML(fact)}</span></span><span class="meta-col"><span style="color:${nsColor(fact.namespace)}">${escapeHtml(normalizeNamespace(fact.namespace))}</span><span>${escapeHtml(primary || 'no primary tag')}</span><span>${escapeHtml((fact.created_at || '').slice(0, 10))}</span>${fact.permanent ? '<span style="color:var(--orange)">permanent</span>' : ''}</span></button>`;
 }
 
 ['forgotten-ns-filter', 'forgotten-tag-filter', 'forgotten-sort', 'forgotten-permanent-only'].forEach(id => {

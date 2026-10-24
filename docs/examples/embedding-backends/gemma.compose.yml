@@ -1,0 +1,57 @@
+# Reviewed service fragment; merge with the actual deployment at cutover.
+# Set GEMMA_WEIGHTS_DIR to the directory containing the verified GGUF.
+# No host port and no external network for the local model.
+services:
+  memory-gemma:
+    image: ghcr.io/ggml-org/llama.cpp@sha256:15b053d98bc55621863618b2b97d1796c4499ceba930842ee0fbe16e3e38d479
+    command:
+      - -m
+      - /models/embeddinggemma-2-Q8_0.gguf
+      - --alias
+      - embeddinggemma-2
+      - --embedding
+      - --pooling
+      - mean
+      - --host
+      - 0.0.0.0
+      - --port
+      - '8080'
+      - --threads
+      - '2'
+      - --threads-batch
+      - '2'
+      - --parallel
+      - '1'
+      - --ctx-size
+      - '2048'
+      - --batch-size
+      - '2048'
+      - --ubatch-size
+      - '2048'
+      - --n-gpu-layers
+      - '0'
+      - --no-cache-prompt
+      - --cache-ram
+      - '0'
+      - --no-cache-idle-slots
+    volumes:
+      - ${GEMMA_WEIGHTS_DIR:?verified GGUF directory required}:/models:ro
+    networks: [embedding_local]
+    cpus: 2
+    mem_limit: 1g
+    memswap_limit: 1g
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ['/tmp:size=16m']
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+  memory-mcp:
+    environment:
+      EMBED_PROFILES_FILE: /config/embedding-profiles.json
+    volumes:
+      - ${EMBED_PROFILES_PATH:?reviewed profile file required}:/config/embedding-profiles.json:ro
+    # Retain existing application networks for Qdrant/Traefik/Todoist.
+    networks: [embedding_local]
+networks:
+  embedding_local:
+    internal: true

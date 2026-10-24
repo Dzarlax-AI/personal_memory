@@ -10,7 +10,7 @@ async function loadDuplicates(maxNodes = 1000) {
   const container = document.getElementById('dup-content');
   container.innerHTML = '<div class="loading"><div class="spinner"></div>Scanning for duplicates...</div>';
   duplicatesPromise = (async () => {
-    const res = await fetch(`${BASE}/api/duplicates?threshold=0.90&max_nodes=${maxNodes}`);
+    const res = await fetch(`${BASE}/api/duplicates?max_nodes=${maxNodes}`);
     if (!res.ok) {
       const error = new Error(await responseMessage(res));
       error.status = res.status;
@@ -37,13 +37,14 @@ async function loadDuplicates(maxNodes = 1000) {
 function renderDuplicates() {
   const container = document.getElementById('dup-content');
   document.getElementById('dup-badge').textContent = duplicatesData.length;
-  document.getElementById('dup-count').textContent = `${duplicatesData.length} duplicate pairs found`;
+  document.getElementById('dup-count').textContent = `${duplicatesData.length} similarity candidates found`;
   if (duplicatesData.length === 0) {
-    container.innerHTML = '<div class="empty-state">No near-duplicates found. Memory is clean!</div>';
+    container.innerHTML = '<div class="empty-state">No candidates met the similarity threshold in this scan.</div>';
     return;
   }
   const visible = duplicatesData.slice(0, duplicatesShown);
   container.innerHTML = `<div class="dup-list">${visible.map(duplicateHTML).join('')}</div>`;
+  container.querySelectorAll('.dup-fact-open').forEach(button => button.addEventListener('click', () => showDetail(button.dataset.factId, button)));
   if (duplicatesShown < duplicatesData.length) {
     const more = document.createElement('button');
     more.type = 'button'; more.className = 'toolbar-btn load-more';
@@ -55,13 +56,11 @@ function renderDuplicates() {
 
 function duplicateHTML(pair) {
   const score = Number(pair.similarity ?? pair.score ?? 0);
-  const scoreClass = score >= 0.95 ? 'high' : 'medium';
-  const scoreLabel = score >= 0.97 ? 'near-identical' : score >= 0.95 ? 'very similar' : 'similar';
-  return `<article class="dup-pair"><div class="dup-score ${scoreClass}">${(score * 100).toFixed(1)}% — ${scoreLabel}</div><div class="dup-facts">${duplicateFactHTML(pair.a || {})}${duplicateFactHTML(pair.b || {})}</div></article>`;
+  return `<article class="dup-pair"><div class="dup-score">Cosine similarity ${(score * 100).toFixed(1)}%</div><div class="dup-facts">${duplicateFactHTML(pair.a || {})}${duplicateFactHTML(pair.b || {})}</div></article>`;
 }
 
 function duplicateFactHTML(fact) {
   const text = factText(fact);
   const tags = tagOptions([fact]).map(tag => tag.display).join(', ');
-  return `<div>${escapeHtml(text.slice(0, 200))}${text.length > 200 ? '...' : ''}<div class="lifecycle-badges">${lifecycleBadgeHTML(fact)}${authorityBadgesHTML(fact)}</div><div class="dup-meta">${escapeHtml(normalizeNamespace(fact.namespace))} | ${escapeHtml(tags)} | recalls: ${Number(fact.recall_count || 0)}</div></div>`;
+  return `<button class="dup-fact-open" type="button" data-fact-id="${escapeAttr(fact.id || '')}"><span>${escapeHtml(text.slice(0, 200))}${text.length > 200 ? '...' : ''}</span><span class="lifecycle-badges">${lifecycleBadgeHTML(fact)}${authorityBadgesHTML(fact)}</span><span class="dup-meta">${escapeHtml(normalizeNamespace(fact.namespace))} | ${escapeHtml(tags)} | recalls: ${Number(fact.recall_count || 0)}</span></button>`;
 }

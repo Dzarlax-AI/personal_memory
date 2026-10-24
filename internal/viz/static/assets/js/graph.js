@@ -211,6 +211,7 @@ async function showDetail(id, opener) {
   state.textContent = 'Loading fact details…';
   renderHistoryState('loading', 'Loading semantic history…');
   panel.classList.add('visible'); panel.focus();
+  panel.setAttribute('aria-hidden', 'false');
   loadFactHistory(id, request);
   try {
     const res = await fetch(`${BASE}/api/facts/${encodeURIComponent(id)}`, { signal: detailAbortController.signal });
@@ -372,7 +373,13 @@ function syncCachedFactTags(id, tags, primaryTagValue) {
   (factsData?.nodes || []).forEach(update);
   (graphDataCache?.nodes || []).forEach(update);
 
-  if (factsData?.nodes) renderTreemap(factsData.nodes);
+  duplicatesData.forEach(pair => { if (pair.a) update(pair.a); if (pair.b) update(pair.b); });
+  if (factsData?.nodes) {
+    renderMemory(factsData.nodes);
+    renderForgotten(factsData.nodes);
+    renderTreemap(factsData.nodes);
+  }
+  if (duplicatesLoaded) renderDuplicates();
   if (graphDataCache?.nodes) {
     const namespace = document.getElementById('ns-filter').value;
     const selectedTag = graphFilter.projectTag || originalTagFilter(document.getElementById('tag-filter'));
@@ -388,10 +395,13 @@ function hideDetail() {
   abortDetailRequests();
   selectedFact = null;
   panel.classList.remove('visible');
-  const liveResult = [...document.querySelectorAll('.graph-result[data-fact-id]')]
-    .find(button => button.dataset.factId === detailReturnFactID && button.isConnected && !button.hidden);
-  const fallback = document.getElementById('graph-container');
-  const focusTarget = liveResult || (detailReturnFocus?.isConnected && !detailReturnFocus.hidden ? detailReturnFocus : fallback);
+  panel.setAttribute('aria-hidden', 'true');
+  const returnView = detailReturnFocus?.closest('.view');
+  const returnTargetIsVisible = detailReturnFocus?.isConnected && !detailReturnFocus.hidden &&
+    (!returnView || returnView.classList.contains('active'));
+  const focusTarget = returnTargetIsVisible
+    ? detailReturnFocus
+    : document.querySelector('.view.active button, .view.active a, .view.active [tabindex="0"]');
   if (focusTarget?.focus) focusTarget.focus();
   detailReturnFocus = null;
   detailReturnFactID = '';
