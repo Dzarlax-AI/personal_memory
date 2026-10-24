@@ -13,11 +13,29 @@ Use `.env` (not source control) for deployment values. Required values are enfor
 | `API_KEY` | none | Required unless generic OAuth is enabled or isolated development enables `ALLOW_INSECURE_AUTH`; always required for Todoist. Cloudflare Access on `/memory/oauth` does not replace the native endpoint's API key. |
 | `ALLOW_INSECURE_AUTH` | `false` | Isolated-development escape hatch for `/memory` without API-key/OAuth auth and for Viz without `VIZ_PROXY_SECRET`; it never removes Todoist's `API_KEY` requirement. Never enable in staging or production. |
 | `QDRANT_URL` | `http://memory-qdrant:6333` | Qdrant base URL. |
+| `EMBED_PROFILES_FILE` | none | Opt-in JSON profile/binding file for TEI, llama.cpp, OpenAI, or Google. Set its container path in both server and standalone indexer. |
 | `EMBED_URL` | `http://memory-embeddings:80` | TEI base URL. |
-| `EMBED_MODEL` | `intfloat/multilingual-e5-small` | Expected embedding model ID. |
+| `EMBED_MODEL` | `intfloat/multilingual-e5-small` | Expected TEI model ID for the legacy path. |
 | `EMBED_MODEL_REVISION` | `614241f622f53c4eeff9890bdc4f31cfecc418b3` | Required immutable model revision. |
-| `EMBED_INPUT_PROFILE` | `legacy-raw-v1` | Server/indexer reject non-legacy profiles. |
+| `EMBED_INPUT_PROFILE` | `legacy-raw-v1` | Legacy TEI path accepts only this profile; opt-in backend profiles select their own input profile. |
 | `ADOPT_EXISTING_EMBEDDING_IDENTITY` | `false` | One-shot adoption for verified legacy collections; never overrides a stored mismatch. |
+
+## Embedding backend profiles
+
+When `EMBED_PROFILES_FILE` is absent, legacy TEI configuration and collection
+names remain unchanged. With it, `bindings.memory` selects a profile and fact
+collection, while `bindings.rag` selects a profile, chunk/folder collections, and
+`flat` or `hierarchical` search. Only active profiles read keys or probe services.
+Cloud credentials are referenced by environment variable name (`api_key_env`),
+never embedded in the JSON. Cloud selection sends the selected input to the
+provider and requires permission for that data; there is no provider fallback.
+
+Nonlegacy memory bindings require explicit `dedup`, `related`, `mutation`, and
+`viz` thresholds and a calibration `basis`. Nonlegacy hierarchical RAG requires
+`folder_threshold`. The binding thresholds override the corresponding legacy
+threshold variables. Provider/model/input-profile/dimension changes require
+matching new collections and an explicit migration; startup refuses an identity
+mismatch. See the [configuration examples and migration procedure](https://github.com/Dzarlax-AI/personal_memory/blob/main/docs/examples/embedding-backends/README.md).
 
 ## Memory and backups
 

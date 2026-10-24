@@ -1,9 +1,10 @@
-# Embedding backends and unified Gemma cutover
+# Local and cloud embedding backends
 
 Implementation supports TEI, llama.cpp EmbeddingGemma 2, OpenAI, and Google Gemini.
-The approved target uses the same Gemma profile for facts, document chunks and
-folder summaries. One model process serves both bindings. This directory is an
-opt-in rollout package; it does not change the running deployment.
+Facts and document search have independent profile bindings. This directory
+contains opt-in configuration examples and a manifest-bound migration procedure;
+copying an example does not change a running deployment. The local Gemma example
+uses one model process for facts, document chunks, and folder summaries.
 
 ## Configuration
 
@@ -63,8 +64,8 @@ summarizer, rather than truncating text during migration.
 
 ## Migration on the data host
 
-Build/run `cmd/migrate-embeddings` locally on the VPS. The application Docker image
-also includes `/personal-memory-migrate-embeddings`. Keep manifests on the VPS with
+Use `/personal-memory-migrate-embeddings` from a reviewed, pinned application
+image on the data host; its source is `cmd/migrate-embeddings`. Keep manifests on the VPS with
 mode 0600. Nothing below exports payloads, vectors, document paths or credentials.
 No source collection is overwritten, and no server configuration is changed.
 

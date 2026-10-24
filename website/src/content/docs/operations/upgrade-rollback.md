@@ -55,3 +55,18 @@ curl -fsS https://mcp.example.com/health
 Health alone is insufficient: connect an authenticated client to `/memory` and exercise its expected path. If it fails, inspect logs and change the override to the previous immutable image; run `pull` and `up -d` with both files again, then recheck health plus the client path.
 
 Stop if embedding identity rejects a model or collection mismatch, snapshots are unavailable, or the release includes a lifecycle/data operation. Those require a separate recovery decision.
+
+## Changing embedding backends
+
+An application upgrade alone does not change the selected embedding profile.
+`EMBED_PROFILES_FILE` can select local TEI/llama.cpp or cloud OpenAI/Google
+backends independently for facts and documents. Keep the server and standalone
+indexer on the same reviewed binding file.
+
+Changing provider, model, input profile, dimensions, or normalization creates a
+different vector space. Prepare and verify new collections before switching
+bindings; preserve old collections and the prior configuration. After writes to
+the new space, selecting the old collections would lose those changes. Use the
+[manifest-bound migration and reverse-migration procedure](https://github.com/Dzarlax-AI/personal_memory/blob/main/docs/examples/embedding-backends/README.md)
+with stopped writers, or rebuild document collections from their authoritative
+source directory, as specified by that guide.

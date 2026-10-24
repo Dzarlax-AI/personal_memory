@@ -33,10 +33,13 @@ text without role prefixes. `multilingual-e5-v1` applies the model-specific
 query/passage roles and is valid only for
 `intfloat/multilingual-e5-small`. Changing the profile requires re-embedding
 the corpus and queries; a profile flag must never relabel existing vectors.
-The evaluator and materializer support both profiles. The production server
-and standalone indexer currently reject non-legacy profiles during
-configuration validation because their memory and RAG embedding calls remain
-raw-text paths.
+The evaluator and materializer support both profiles. The legacy runtime path
+still accepts only `legacy-raw-v1`. With an explicit
+`EMBED_PROFILES_FILE`, the server and standalone indexer support purpose-aware
+backend profiles, including `multilingual-e5-v1`. This does not change the pinned
+public evaluation artifacts or select a new retrieval strategy. A runtime
+profile change requires matching collections and calibrated thresholds; see
+[Configuration](../../reference/configuration/).
 
 Queries can belong to more than one cohort. Public v3 reports these stable
 cohorts:
