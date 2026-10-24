@@ -1,81 +1,47 @@
   <div class="view view-full" id="graph-view" style="position:relative;">
-    <h2 class="sr-only">Fact relationship graph</h2>
+    <h2 class="section-title">Fact relationship graph</h2>
     <div class="graph-controls">
-      <label for="ns-filter">Namespace</label>
-      <select id="ns-filter"><option value="">All</option></select>
-      <label for="tag-filter">Tag</label>
-      <input id="tag-filter" type="search" list="tag-filter-options" placeholder="All tags" autocomplete="off">
+      <div class="filter-field"><label for="ns-filter">Namespace</label><select id="ns-filter"><option value="">All</option></select></div>
+      <div class="filter-field"><label for="tag-filter">Tag</label><input id="tag-filter" type="search" list="tag-filter-options" placeholder="All tags" autocomplete="off"></div>
       <datalist id="tag-filter-options"></datalist>
-      <label for="text-filter">Text</label>
-      <select id="text-filter">
+      <div class="filter-field"><label for="text-filter">Text presence</label><select id="text-filter">
         <option value="">All</option>
         <option value="missing">Missing</option>
         <option value="present">Present</option>
-      </select>
-      <label for="lifecycle-filter">Lifecycle</label>
-      <select id="lifecycle-filter">
+      </select></div>
+      <details class="advanced-filters"><summary>Advanced filters</summary><div class="advanced-filter-fields">
+      <div class="filter-field"><label for="lifecycle-filter">Lifecycle</label><select id="lifecycle-filter">
         <option value="">All</option>
         <option value="current">Current</option>
         <option value="historical">Historical</option>
         <option value="superseded">Superseded</option>
         <option value="disputed">Disputed</option>
         <option value="invalid">Invalid metadata</option>
-      </select>
-      <label for="authority-filter">Authority</label>
-      <select id="authority-filter">
+      </select></div>
+      <div class="filter-field"><label for="authority-filter">Authority</label><select id="authority-filter">
         <option value="">All</option>
         <option value="canonical">Canonical</option>
         <option value="verified">Verified</option>
         <option value="legacy">Legacy</option>
         <option value="has-provenance">Has provenance</option>
-      </select>
-      <label for="threshold">Similarity</label>
-      <input type="range" id="threshold" min="0.50" max="0.99" step="0.01" value="0.85">
-      <output class="threshold-val" id="threshold-val" for="threshold">0.85</output>
+      </select></div>
+      </div></details>
+      <div class="filter-field"><label for="threshold">Similarity</label><div class="range-control"><input type="range" id="threshold" min="0.50" max="0.99" step="0.01" value="0.85">
+      <output class="threshold-val" id="threshold-val" for="threshold">0.85</output></div></div>
       <span id="tag-filter-label" style="display:none;font-size:13px;color:var(--orange)"></span>
       <button id="reset-graph-filters" class="toolbar-btn" type="button">Reset</button>
     </div>
     <div id="graph-status" class="graph-status" role="status" aria-live="polite"></div>
+    <div class="graph-workspace">
+    <div class="graph-visualization">
     <div id="graph-container" aria-label="Fact relationship graph" tabindex="0"></div>
     <div class="legend" id="legend"></div>
+    </div>
     <section class="graph-results" aria-labelledby="graph-results-heading">
       <h3 id="graph-results-heading">Graph results</h3>
       <div id="graph-results-count" aria-live="polite"></div>
       <div id="graph-results-list" class="graph-results-list"></div>
       <button id="graph-results-more" class="toolbar-btn load-more" type="button" hidden>Show more results</button>
     </section>
-    <section class="detail-panel" id="detail-panel" role="region" aria-labelledby="detail-heading" aria-describedby="detail-state" tabindex="-1">
-      <button class="close-btn" id="detail-close" type="button" aria-label="Close fact details">&times;</button>
-      <h3 id="detail-heading">Fact details</h3>
-      <div id="detail-state" class="detail-state" role="status" aria-live="polite"></div>
-      <div id="detail-content" hidden>
-        <div class="fact-text" id="detail-text"></div>
-        <div class="lifecycle-badges" id="detail-lifecycle"></div>
-        <div class="meta" id="detail-meta"></div>
-        <dl class="curated-detail" id="curated-detail">
-          <dt>Authority</dt><dd id="detail-authority"></dd>
-          <dt>Provenance</dt><dd id="detail-provenance"></dd>
-          <dt>Verified</dt><dd id="detail-verified"></dd>
-          <dt>Lifecycle changed</dt><dd id="detail-transitioned"></dd>
-          <dt>Updated</dt><dd id="detail-updated"></dd>
-          <dt>Last recalled</dt><dd id="detail-last-recalled"></dd>
-          <dt>Text source</dt><dd id="detail-text-source"></dd>
-        </dl>
-      <div class="tag-editor">
-        <label for="detail-tags">Tags</label>
-        <div class="tag-editor-row">
-          <input id="detail-tags" type="text" autocomplete="off">
-          <button id="save-tags" class="toolbar-btn" type="button">Save</button>
-        </div>
-        <label for="detail-primary-tag">Primary tag</label>
-        <input id="detail-primary-tag" type="text" autocomplete="off">
-        <div id="tag-save-status" class="save-status" role="status" aria-live="polite"></div>
-      </div>
-      <section class="history-region" aria-labelledby="history-heading">
-        <h4 id="history-heading">Semantic history</h4>
-        <div id="history-status" class="history-status" role="status" aria-live="polite"></div>
-        <div id="history-content"></div>
-      </section>
-      </div>
-    </section>
+    </div>
   </div>

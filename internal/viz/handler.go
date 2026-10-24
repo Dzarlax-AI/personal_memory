@@ -104,7 +104,7 @@ var staticFS embed.FS
 
 // Order matters: this is how the view fragments are concatenated into the
 // shell, which also determines the DOM order of the view containers.
-var viewNames = []string{"overview", "duplicates", "forgotten", "timeline", "graph", "documents", "ai-review"}
+var viewNames = []string{"memory", "overview", "duplicates", "forgotten", "timeline", "graph", "quality", "documents", "ai-review"}
 
 type Handler struct {
 	qdrant             *qdrant.Client
@@ -198,6 +198,9 @@ func (h *Handler) Router() chi.Router {
 		r.Get("/assets/*", func(w http.ResponseWriter, req *http.Request) {
 			rctx := chi.RouteContext(req.Context())
 			prefix := strings.TrimSuffix(rctx.RoutePattern(), "/*")
+			if strings.HasSuffix(req.URL.Path, ".ts") {
+				w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+			}
 			http.StripPrefix(prefix, http.FileServer(http.FS(sub))).ServeHTTP(w, req)
 		})
 	}

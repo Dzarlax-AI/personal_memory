@@ -1467,22 +1467,22 @@ func TestDuplicatesUIHandlesErrorsAndOffersBoundedRetry(t *testing.T) {
 	}
 }
 
-func TestGraphDetailFocusReturnSurvivesResultsRerender(t *testing.T) {
+func TestSharedDetailFocusReturnWorksAcrossViews(t *testing.T) {
 	js, err := staticFS.ReadFile("static/assets/js/graph.js")
 	if err != nil {
 		t.Fatalf("read graph.js: %v", err)
 	}
 	source := string(js)
 	for _, want := range []string{
-		"button.dataset.factId = String(node.id)",
-		"detailReturnFactID = String(id)",
-		".graph-result[data-fact-id]",
-		"button.dataset.factId === detailReturnFactID",
-		"button.isConnected && !button.hidden",
-		"document.getElementById('graph-container')",
+		"detailReturnFocus = opener || document.activeElement",
+		"detailReturnFocus?.closest('.view')",
+		"returnView.classList.contains('active')",
+		"const focusTarget = returnTargetIsVisible",
+		".view.active button, .view.active a, .view.active [tabindex=\"0\"]",
+		"if (focusTarget?.focus) focusTarget.focus()",
 	} {
 		if !strings.Contains(source, want) {
-			t.Errorf("graph.js does not contain stable focus-return mechanism %q", want)
+			t.Errorf("graph.js does not contain shared focus-return behavior %q", want)
 		}
 	}
 }
@@ -1657,7 +1657,7 @@ func TestStaticUIContractsForLazyLoadingAccessibilityAndResilience(t *testing.T)
 	forbid(t, init, "initFacts();\nloadDocuments();")
 	require(t, init, "aria-current")
 	require(t, init, "documentsAreStale()")
-	require(t, init, "name === 'forgotten' && !factsData")
+	require(t, init, "name === 'memory' && !factsData")
 
 	overview := read(t, "assets/js/overview.js")
 	require(t, overview, "factsPromise = null")
@@ -1672,7 +1672,6 @@ func TestStaticUIContractsForLazyLoadingAccessibilityAndResilience(t *testing.T)
 	require(t, overview, "activity-section').hidden = true")
 	require(t, overview, "Loading knowledge map")
 	require(t, overview, "maintenance_status=quarantined")
-	require(t, overview, "operator-only inspection")
 	forbid(t, overview, "api/facts?maintenance_status=active")
 	require(t, overview, "quarantinedInspectionAbortController")
 	require(t, overview, "quarantinedInspectionGeneration")
@@ -1757,26 +1756,26 @@ func TestStaticUIContractsForLazyLoadingAccessibilityAndResilience(t *testing.T)
 	require(t, duplicates, "duplicatesShown += 50")
 
 	graphView := read(t, "views/graph.html")
-	require(t, graphView, "role=\"region\"")
 	forbid(t, graphView, "aria-modal")
 	require(t, graphView, "<output")
 	require(t, graphView, "for=\"ns-filter\"")
 	require(t, graphView, "for=\"lifecycle-filter\"")
 	require(t, graphView, "for=\"authority-filter\"")
-	require(t, graphView, "id=\"history-status\"")
-	require(t, graphView, "aria-live=\"polite\"")
 	forbid(t, graphView, "payload-details")
 	forbid(t, graphView, "payload-json")
 	overviewView := read(t, "views/overview.html")
 	require(t, overviewView, "id=\"activity-section\"")
 	require(t, overviewView, "id=\"heatmap-grid\"")
 	require(t, overviewView, "role=\"list\"")
-	require(t, overviewView, "id=\"maintenance-status-filter\"")
-	require(t, overviewView, "value=\"quarantined\"")
+	qualityView := read(t, "views/quality.html")
+	require(t, qualityView, "id=\"maintenance-status-filter\"")
+	require(t, qualityView, "value=\"quarantined\"")
 	documentsView := read(t, "views/documents.html")
 	require(t, documentsView, "id=\"docs-refresh\"")
 	shell := read(t, "shell.html")
 	require(t, shell, "id=\"docs-badge\" aria-live=\"polite\">—")
+	require(t, shell, "id=\"history-status\"")
+	require(t, shell, "id=\"detail-panel\" role=\"region\"")
 
 	css := read(t, "assets/styles.css")
 	require(t, css, "@media (max-width: 390px)")

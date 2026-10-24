@@ -77,6 +77,7 @@ jobs:
         run: |
           node scripts/test_ai_review_dates.js
           node scripts/test_ai_review_auth.js
+          node --test internal/viz/ai_updates.test.cjs internal/viz/focus_return.test.cjs
       - name: Validate local release assets
         run: ./scripts/test-local-release.sh
       - name: Wait for Qdrant

@@ -6,6 +6,7 @@ let documentStatusPromise = null;
 let documentsShown = 50;
 const FILE_PAGE_SIZE = 50;
 let visibleDocumentFolders = [];
+let selectedDocumentPath = '';
 let documentsFreshUntil = 0;
 
 function documentsAreStale() {
@@ -16,7 +17,9 @@ function setDocumentsVisible(visible) {
   const tab = document.getElementById('docs-tab');
   tab.style.display = visible ? '' : 'none';
   if (!visible && document.getElementById('documents-view').classList.contains('active')) {
-    activateTab('overview', false);
+    document.getElementById('docs-summary').textContent = 'Document indexing is disabled for this installation.';
+    document.getElementById('docs-content').innerHTML = '<div class="empty-state">Documents are unavailable because document indexing is disabled.</div>';
+    document.getElementById('docs-more').hidden = true;
   }
 }
 
@@ -121,31 +124,54 @@ function renderDocuments() {
 
   const visible = folders.slice(0, documentsShown);
   visibleDocumentFolders = visible;
-  content.innerHTML = `<div class="docs-list">${visible.map((folder, index) => documentFolderHTML(folder, index)).join('')}</div>`;
+  content.innerHTML = documentTreeHTML(visible);
   more.hidden = documentsShown >= folders.length;
   more.textContent = `Show ${Math.min(50, folders.length - documentsShown)} more folders (${folders.length - documentsShown} remaining)`;
-  content.querySelectorAll('.folder-header').forEach(button => {
-    button.addEventListener('click', () => toggleDocumentFolder(button));
+  content.querySelectorAll('details.document-branch').forEach(branch => {
+    branch.addEventListener('toggle', event => {
+      if (event.target !== branch) return;
+      const button = branch.querySelector(':scope > summary');
+      button.setAttribute('aria-expanded', String(branch.open));
+      if (branch.dataset.folderIndex !== undefined) toggleDocumentFolder(button);
+    });
   });
 }
 
-function documentFolderHTML(folder, index) {
-  const rel = folder.relative_path || '/';
-  const folderID = `folder-files-${index}`;
-  const visibleChunks = Number(folder.visible_chunk_count || 0);
-  return `<div class="folder-row"><button class="folder-header" type="button" data-folder-index="${index}" aria-expanded="false" aria-controls="${folderID}"><span><span class="folder-chevron" aria-hidden="true">▶</span> <span class="folder-path">${escapeHtml(rel)}</span></span><span class="folder-meta">${folder.files.length} file${folder.files.length === 1 ? '' : 's'} · ${visibleChunks} chunks</span></button><div class="folder-files" id="${folderID}" hidden data-files-rendered="0"></div></div>`;
+// Virtual parents make paths navigable without changing the inventory contract.
+// Folder and file pages remain bounded; no source documents are fetched.
+function documentTreeHTML(folders) {
+  const root = { children: new Map() };
+  folders.forEach((folder, index) => {
+    const parts = (folder.relative_path || '.').split('/').filter(part => part && part !== '.');
+    let node = root;
+    for (const name of parts) {
+      if (!node.children.has(name)) node.children.set(name, { name, children: new Map() });
+      node = node.children.get(name);
+    }
+    node.folder = folder; node.index = index;
+  });
+  const render = node => {
+    const nested = [...node.children.values()].sort((a, b) => a.name.localeCompare(b.name)).map(render).join('');
+    if (!node.name && !node.folder) return nested;
+    const index = node.index;
+    const filesID = `folder-files-${index}`;
+    const metadata = node.folder ? `${node.folder.files.length} files · ${node.folder.visible_chunk_count} chunks` : 'Subfolders';
+    return `<details class="document-branch"${node.folder ? ` data-folder-index="${index}"` : ''}>
+      <summary class="folder-header" aria-expanded="false"${node.folder ? ` aria-controls="${filesID}" data-folder-index="${index}"` : ''}>
+        <span class="folder-path">${escapeHtml(node.name || 'Library')}</span><span class="folder-meta document-branch-meta">${escapeHtml(metadata)}</span>
+      </summary><div class="document-branch-children">${node.folder ? `<div class="folder-files" id="${filesID}" data-files-rendered="0"></div>` : ''}${nested}</div></details>`;
+  };
+  return `<div class="document-tree">${render(root)}</div>`;
 }
 
 function toggleDocumentFolder(button) {
-  const expanded = button.getAttribute('aria-expanded') === 'true';
+  const branch = button.closest('details');
+  if (!branch.open) return;
   const files = document.getElementById(button.getAttribute('aria-controls'));
-  if (!expanded && files.dataset.filesRendered === '0') {
+  if (files && files.dataset.filesRendered === '0') {
     const folder = visibleDocumentFolders[Number(button.dataset.folderIndex)];
     renderDocumentFilePage(files, folder?.files || []);
   }
-  button.setAttribute('aria-expanded', String(!expanded));
-  files.hidden = expanded;
-  button.closest('.folder-row').classList.toggle('expanded', !expanded);
 }
 
 // File rows are created only when their folder opens, and in bounded pages, so
@@ -172,9 +198,14 @@ function documentFileRow(file) {
   const row = document.createElement('div');
   row.className = 'file-row';
   const detail = document.createElement('div');
-  const name = document.createElement('div');
-  name.className = 'file-name';
-  name.textContent = file.relative_path || file.path || '';
+  const name = document.createElement('button');
+  name.type = 'button';
+  name.className = 'file-name document-file-select';
+  const path = file.relative_path || file.path || '';
+  name.textContent = path.split('/').pop() || path;
+  name.title = path;
+  name.setAttribute('aria-pressed', String(selectedDocumentPath === path));
+  name.addEventListener('click', () => inspectDocument(file, name));
   detail.appendChild(name);
   if (file.first_heading) {
     const heading = document.createElement('div');
@@ -205,3 +236,23 @@ document.getElementById('docs-more').addEventListener('click', () => {
   renderDocuments();
 });
 document.getElementById('docs-refresh').addEventListener('click', () => loadDocuments(true));
+
+function inspectDocument(file, opener) {
+  const path = file.relative_path || file.path || '';
+  selectedDocumentPath = path;
+  document.querySelectorAll('.document-file-select').forEach(button => button.setAttribute('aria-pressed', String(button === opener)));
+  const panel = document.getElementById('document-inspector');
+  panel.replaceChildren();
+  const heading = document.createElement('h3'); heading.id = 'document-inspector-heading';
+  heading.textContent = path.split('/').pop() || 'Indexed file'; panel.append(heading);
+  const rel = document.createElement('p'); rel.className = 'file-heading'; rel.textContent = path; panel.append(rel);
+  const title = document.createElement('h4'); title.textContent = 'Indexed heading'; panel.append(title);
+  const body = document.createElement('p'); body.textContent = file.first_heading || 'No heading recorded'; panel.append(body);
+  const details = document.createElement('details');
+  const summary = document.createElement('summary'); summary.textContent = 'Index details'; details.append(summary);
+  const metadata = document.createElement('p');
+  metadata.textContent = `${Number(file.chunks || 0)} chunks · Last indexed: ${file.last_indexed || 'Unknown'}`;
+  details.append(metadata); panel.append(details);
+  const note = document.createElement('p'); note.className = 'file-heading';
+  note.textContent = 'This describes the index. It does not edit or reindex the source document.'; panel.append(note);
+}

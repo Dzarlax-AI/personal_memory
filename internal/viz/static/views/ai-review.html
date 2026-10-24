@@ -1,13 +1,10 @@
   <div class="view ai-review-view" id="ai-review-view" aria-labelledby="ai-review-title">
     <div class="ai-review-heading">
-      <div><h2 class="section-title" id="ai-review-title">AI Review</h2><p class="section-sub">Inspect maintenance runs and assess catalog proposals. Assessments are private review records and never publish changes.</p></div>
+      <div><h2 class="section-title" id="ai-review-title">AI Updates</h2><p class="section-sub">Review distinct project proposals, compare the recorded changes, and save a private human assessment. Assessment never publishes a change.</p></div>
       <button class="btn btn--secondary" type="button" id="ai-review-refresh">Refresh</button>
     </div>
     <section class="ai-review-status" id="ai-review-status" aria-live="polite"></section>
-    <details class="ai-review-metrics" id="ai-review-metrics">
-      <summary id="ai-review-metrics-summary">Review metrics · loading…</summary>
-      <div id="ai-review-metrics-content" aria-label="Detailed run reliability and proposal assessments"></div>
-    </details>
+    <section class="ai-updates-summary" id="ai-updates-summary" aria-live="polite"></section>
     <div class="ai-review-filters" role="search">
       <label>From <input type="date" id="ai-review-from"></label>
       <label>To <input type="date" id="ai-review-to"></label>
@@ -17,11 +14,20 @@
       <button class="btn btn--primary" type="button" id="ai-review-apply">Apply</button>
     </div>
     <div class="ai-review-layout">
-      <section class="ai-review-run-column" aria-label="Maintenance runs">
+      <section class="ai-review-run-column" aria-label="Project proposals">
         <div class="ai-review-list-meta" id="ai-review-list-meta" aria-live="polite"></div>
         <div id="ai-review-runs" class="ai-review-runs" aria-live="polite"></div>
-        <button class="btn btn--secondary ai-review-more" type="button" id="ai-review-more" hidden>Load older runs</button>
+        <button class="btn btn--secondary ai-review-more" type="button" id="ai-review-more" hidden>Load older results</button>
+        <details class="ai-review-diagnostics" id="ai-review-diagnostics">
+          <summary>Run history and diagnostics</summary>
+          <details class="ai-review-metrics" id="ai-review-metrics">
+            <summary id="ai-review-metrics-summary">Review metrics · loading…</summary>
+            <div id="ai-review-metrics-content" aria-label="Detailed run reliability and proposal assessments"></div>
+          </details>
+        <div class="ai-review-diagnostics-status" id="ai-review-diagnostics-status"></div>
+        <div id="ai-review-diagnostics-runs" class="ai-review-runs" aria-label="Maintenance run history"></div>
+      </details>
       </section>
-      <section class="ai-review-detail" id="ai-review-detail" aria-label="Run details" aria-live="polite"><p class="empty-state">Select a run to inspect its events and drafts.</p></section>
+      <section class="ai-review-detail" id="ai-review-detail" aria-label="Project comparison and review" aria-live="polite"><p class="empty-state">Select a project proposal to compare its changes and record an assessment.</p></section>
     </div>
   </div>

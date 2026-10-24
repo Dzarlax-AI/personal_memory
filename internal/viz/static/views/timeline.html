@@ -1,4 +1,9 @@
   <div class="view view-full" id="timeline-view">
-    <h2 class="sr-only">Fact timeline</h2>
+    <div class="timeline-heading"><h1 class="page-title">Memory history</h1><label for="timeline-range">Range</label><select id="timeline-range"><option value="90">Last 90 days</option><option value="365">Last year</option><option value="all">All dates</option></select><button id="timeline-list-toggle" class="toolbar-btn" type="button" aria-expanded="false" aria-controls="timeline-list">Show accessible list</button></div>
+    <div id="timeline-status" class="timeline-status" role="status" aria-live="polite">Timeline is ready to load.</div>
     <div id="timeline-container" style="flex:1;"></div>
+    <section id="timeline-list" class="timeline-accessible-list" hidden aria-label="Timeline events">
+      <div id="timeline-list-items"></div>
+      <button id="timeline-list-more" class="toolbar-btn load-more" type="button" hidden>Load more timeline events</button>
+    </section>
   </div>
