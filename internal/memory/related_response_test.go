@@ -31,7 +31,7 @@ func relatedResponseServer(t *testing.T, searchResponses ...string) (*Server, *i
 			http.NotFound(w, r)
 			return
 		}
-		if strings.HasSuffix(r.URL.Path, "/points/search") {
+		if strings.HasSuffix(r.URL.Path, "/points/query") {
 			if searches >= len(searchResponses) {
 				http.Error(w, "unexpected search", http.StatusInternalServerError)
 				return
@@ -104,8 +104,8 @@ func TestRegisterRelatedToolsDeclaresOutputSchemasAndNeutralDescriptions(t *test
 
 func TestStoreFactReturnsStructuredStoredResultAndEquivalentFallback(t *testing.T) {
 	srv, searches, writes := relatedResponseServer(t,
-		`{"result":[]}`,
-		`{"result":[{"id":"related","score":0.81,"payload":{"text":"nearby fact","namespace":"projects","lifecycle_state":"historical"}}]}`,
+		`{"result":{"points":[]}}`,
+		`{"result":{"points":[{"id":"related","score":0.81,"payload":{"text":"nearby fact","namespace":"projects","lifecycle_state":"historical"}}]}}`,
 	)
 	fact := "new durable fact"
 	result, err := srv.storeFact(context.Background(), toolRequest(map[string]interface{}{"fact": fact, "namespace": "projects"}))
@@ -229,12 +229,12 @@ func TestRelatedCandidateFallbackMarshalFailureDoesNotLeakText(t *testing.T) {
 
 func TestStoreFactDuplicateKeepsOtherRelatedCandidatesWithoutRepeatingBlocker(t *testing.T) {
 	srv, _, writes := relatedResponseServer(t,
-		`{"result":[{"id":"blocker","score":0.99,"payload":{"text":"same fact","namespace":"projects","lifecycle_state":"current"}}]}`,
-		`{"result":[
+		`{"result":{"points":[{"id":"blocker","score":0.99,"payload":{"text":"same fact","namespace":"projects","lifecycle_state":"current"}}]}}`,
+		`{"result":{"points":[
 			{"id":"blocker","score":0.99,"payload":{"text":"same fact","namespace":"projects","lifecycle_state":"current"}},
 			{"id":"superseded","score":0.98,"payload":{"text":"old version","namespace":"projects","lifecycle_state":"superseded","superseded_by":["replacement"]}},
 			{"id":"related","score":0.80,"payload":{"text":"neighbor","namespace":"projects","lifecycle_state":"disputed"}}
-		]}`,
+		]}}`,
 	)
 	result, err := srv.storeFact(context.Background(), toolRequest(map[string]interface{}{"fact": "same", "namespace": "projects"}))
 	if err != nil || result.IsError {
@@ -271,19 +271,19 @@ func TestImportFactsUsesLifecycleAwareDuplicateSelection(t *testing.T) {
 	}{
 		{
 			name:           "valid superseded candidate does not block",
-			searchResponse: `{"result":[{"id":"old","score":0.99,"payload":{"text":"old version","namespace":"projects","lifecycle_state":"superseded","superseded_by":["replacement"]}}]}`,
+			searchResponse: `{"result":{"points":[{"id":"old","score":0.99,"payload":{"text":"old version","namespace":"projects","lifecycle_state":"superseded","superseded_by":["replacement"]}}]}}`,
 			wantStatus:     "stored",
 			wantWrites:     1,
 		},
 		{
 			name:           "current candidate still blocks",
-			searchResponse: `{"result":[{"id":"current","score":0.99,"payload":{"text":"same fact","namespace":"projects","lifecycle_state":"current"}}]}`,
+			searchResponse: `{"result":{"points":[{"id":"current","score":0.99,"payload":{"text":"same fact","namespace":"projects","lifecycle_state":"current"}}]}}`,
 			wantStatus:     "duplicate",
 			wantWrites:     0,
 		},
 		{
 			name:           "invalid superseded candidate still blocks",
-			searchResponse: `{"result":[{"id":"invalid","score":0.99,"payload":{"text":"broken old version","namespace":"projects","lifecycle_state":"superseded"}}]}`,
+			searchResponse: `{"result":{"points":[{"id":"invalid","score":0.99,"payload":{"text":"broken old version","namespace":"projects","lifecycle_state":"superseded"}}]}}`,
 			wantStatus:     "duplicate",
 			wantWrites:     0,
 		},
@@ -319,7 +319,7 @@ func TestImportFactsRefusesInconclusiveDedupWindow(t *testing.T) {
 			i,
 		)
 	}
-	srv, searches, writes := relatedResponseServer(t, `{"result":[`+strings.Join(points, ",")+`]}`)
+	srv, searches, writes := relatedResponseServer(t, `{"result":{"points":[`+strings.Join(points, ",")+`]}}`)
 
 	result, err := srv.importFacts(context.Background(), toolRequest(map[string]interface{}{
 		"facts": `[{"text":"replacement","namespace":"projects"}]`,
@@ -350,8 +350,8 @@ func TestStoreFactDuplicateLifecycleRules(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dedup := fmt.Sprintf(`{"result":[{"id":"blocker","score":0.99,"payload":{"text":"existing","namespace":"projects"%s}}]}`, tt.lifecycle)
-			srv, _, writes := relatedResponseServer(t, dedup, `{"result":[]}`)
+			dedup := fmt.Sprintf(`{"result":{"points":[{"id":"blocker","score":0.99,"payload":{"text":"existing","namespace":"projects"%s}}]}}`, tt.lifecycle)
+			srv, _, writes := relatedResponseServer(t, dedup, `{"result":{"points":[]}}`)
 			result, err := srv.storeFact(context.Background(), toolRequest(map[string]interface{}{"fact": "candidate", "namespace": "projects"}))
 			if err != nil || result.IsError {
 				t.Fatalf("store response failed: %#v %v", result, err)
@@ -366,7 +366,7 @@ func TestStoreFactDuplicateLifecycleRules(t *testing.T) {
 
 func TestStoreFactValidSupersededHighScoreAllowsWrite(t *testing.T) {
 	superseded := `{"id":"old","score":0.999,"payload":{"text":"old","namespace":"projects","lifecycle_state":"superseded","superseded_by":["new"]}}`
-	srv, _, writes := relatedResponseServer(t, `{"result":[`+superseded+`]}`, `{"result":[`+superseded+`]}`)
+	srv, _, writes := relatedResponseServer(t, `{"result":{"points":[`+superseded+`]}}`, `{"result":{"points":[`+superseded+`]}}`)
 	result, err := srv.storeFact(context.Background(), toolRequest(map[string]interface{}{"fact": "replacement", "namespace": "projects"}))
 	if err != nil || result.IsError {
 		t.Fatalf("store failed: %#v %v", result, err)
@@ -382,7 +382,7 @@ func TestStoreFactDedupCandidateSaturationIsInconclusive(t *testing.T) {
 	for i := 0; i < lifecycleCandidateLimit(3); i++ {
 		points = append(points, fmt.Sprintf(`{"id":"old-%d","score":0.99,"payload":{"text":"old","lifecycle_state":"superseded","superseded_by":["new"]}}`, i))
 	}
-	srv, searches, writes := relatedResponseServer(t, `{"result":[`+strings.Join(points, ",")+`]}`)
+	srv, searches, writes := relatedResponseServer(t, `{"result":{"points":[`+strings.Join(points, ",")+`]}}`)
 	result, err := srv.storeFact(context.Background(), toolRequest(map[string]interface{}{"fact": "candidate"}))
 	if err != nil {
 		t.Fatal(err)
@@ -417,7 +417,7 @@ func TestStoreFactSupersededHeadroomDoesNotMaskLaterBlocker(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		if !strings.HasSuffix(r.URL.Path, "/points/search") {
+		if !strings.HasSuffix(r.URL.Path, "/points/query") {
 			writes++
 			_, _ = w.Write([]byte(`{"result":{"status":"completed"}}`))
 			return
@@ -433,10 +433,10 @@ func TestStoreFactSupersededHeadroomDoesNotMaskLaterBlocker(t *testing.T) {
 		}
 		searchRequests = append(searchRequests, request)
 		if len(searchRequests) == 1 {
-			_, _ = w.Write([]byte(`{"result":[` + strings.Join(points, ",") + `]}`))
+			_, _ = w.Write([]byte(`{"result":{"points":[` + strings.Join(points, ",") + `]}}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"result":[]}`))
+		_, _ = w.Write([]byte(`{"result":{"points":[]}}`))
 	}))
 	defer qdrantServer.Close()
 
@@ -472,12 +472,12 @@ func TestStoreFactSupersededHeadroomDoesNotMaskLaterBlocker(t *testing.T) {
 }
 
 func TestFindRelatedReturnsStructuredAllStateResultsAfterFiltering(t *testing.T) {
-	srv, _, writes := relatedResponseServer(t, `{"result":[
+	srv, _, writes := relatedResponseServer(t, `{"result":{"points":[
 		{"id":"blocker","score":0.99,"payload":{"text":"current duplicate","lifecycle_state":"current"}},
 		{"id":"old","score":0.98,"payload":{"text":"superseded high","lifecycle_state":"superseded","superseded_by":["new"]}},
 		{"id":"historical","score":0.90,"payload":{"text":"historical related","lifecycle_state":"historical"}},
 		{"id":"expired","score":0.80,"payload":{"text":"expired related","valid_until":"2020-01-01"}}
-	]}`)
+	]}}`)
 	result, err := srv.findRelated(context.Background(), toolRequest(map[string]interface{}{"query": "related", "limit": float64(5)}))
 	if err != nil || result.IsError {
 		t.Fatalf("find failed: %#v %v", result, err)
@@ -541,7 +541,7 @@ func TestStoreFactSearchErrorsPreserveFailOpenAndKnownDuplicate(t *testing.T) {
 	t.Run("related search blocker closes dedup failure fail open", func(t *testing.T) {
 		srv, _, writes := relatedResponseServer(t,
 			"ERROR",
-			`{"result":[{"id":"blocker","score":0.99,"payload":{"text":"same","lifecycle_state":"current"}}]}`,
+			`{"result":{"points":[{"id":"blocker","score":0.99,"payload":{"text":"same","lifecycle_state":"current"}}]}}`,
 		)
 		result, err := srv.storeFact(context.Background(), toolRequest(map[string]interface{}{"fact": "same"}))
 		if err != nil || result.IsError {
@@ -564,8 +564,8 @@ func TestStoreFactSearchErrorsPreserveFailOpenAndKnownDuplicate(t *testing.T) {
 
 	t.Run("related search blocker catches between-query race", func(t *testing.T) {
 		srv, _, writes := relatedResponseServer(t,
-			`{"result":[]}`,
-			`{"result":[{"id":"racing-blocker","score":0.99,"payload":{"text":"appeared after preflight","lifecycle_state":"current"}}]}`,
+			`{"result":{"points":[]}}`,
+			`{"result":{"points":[{"id":"racing-blocker","score":0.99,"payload":{"text":"appeared after preflight","lifecycle_state":"current"}}]}}`,
 		)
 		result, err := srv.storeFact(context.Background(), toolRequest(map[string]interface{}{"fact": "same"}))
 		if err != nil || result.IsError {
@@ -579,7 +579,7 @@ func TestStoreFactSearchErrorsPreserveFailOpenAndKnownDuplicate(t *testing.T) {
 
 	t.Run("related failure does not weaken duplicate", func(t *testing.T) {
 		srv, _, writes := relatedResponseServer(t,
-			`{"result":[{"id":"blocker","score":0.99,"payload":{"text":"same","lifecycle_state":"current"}}]}`,
+			`{"result":{"points":[{"id":"blocker","score":0.99,"payload":{"text":"same","lifecycle_state":"current"}}]}}`,
 			"ERROR",
 		)
 		result, err := srv.storeFact(context.Background(), toolRequest(map[string]interface{}{"fact": "same"}))
@@ -607,7 +607,7 @@ func TestStoreFactRefusesActiveExactIDBeforeUnavailablePreflight(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/points/"+pointID):
 			_, _ = w.Write([]byte(`{"result":{"id":"` + pointID + `","payload":{"text":"existing canonical fact","namespace":"projects","lifecycle_state":"current","canonical":true}}}`))
-		case strings.HasSuffix(r.URL.Path, "/points/search"):
+		case strings.HasSuffix(r.URL.Path, "/points/query"):
 			searches++
 			http.Error(w, "unavailable", http.StatusBadGateway)
 		default:

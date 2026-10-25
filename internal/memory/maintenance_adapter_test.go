@@ -68,9 +68,9 @@ func TestOrdinaryWritesDoNotReplaceInactiveDeterministicIDs(t *testing.T) {
 				switch {
 				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/points/"+pointID):
 					_, _ = w.Write([]byte(`{"result":{"id":"` + pointID + `","vector":[],"payload":{"text":"same inactive fact","namespace":"projects","maintenance_status":"quarantined","quarantined_at":"2026-08-14T00:00:00Z","quarantine_reason":"expired","quarantine_batch_id":"batch"}}}`))
-				case strings.HasSuffix(r.URL.Path, "/points/search"):
+				case strings.HasSuffix(r.URL.Path, "/points/query"):
 					searches++
-					_, _ = w.Write([]byte(`{"result":[]}`))
+					_, _ = w.Write([]byte(`{"result":{"points":[]}}`))
 				case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/points"):
 					writes++
 					_, _ = w.Write([]byte(`{"status":"ok","result":{"status":"completed"}}`))

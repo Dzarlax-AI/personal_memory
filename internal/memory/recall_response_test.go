@@ -306,7 +306,7 @@ func newLifecycleRecallResponseServer(t *testing.T, observeSearch func(map[strin
 
 	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.HasSuffix(r.URL.Path, "/points/search"):
+		case strings.HasSuffix(r.URL.Path, "/points/query"):
 			var body map[string]interface{}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Errorf("decode search: %v", err)
@@ -315,13 +315,13 @@ func newLifecycleRecallResponseServer(t *testing.T, observeSearch func(map[strin
 			if observeSearch != nil {
 				observeSearch(body)
 			}
-			_, _ = w.Write([]byte(`{"result":[
+			_, _ = w.Write([]byte(`{"result":{"points":[
 				{"id":"11111111-1111-1111-1111-111111111111","score":0.91,"payload":{"text":"current","namespace":"projects","tags":["memory"],"primary_tag":"memory","recall_count":0,"lifecycle_state":"current","canonical":true}},
 				{"id":"22222222-2222-2222-2222-222222222222","score":0.90,"payload":{"text":"historical","namespace":"projects","lifecycle_state":"historical"}},
 				{"id":"33333333-3333-3333-3333-333333333333","score":0.89,"payload":{"text":"superseded","namespace":"projects","lifecycle_state":"superseded","superseded_by":["11111111-1111-1111-1111-111111111111"]}},
 				{"id":42,"score":0.88,"payload":{"text":"disputed","namespace":"projects","lifecycle_state":"disputed","provenance":{"source":"user"}}},
 				{"id":"55555555-5555-5555-5555-555555555555","score":0.87,"payload":{"text":"expired-now","namespace":"projects","valid_until":"2025-06-01"}}
-			]}`))
+			]}}`))
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/points/"):
 			id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 			_, _ = fmt.Fprintf(w, `{"result":{"id":%q,"payload":{"recall_count":0}}}`, id)

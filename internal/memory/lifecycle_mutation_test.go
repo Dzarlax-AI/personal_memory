@@ -195,9 +195,9 @@ func TestStoreFactWritesExplicitLifecyclePayload(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		if strings.HasSuffix(r.URL.Path, "/points/search") {
+		if strings.HasSuffix(r.URL.Path, "/points/query") {
 			searches++
-			_, _ = w.Write([]byte(`{"result":[]}`))
+			_, _ = w.Write([]byte(`{"result":{"points":[]}}`))
 			return
 		}
 		var body map[string]interface{}
@@ -390,8 +390,8 @@ func TestImportFactsPreservesLifecycleAndDoesNotLogPrivateText(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		if strings.HasSuffix(r.URL.Path, "/points/search") {
-			_, _ = w.Write([]byte(`{"result":[]}`))
+		if strings.HasSuffix(r.URL.Path, "/points/query") {
+			_, _ = w.Write([]byte(`{"result":{"points":[]}}`))
 			return
 		}
 		var body map[string]interface{}
@@ -447,8 +447,8 @@ func TestImportFactsBatchesEmbeddings(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/points/"):
 			http.NotFound(w, r)
-		case strings.HasSuffix(r.URL.Path, "/points/search"):
-			_, _ = w.Write([]byte(`{"result":[]}`))
+		case strings.HasSuffix(r.URL.Path, "/points/query"):
+			_, _ = w.Write([]byte(`{"result":{"points":[]}}`))
 		case r.Method == http.MethodPut && r.URL.Path == "/collections/memory/points":
 			upserts++
 			_, _ = w.Write([]byte(`{"status":"ok","result":{"status":"completed"}}`))
@@ -502,8 +502,8 @@ func TestImportFactsFallsBackToPerItemEmbedding(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/points/"):
 			http.NotFound(w, r)
-		case strings.HasSuffix(r.URL.Path, "/points/search"):
-			_, _ = w.Write([]byte(`{"result":[]}`))
+		case strings.HasSuffix(r.URL.Path, "/points/query"):
+			_, _ = w.Write([]byte(`{"result":{"points":[]}}`))
 		case r.Method == http.MethodPut && r.URL.Path == "/collections/memory/points":
 			upserts++
 			_, _ = w.Write([]byte(`{"status":"ok","result":{"status":"completed"}}`))

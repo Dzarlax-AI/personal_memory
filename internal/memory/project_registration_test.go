@@ -386,7 +386,7 @@ func TestRecallContextPreservesFiltersAndProtectedVisibility(t *testing.T) {
 	registered := ensureTestProject(t, s, registrationTestArgs("gamma-identity", "gamma"))
 	var gotFilter map[string]interface{}
 	qs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/points/search") {
+		if strings.HasSuffix(r.URL.Path, "/points/query") {
 			var body map[string]interface{}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Error(err)

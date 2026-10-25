@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNormalize(t *testing.T) {
@@ -30,6 +31,31 @@ func TestNormalizeCanonicalEquivalenceAndCaseFold(t *testing.T) {
 			}
 			if got := Normalize(tt.right); got != tt.want {
 				t.Fatalf("Normalize(right) = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeMalformedUTF8Terminates(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "invalid sequence from x-text regression", input: "\xf3\xcc\x80", want: "\xf3\xcc\x80"},
+		{name: "valid unicode control", input: "CAFÉ", want: "café"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := make(chan string, 1)
+			go func() { result <- Normalize(tt.input) }()
+			select {
+			case got := <-result:
+				if got != tt.want {
+					t.Fatalf("Normalize() = %q, want %q", got, tt.want)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("Normalize() did not terminate for input")
 			}
 		})
 	}

@@ -130,15 +130,15 @@ func TestRunCLILiveProfileOverrideReembedsPopulatedVector(t *testing.T) {
 			}}}`))
 			return
 		}
-		if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/search" {
+		if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/query" {
 			var body struct {
-				Vector []float32 `json:"vector"`
+				Vector []float32 `json:"query"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Errorf("decode Qdrant search: %v", err)
 			}
 			searchedVector = body.Vector
-			_, _ = w.Write([]byte(`{"result":[{"id":42,"score":1,"payload":{"text":"numeric","lifecycle_state":"current","canonical":true,"supersedes":[],"superseded_by":[]}}]}`))
+			_, _ = w.Write([]byte(`{"result":{"points":[{"id":42,"score":1,"payload":{"text":"numeric","lifecycle_state":"current","canonical":true,"supersedes":[],"superseded_by":[]}}]}}`))
 			return
 		}
 		http.Error(w, fmt.Sprintf("unexpected %s %s", r.Method, r.URL.Path), http.StatusInternalServerError)

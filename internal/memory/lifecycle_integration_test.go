@@ -68,7 +68,7 @@ func TestRecallFactsAppliesLifecycleVisibilityRankingAndFilter(t *testing.T) {
 	writes := 0
 	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.HasSuffix(r.URL.Path, "/points/search"):
+		case strings.HasSuffix(r.URL.Path, "/points/query"):
 			var body map[string]interface{}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Errorf("decode search: %v", err)
@@ -78,14 +78,14 @@ func TestRecallFactsAppliesLifecycleVisibilityRankingAndFilter(t *testing.T) {
 			searchFilter, _ = body["filter"].(map[string]interface{})
 			searchLimit = int(body["limit"].(float64))
 			mu.Unlock()
-			_, _ = w.Write([]byte(`{"result":[
+			_, _ = w.Write([]byte(`{"result":{"points":[
 				{"id":"33333333-3333-3333-3333-333333333333","score":0.99,"payload":{"text":"superseded","namespace":"projects","lifecycle_state":"superseded","superseded_by":["11111111-1111-1111-1111-111111111111"]}},
 				{"id":"22222222-2222-2222-2222-222222222222","score":0.90,"payload":{"text":"ordinary","namespace":"projects","lifecycle_state":"current"}},
 				{"id":"66666666-6666-6666-6666-666666666666","score":0.80,"payload":{"text":"legacy","namespace":"projects"}},
 				{"id":"11111111-1111-1111-1111-111111111111","score":0.70,"payload":{"text":"canonical","namespace":"projects","lifecycle_state":"current","canonical":true,"provenance":{"source":"user","reference":"decision-7"}}},
 				{"id":"44444444-4444-4444-4444-444444444444","score":0.95,"payload":{"text":"malformed","namespace":"projects","lifecycle_state":"current","canonical":"yes"}},
 				{"id":"55555555-5555-5555-5555-555555555555","score":0.96,"payload":{"text":"expired","namespace":"projects","lifecycle_state":"current","canonical":true,"valid_until":"2020-01-01"}}
-			]}`))
+			]}}`))
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/points/"):
 			id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 			_, _ = fmt.Fprintf(w, `{"result":{"id":%q,"payload":{"recall_count":0}}}`, id)
@@ -182,17 +182,17 @@ func TestFindRelatedKeepsHistoryInspectableAndLifecycleOrdered(t *testing.T) {
 	defer embedServer.Close()
 	writes := 0
 	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/points/search") {
+		if !strings.HasSuffix(r.URL.Path, "/points/query") {
 			writes++
 			http.Error(w, "unexpected write", http.StatusBadRequest)
 			return
 		}
-		_, _ = w.Write([]byte(`{"result":[
+		_, _ = w.Write([]byte(`{"result":{"points":[
 			{"id":"4","score":0.95,"payload":{"text":"invalid related","namespace":"projects","lifecycle_state":"wrong"}},
 			{"id":"2","score":0.90,"payload":{"text":"historical related","namespace":"projects","lifecycle_state":"historical","verified_at":"2026-07-21T08:30:00Z"}},
 			{"id":"3","score":0.80,"payload":{"text":"superseded related","namespace":"projects","lifecycle_state":"superseded","superseded_by":["1"]}},
 			{"id":"1","score":0.70,"payload":{"text":"current related","namespace":"projects","lifecycle_state":"current","canonical":true}}
-		]}`))
+		]}}`))
 	}))
 	defer qdrantServer.Close()
 	srv := NewServer(qdrant.NewClient(qdrantServer.URL, "memory"), embeddings.NewClient(embedServer.URL), NewCache(time.Minute), "test", .97, .60, .90)

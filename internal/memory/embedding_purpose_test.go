@@ -41,8 +41,8 @@ func TestMemoryRuntimeUsesFactAndQueryPurposes(t *testing.T) {
 			w.WriteHeader(404)
 			return
 		}
-		if strings.HasSuffix(r.URL.Path, "/search") {
-			w.Write([]byte(`{"result":[]}`))
+		if strings.HasSuffix(r.URL.Path, "/query") {
+			w.Write([]byte(`{"result":{"points":[]}}`))
 			return
 		}
 		w.Write([]byte(`{"result":{"status":"completed"}}`))

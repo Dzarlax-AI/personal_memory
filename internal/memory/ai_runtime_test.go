@@ -62,13 +62,13 @@ func (b *aiTestBackend) handle(w http.ResponseWriter, r *http.Request) {
 	defer b.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	switch {
-	case strings.HasSuffix(r.URL.Path, "/points/search"):
+	case strings.HasSuffix(r.URL.Path, "/points/query"):
 		b.searches++
 		points := b.points
 		if points == nil {
 			points = []qdrant.Point{}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"result": points})
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": map[string]any{"points": points}})
 	case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/points/"):
 		b.gets++
 		if b.getFails {

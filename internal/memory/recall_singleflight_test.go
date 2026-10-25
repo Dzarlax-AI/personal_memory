@@ -30,9 +30,9 @@ func TestRecallFactsColdMissSingleflightCountsEveryCallerOnce(t *testing.T) {
 	defer embedServer.Close()
 	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.HasSuffix(r.URL.Path, "/points/search"):
+		case strings.HasSuffix(r.URL.Path, "/points/query"):
 			searches.Add(1)
-			_, _ = w.Write([]byte(`{"result":[{"id":"fact-id","score":0.9,"payload":{"text":"fact","namespace":"projects","recall_count":0}}]}`))
+			_, _ = w.Write([]byte(`{"result":{"points":[{"id":"fact-id","score":0.9,"payload":{"text":"fact","namespace":"projects","recall_count":0}}]}}`))
 		case r.Method == http.MethodGet:
 			backendMu.Lock()
 			count := backendCount
@@ -116,10 +116,10 @@ func TestRecallFactsInvalidationPreventsStaleLeaderPublishAndWakesWaiter(t *test
 		if search == 1 {
 			close(firstSearchEntered)
 			<-releaseFirst
-			_, _ = w.Write([]byte(`{"result":[{"id":"old-id","score":0.9,"payload":{"text":"old","recall_count":0}}]}`))
+			_, _ = w.Write([]byte(`{"result":{"points":[{"id":"old-id","score":0.9,"payload":{"text":"old","recall_count":0}}]}}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"result":[{"id":"new-id","score":0.9,"payload":{"text":"new","recall_count":0}}]}`))
+		_, _ = w.Write([]byte(`{"result":{"points":[{"id":"new-id","score":0.9,"payload":{"text":"new","recall_count":0}}]}}`))
 	})
 	key := recallFactsCacheKey("fact", "", nil, 1, LifecycleRecallOptions{Mode: RecallLifecycleCurrent})
 	results := make(chan string, 2)
@@ -236,7 +236,7 @@ func newSingleflightTestServer(t *testing.T, search func(http.ResponseWriter)) *
 func newSingleflightEmbedTestServer(t *testing.T, embed func(http.ResponseWriter)) *Server {
 	t.Helper()
 	return newSingleflightServers(t, embed, func(w http.ResponseWriter) {
-		_, _ = w.Write([]byte(`{"result":[{"id":"fact-id","score":0.9,"payload":{"text":"fresh","recall_count":0}}]}`))
+		_, _ = w.Write([]byte(`{"result":{"points":[{"id":"fact-id","score":0.9,"payload":{"text":"fresh","recall_count":0}}]}}`))
 	})
 }
 
@@ -246,7 +246,7 @@ func newSingleflightServers(t *testing.T, embed func(http.ResponseWriter), searc
 	t.Cleanup(embedServer.Close)
 	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.HasSuffix(r.URL.Path, "/points/search"):
+		case strings.HasSuffix(r.URL.Path, "/points/query"):
 			search(w)
 		case r.Method == http.MethodGet:
 			id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]

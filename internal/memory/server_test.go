@@ -38,7 +38,7 @@ func newMutationTestServer(t *testing.T, searchResult string) (*Server, *int) {
 
 	writes := 0
 	qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/points/search") {
+		if strings.HasSuffix(r.URL.Path, "/points/query") {
 			_, _ = w.Write([]byte(searchResult))
 			return
 		}
@@ -56,10 +56,10 @@ func newMutationTestServer(t *testing.T, searchResult string) (*Server, *int) {
 }
 
 func TestUpdateFactRefusesAmbiguousMatch(t *testing.T) {
-	srv, writes := newMutationTestServer(t, `{"result":[
+	srv, writes := newMutationTestServer(t, `{"result":{"points":[
 		{"id":"11111111-1111-1111-1111-111111111111","score":0.950,"payload":{"text":"first","namespace":"personal"}},
 		{"id":"22222222-2222-2222-2222-222222222222","score":0.945,"payload":{"text":"second","namespace":"personal"}}
-	]}`)
+	]}}`)
 
 	result, err := srv.updateFact(context.Background(), toolRequest(map[string]interface{}{
 		"old_query": "similar fact", "new_fact": "replacement", "namespace": "personal",
@@ -76,9 +76,9 @@ func TestUpdateFactRefusesAmbiguousMatch(t *testing.T) {
 }
 
 func TestDeleteFactRefusesLowScore(t *testing.T) {
-	srv, writes := newMutationTestServer(t, `{"result":[
+	srv, writes := newMutationTestServer(t, `{"result":{"points":[
 		{"id":"11111111-1111-1111-1111-111111111111","score":0.72,"payload":{"text":"weak match","namespace":"personal"}}
-	]}`)
+	]}}`)
 
 	result, err := srv.deleteFact(context.Background(), toolRequest(map[string]interface{}{
 		"query": "unrelated", "namespace": "personal",

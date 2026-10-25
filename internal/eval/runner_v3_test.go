@@ -94,12 +94,12 @@ func (fake *fixtureQdrant) handler(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(`{"status":"ok","result":{"status":"completed"}}`))
 			return
 		}
-		if r.Method == http.MethodPost && len(parts) == 3 && parts[2] == "search" {
+		if r.Method == http.MethodPost && len(parts) == 3 && parts[2] == "query" {
 			result := fake.searchResult
 			if result == "" {
 				result = `[]`
 			}
-			fmt.Fprintf(w, `{"result":%s}`, result)
+			fmt.Fprintf(w, `{"result":{"points":%s}}`, result)
 			return
 		}
 	}
@@ -821,8 +821,8 @@ func TestV3VectorOnlyFixtureAndLivePreserveDenseOutput(t *testing.T) {
 			writeLiveIdentityCollection(w, 2)
 			return
 		}
-		if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/search" {
-			fmt.Fprintf(w, `{"result":%s}`, searchResult)
+		if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/query" {
+			fmt.Fprintf(w, `{"result":{"points":%s}}`, searchResult)
 			return
 		}
 		http.Error(w, "unexpected request", http.StatusInternalServerError)

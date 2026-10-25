@@ -366,9 +366,9 @@ func (c *Client) upsert(ctx context.Context, point Point, id any) error {
 
 // Search performs a vector similarity search with optional filters.
 func (c *Client) Search(ctx context.Context, vector []float32, limit int, filters map[string]interface{}, scoreThreshold *float64) ([]Point, error) {
-	url := fmt.Sprintf("%s/collections/%s/points/search", c.url, c.collection)
+	url := fmt.Sprintf("%s/collections/%s/points/query", c.url, c.collection)
 	body := map[string]interface{}{
-		"vector":       vector,
+		"query":        vector,
 		"limit":        limit,
 		"with_payload": true,
 	}
@@ -384,17 +384,22 @@ func (c *Client) Search(ctx context.Context, vector []float32, limit int, filter
 		return nil, err
 	}
 
-	var result []struct {
-		ID      exactPointID           `json:"id"`
-		Score   float64                `json:"score"`
-		Payload map[string]interface{} `json:"payload"`
+	var result struct {
+		Points *[]struct {
+			ID      exactPointID           `json:"id"`
+			Score   float64                `json:"score"`
+			Payload map[string]interface{} `json:"payload"`
+		} `json:"points"`
 	}
 	if err := decodeRequiredResult(respBody, &result); err != nil {
 		return nil, fmt.Errorf("decode search response: %w", err)
 	}
+	if result.Points == nil {
+		return nil, fmt.Errorf("decode search response: points array is required")
+	}
 
-	points := make([]Point, len(result))
-	for i, r := range result {
+	points := make([]Point, len(*result.Points))
+	for i, r := range *result.Points {
 		if id := parsePointID(r.ID); id == "" {
 			return nil, fmt.Errorf("decode search response: point %d has no id", i)
 		}

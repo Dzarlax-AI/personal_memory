@@ -1,6 +1,6 @@
 module github.com/Dzarlax-AI/personal-memory
 
-go 1.24.3
+go 1.27.3
 
 require (
 	github.com/go-chi/chi/v5 v5.2.5
@@ -8,7 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.48.0
 	golang.org/x/sys v0.31.0
-	golang.org/x/text v0.34.0
+	golang.org/x/text v0.43.0
 )
 
 require (

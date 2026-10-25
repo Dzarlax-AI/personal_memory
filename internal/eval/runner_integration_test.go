@@ -275,12 +275,12 @@ func TestLiveRunnerUsesOnlySearchRequests(t *testing.T) {
 	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.Method+" "+r.URL.Path)
-		if r.Method != http.MethodPost || r.URL.Path != "/collections/memory/points/search" {
+		if r.Method != http.MethodPost || r.URL.Path != "/collections/memory/points/query" {
 			t.Errorf("live runner made non-search request: %s %s", r.Method, r.URL.Path)
 			http.Error(w, "unexpected request", http.StatusInternalServerError)
 			return
 		}
-		_, _ = w.Write([]byte(`{"result":[{"id":42,"score":1,"payload":{"text":"numeric"}}]}`))
+		_, _ = w.Write([]byte(`{"result":{"points":[{"id":42,"score":1,"payload":{"text":"numeric"}}]}}`))
 	}))
 	defer server.Close()
 	dataset, err := Load(strings.NewReader(validDataset))
@@ -318,12 +318,12 @@ func TestLiveV3MinimumDatasetRunRenderDecodeRoundTrip(t *testing.T) {
 			}}`))
 			return
 		}
-		if r.Method != http.MethodPost || r.URL.Path != "/collections/memory/points/search" {
+		if r.Method != http.MethodPost || r.URL.Path != "/collections/memory/points/query" {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 			http.Error(w, "unexpected request", http.StatusInternalServerError)
 			return
 		}
-		_, _ = w.Write([]byte(`{"result":[{
+		_, _ = w.Write([]byte(`{"result":{"points":[{
 			"id":42,
 			"score":1,
 			"payload":{
@@ -331,7 +331,7 @@ func TestLiveV3MinimumDatasetRunRenderDecodeRoundTrip(t *testing.T) {
 				"lifecycle_state":"current",
 				"canonical":true
 			}
-		}]}`))
+		}]}}`))
 	}))
 	defer server.Close()
 
@@ -374,15 +374,15 @@ func TestLiveV3HybridFiltersBeforeBoundedRerankAndPreservesScore(t *testing.T) {
 			writeLiveIdentityCollection(w, 1)
 			return
 		}
-		if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/search" {
+		if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/query" {
 			searches++
 			if err := json.NewDecoder(r.Body).Decode(&searchBody); err != nil {
 				t.Errorf("decode search: %v", err)
 			}
-			_, _ = w.Write([]byte(`{"result":[
+			_, _ = w.Write([]byte(`{"result":{"points":[
 				{"id":43,"score":0.99,"payload":{"text":"general memory","lifecycle_state":"current","canonical":false,"supersedes":[],"superseded_by":[]}},
 				{"id":42,"score":0.4,"payload":{"text":"incident PM-1427","lifecycle_state":"current","canonical":false,"supersedes":[],"superseded_by":[]}}
-			]}`))
+			]}}`))
 			return
 		}
 		http.Error(w, "unexpected request", http.StatusInternalServerError)
@@ -436,14 +436,14 @@ func TestLiveV3HierarchicalHybridRanksFoldersChunksAndFallsBack(t *testing.T) {
 					writeLiveIdentityCollection(w, 1)
 					return
 				}
-				if r.Method == http.MethodPost && r.URL.Path == "/collections/doc_folders/points/search" {
-					_, _ = w.Write([]byte(`{"result":[
+				if r.Method == http.MethodPost && r.URL.Path == "/collections/doc_folders/points/query" {
+					_, _ = w.Write([]byte(`{"result":{"points":[
 						{"id":51,"score":0.99,"payload":{"text":"general","folder_path":"/docs/a"}},
 						{"id":52,"score":0.4,"payload":{"summary":"PM-1427 folder","folder_path":"/docs/b"}}
-					]}`))
+					]}}`))
 					return
 				}
-				if r.Method == http.MethodPost && r.URL.Path == "/collections/doc_chunks/points/search" {
+				if r.Method == http.MethodPost && r.URL.Path == "/collections/doc_chunks/points/query" {
 					chunkSearches++
 					var body map[string]any
 					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -456,14 +456,14 @@ func TestLiveV3HierarchicalHybridRanksFoldersChunksAndFallsBack(t *testing.T) {
 							t.Errorf("selected folder filter = %s", encoded)
 						}
 						if fallback {
-							_, _ = w.Write([]byte(`{"result":[]}`))
+							_, _ = w.Write([]byte(`{"result":{"points":[]}}`))
 							return
 						}
 					}
-					_, _ = w.Write([]byte(`{"result":[
+					_, _ = w.Write([]byte(`{"result":{"points":[
 						{"id":43,"score":0.99,"payload":{"text":"general","heading":"other","file_path":"/docs/b/other.md"}},
 						{"id":42,"score":0.4,"payload":{"text":"PM-1427 details","heading":"incident","file_path":"/docs/b/incident.md"}}
-					]}`))
+					]}}`))
 					return
 				}
 				http.Error(w, "unexpected request", http.StatusInternalServerError)
@@ -516,12 +516,12 @@ func TestLiveV3LegacyIdentityAndPurposeAwareQueryEmbedding(t *testing.T) {
 			}}}`))
 			return
 		}
-		if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/search" {
+		if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/query" {
 			searches++
-			_, _ = w.Write([]byte(`{"result":[{"id":42,"score":1,"payload":{
+			_, _ = w.Write([]byte(`{"result":{"points":[{"id":42,"score":1,"payload":{
 				"text":"numeric","lifecycle_state":"current","canonical":true,
 				"supersedes":[],"superseded_by":[]
-			}}]}`))
+			}}]}}`))
 			return
 		}
 		writes++
@@ -566,7 +566,7 @@ func TestLiveV3IdentityMismatchOrMalformedStopsBeforeSearchAndWrites(t *testing.
 					}}}`, profileJSON)
 					return
 				}
-				if strings.Contains(r.URL.Path, "/points/search") {
+				if strings.Contains(r.URL.Path, "/points/query") {
 					searches++
 				} else {
 					writes++
@@ -603,18 +603,18 @@ func TestLiveV3HybridLifecycleAuthorityUsesPoolBeforeTopK(t *testing.T) {
 					writeLiveIdentityCollection(w, 4)
 					return
 				}
-				if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/search" {
+				if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/query" {
 					searches++
 					state := "historical"
 					if intent == QueryIntentCurrent {
 						state = "current"
 					}
-					fmt.Fprintf(w, `{"result":[
+					fmt.Fprintf(w, `{"result":{"points":[
 						{"id":43,"score":0.99,"payload":{"text":"PM-1427 alpha","lifecycle_state":"%s","canonical":false,"supersedes":[],"superseded_by":[]}},
 						{"id":44,"score":0.98,"payload":{"text":"PM-1427 beta","lifecycle_state":"%s","canonical":false,"supersedes":[],"superseded_by":[]}},
 						{"id":45,"score":0.97,"payload":{"text":"PM-1427 gamma","lifecycle_state":"%s","canonical":false,"supersedes":[],"superseded_by":[]}},
 						{"id":42,"score":0.1,"payload":{"text":"unrelated canonical","lifecycle_state":"current","canonical":true,"supersedes":[],"superseded_by":[]}}
-					]}`, state, state, state)
+					]}}`, state, state, state)
 					return
 				}
 				http.Error(w, "unexpected request", http.StatusInternalServerError)
@@ -661,7 +661,7 @@ func TestLiveV3HybridLifecyclePromotesCanonicalBeyondRankOneHundred(t *testing.T
 			writeLiveIdentityCollection(w, 101)
 			return
 		}
-		if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/search" {
+		if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/query" {
 			var body struct {
 				Limit int `json:"limit"`
 			}
@@ -686,7 +686,7 @@ func TestLiveV3HybridLifecyclePromotesCanonicalBeyondRankOneHundred(t *testing.T
 					"canonical": true, "supersedes": []any{}, "superseded_by": []any{},
 				},
 			})
-			_ = json.NewEncoder(w).Encode(map[string]any{"result": points})
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": map[string]any{"points": points}})
 			return
 		}
 		http.Error(w, "unexpected request", http.StatusInternalServerError)
@@ -734,19 +734,19 @@ func TestLiveProfileOverrideReembedsPopulatedQueryVector(t *testing.T) {
 			}}}`))
 			return
 		}
-		if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/search" {
+		if r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/query" {
 			searches++
 			var body struct {
-				Vector []float32 `json:"vector"`
+				Vector []float32 `json:"query"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Errorf("decode search: %v", err)
 			}
 			searchedVector = body.Vector
-			_, _ = w.Write([]byte(`{"result":[{"id":42,"score":1,"payload":{
+			_, _ = w.Write([]byte(`{"result":{"points":[{"id":42,"score":1,"payload":{
 				"text":"numeric","lifecycle_state":"current","canonical":true,
 				"supersedes":[],"superseded_by":[]
-			}}]}`))
+			}}]}}`))
 			return
 		}
 		http.Error(w, "unexpected request", http.StatusInternalServerError)
@@ -798,7 +798,7 @@ func TestLiveV2LifecycleEvidenceUsesExactReadWithoutChangingRanking(t *testing.T
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests = append(requests, r.Method+" "+r.URL.Path)
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/search":
+		case r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/query":
 			if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
 				t.Errorf("decode lifecycle ranking request: %v", err)
 				http.Error(w, "invalid request", http.StatusBadRequest)
@@ -814,12 +814,12 @@ func TestLiveV2LifecycleEvidenceUsesExactReadWithoutChangingRanking(t *testing.T
 						},
 					}
 				}
-				_ = json.NewEncoder(w).Encode(map[string]any{"result": results})
+				_ = json.NewEncoder(w).Encode(map[string]any{"result": map[string]any{"points": results}})
 				return
 			}
-			_, _ = w.Write([]byte(`{"result":[
+			_, _ = w.Write([]byte(`{"result":{"points":[
 				{"id":42,"score":0.7,"payload":{"text":"current","lifecycle_state":"current","canonical":true}}
-			]}`))
+			]}}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/collections/memory/points/999":
 			_, _ = w.Write([]byte(`{"result":{
 				"id":999,"vector":[1,0],
@@ -863,7 +863,7 @@ func TestLiveV2LifecycleEvidenceUsesExactReadWithoutChangingRanking(t *testing.T
 		t.Fatalf("gate result = passed %t failures %#v", report.GatesPassed, report.GateFailures)
 	}
 	wantRequests := []string{
-		"POST /collections/memory/points/search",
+		"POST /collections/memory/points/query",
 		"GET /collections/memory/points/999",
 	}
 	if fmt.Sprint(requests) != fmt.Sprint(wantRequests) {
@@ -883,7 +883,7 @@ func TestLiveFactRankingRespectsLifecycleIntentAndEvidenceBoundary(t *testing.T)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests = append(requests, r.Method+" "+r.URL.Path)
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/search":
+		case r.Method == http.MethodPost && r.URL.Path == "/collections/memory/points/query":
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Errorf("decode lifecycle intent request: %v", err)
@@ -891,16 +891,16 @@ func TestLiveFactRankingRespectsLifecycleIntentAndEvidenceBoundary(t *testing.T)
 				return
 			}
 			if _, current := body["filter"]; current {
-				_, _ = w.Write([]byte(`{"result":[
+				_, _ = w.Write([]byte(`{"result":{"points":[
 					{"id":42,"score":0.7,"payload":{"text":"current","lifecycle_state":"current","canonical":true}}
-				]}`))
+				]}}`))
 				return
 			}
-			_, _ = w.Write([]byte(`{"result":[
+			_, _ = w.Write([]byte(`{"result":{"points":[
 				{"id":43,"score":1.0,"payload":{"text":"historical","lifecycle_state":"historical"}},
 				{"id":44,"score":0.9,"payload":{"text":"disputed","lifecycle_state":"disputed"}},
 				{"id":42,"score":0.7,"payload":{"text":"current","lifecycle_state":"current","canonical":true}}
-			]}`))
+			]}}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/collections/memory/points/999":
 			_, _ = w.Write([]byte(`{"result":{
 				"id":999,"vector":[1,0],
@@ -963,9 +963,9 @@ func TestLiveFactRankingRespectsLifecycleIntentAndEvidenceBoundary(t *testing.T)
 		t.Fatalf("current Results = %v, want historical/disputed excluded", currentIDs)
 	}
 	wantRequests := []string{
-		"POST /collections/memory/points/search",
+		"POST /collections/memory/points/query",
 		"GET /collections/memory/points/999",
-		"POST /collections/memory/points/search",
+		"POST /collections/memory/points/query",
 	}
 	if fmt.Sprint(requests) != fmt.Sprint(wantRequests) {
 		t.Fatalf("requests = %v, want %v", requests, wantRequests)
@@ -980,9 +980,9 @@ func TestLiveV2CurrentIncludeExpectationKeepsCurrentFilter(t *testing.T) {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
-		_, _ = w.Write([]byte(`{"result":[
+		_, _ = w.Write([]byte(`{"result":{"points":[
 			{"id":42,"score":0.7,"payload":{"text":"current","lifecycle_state":"current","canonical":true}}
-		]}`))
+		]}}`))
 	}))
 	defer server.Close()
 
@@ -1016,10 +1016,10 @@ func TestLiveV2CurrentDemoteExpectationKeepsCurrentFilter(t *testing.T) {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
-		_, _ = w.Write([]byte(`{"result":[
+		_, _ = w.Write([]byte(`{"result":{"points":[
 			{"id":42,"score":0.9,"payload":{"text":"ordinary","lifecycle_state":"current","canonical":false}},
 			{"id":99,"score":0.7,"payload":{"text":"canonical","lifecycle_state":"current","canonical":true}}
-		]}`))
+		]}}`))
 	}))
 	defer server.Close()
 

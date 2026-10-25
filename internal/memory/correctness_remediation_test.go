@@ -66,8 +66,8 @@ func TestImportInvalidExpiryReportsInvalidWithoutEmbeddingOrWrite(t *testing.T) 
 
 func TestDuplicateResponseIncludesValidUntil(t *testing.T) {
 	srv, _, _ := relatedResponseServer(t,
-		`{"result":[{"id":"existing","score":0.99,"payload":{"text":"renew me","valid_until":"2026-12-31"}}]}`,
-		`{"result":[]}`,
+		`{"result":{"points":[{"id":"existing","score":0.99,"payload":{"text":"renew me","valid_until":"2026-12-31"}}]}}`,
+		`{"result":{"points":[]}}`,
 	)
 	result, err := srv.storeFact(context.Background(), toolRequest(map[string]interface{}{"fact": "new fact"}))
 	if err != nil || result.IsError {
@@ -88,8 +88,8 @@ func TestRecallSaturationIsNotReportedAsNormalEmpty(t *testing.T) {
 		points[i] = fmt.Sprintf(`{"id":"%08d-0000-0000-0000-000000000000","score":0.9,"payload":{"text":"hidden","valid_until":"tomorrow"}}`, i)
 	}
 	for name, response := range map[string]string{
-		"saturated": `{"result":[` + strings.Join(points, ",") + `]}`,
-		"empty":     `{"result":[]}`,
+		"saturated": `{"result":{"points":[` + strings.Join(points, ",") + `]}}`,
+		"empty":     `{"result":{"points":[]}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			embedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -97,7 +97,7 @@ func TestRecallSaturationIsNotReportedAsNormalEmpty(t *testing.T) {
 			}))
 			defer embedServer.Close()
 			qdrantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if strings.HasSuffix(r.URL.Path, "/points/search") {
+				if strings.HasSuffix(r.URL.Path, "/points/query") {
 					_, _ = w.Write([]byte(response))
 					return
 				}
@@ -134,8 +134,8 @@ func TestDispatchedStoreAndDeleteErrorsInvalidateRecallCache(t *testing.T) {
 			switch {
 			case r.Method == http.MethodGet:
 				http.NotFound(w, r)
-			case strings.HasSuffix(r.URL.Path, "/points/search"):
-				_, _ = w.Write([]byte(`{"result":[]}`))
+			case strings.HasSuffix(r.URL.Path, "/points/query"):
+				_, _ = w.Write([]byte(`{"result":{"points":[]}}`))
 			case r.Method == http.MethodPut:
 				http.Error(w, "response lost", http.StatusBadGateway)
 			default:
@@ -200,7 +200,7 @@ func TestDeterministicPointLookupFailureIsNotReportedAsCollision(t *testing.T) {
 				case r.Method == http.MethodGet:
 					w.WriteHeader(lookupResponse.status)
 					_, _ = w.Write([]byte(lookupResponse.body))
-				case strings.HasSuffix(r.URL.Path, "/points/search"):
+				case strings.HasSuffix(r.URL.Path, "/points/query"):
 					searches++
 					http.Error(w, "must not search", http.StatusInternalServerError)
 				case r.Method == http.MethodPut:

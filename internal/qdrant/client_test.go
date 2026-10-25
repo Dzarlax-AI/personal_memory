@@ -104,8 +104,8 @@ func TestScrollRequiresExplicitPointsArray(t *testing.T) {
 func TestReadOperationsRejectPointsWithoutIDs(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.HasSuffix(r.URL.Path, "/points/search"):
-			_, _ = w.Write([]byte(`{"result":[{"score":0.9,"payload":{}}]}`))
+		case strings.HasSuffix(r.URL.Path, "/points/query"):
+			_, _ = w.Write([]byte(`{"result":{"points":[{"score":0.9,"payload":{}}]}}`))
 		case strings.HasSuffix(r.URL.Path, "/points/scroll"):
 			_, _ = w.Write([]byte(`{"result":{"points":[{"payload":{}}],"next_page_offset":null}}`))
 		default:
@@ -120,6 +120,87 @@ func TestReadOperationsRejectPointsWithoutIDs(t *testing.T) {
 	}
 	if _, err := client.Scroll(context.Background(), 1, nil, nil, false); err == nil || !strings.Contains(err.Error(), "has no id") {
 		t.Fatalf("Scroll error = %v, want missing ID error", err)
+	}
+}
+
+func TestSearchUsesQueryAPIAndPreservesPointResults(t *testing.T) {
+	filters := map[string]interface{}{"must": []interface{}{map[string]interface{}{"key": "namespace", "match": map[string]interface{}{"value": "projects"}}}}
+	threshold := 0.73
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/collections/memory/points/query" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if !reflect.DeepEqual(body["query"], []any{float64(0.25), float64(0.75)}) {
+			t.Errorf("query = %#v", body["query"])
+		}
+		if _, exists := body["vector"]; exists {
+			t.Errorf("query request included deprecated vector field: %#v", body)
+		}
+		if body["limit"] != float64(7) || body["with_payload"] != true || body["score_threshold"] != threshold {
+			t.Errorf("query controls = %#v", body)
+		}
+		if !reflect.DeepEqual(body["filter"], filters) {
+			t.Errorf("filter = %#v, want %#v", body["filter"], filters)
+		}
+		_, _ = w.Write([]byte(`{"status":"ok","result":{"points":[{"id":18446744073709551615,"score":0.91,"payload":{"text":"numeric"}},{"id":"text-id","score":0.82,"payload":{"text":"string"}}]}}`))
+	}))
+	defer server.Close()
+
+	points, err := NewClient(server.URL, "memory").Search(context.Background(), []float32{0.25, 0.75}, 7, filters, &threshold)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Point{
+		{ID: "18446744073709551615", Score: 0.91, Payload: map[string]interface{}{"text": "numeric"}},
+		{ID: "text-id", Score: 0.82, Payload: map[string]interface{}{"text": "string"}},
+	}
+	if !reflect.DeepEqual(points, want) {
+		t.Fatalf("Search() = %#v, want %#v", points, want)
+	}
+}
+
+func TestSearchRequiresPointsArray(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "missing result", body: `{}`},
+		{name: "null result", body: `{"result":null}`},
+		{name: "result is old array form", body: `{"result":[]}`},
+		{name: "missing points", body: `{"result":{}}`},
+		{name: "null points", body: `{"result":{"points":null}}`},
+		{name: "malformed points", body: `{"result":{"points":{}}}`},
+		{name: "error envelope", body: `{"status":"error","result":{"points":[]}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+			if points, err := NewClient(server.URL, "memory").Search(context.Background(), []float32{1}, 1, nil, nil); err == nil || points != nil {
+				t.Fatalf("Search() = %#v, %v; want nil points and error", points, err)
+			}
+		})
+	}
+}
+
+func TestSearchPreservesEmptyArrayResult(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"result":{"points":[]}}`))
+	}))
+	defer server.Close()
+
+	points, err := NewClient(server.URL, "memory").Search(context.Background(), []float32{1}, 1, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if points == nil || len(points) != 0 {
+		t.Fatalf("Search() = %#v, want non-nil empty slice", points)
 	}
 }
 
